@@ -25,6 +25,8 @@ jobs:
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -74,3 +76,34 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m "ci: update image tag to ${ACR_TAG}"
           git push
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Configure kubeconfig
+        run: |
+          KUBECONFIG_PATH="${RUNNER_TEMP}/kubeconfig"
+          printf '%s\n' "${{ secrets.K3S_KUBECONFIG }}" > "${KUBECONFIG_PATH}"
+          chmod 600 "${KUBECONFIG_PATH}"
+          echo "KUBECONFIG=${KUBECONFIG_PATH}" >> "$GITHUB_ENV"
+
+      - name: Deploy to k3s
+        env:
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          helm upgrade --install jenkins-watchdog ./helm \
+            --namespace jenkins-watchdog \
+            --set "image.tag=${IMAGE_TAG}"
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/jenkins-watchdog \
+            -n jenkins-watchdog \
+            --timeout=120s
