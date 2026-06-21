@@ -43,11 +43,11 @@ config:
 
 service:
   type: ClusterIP
-  port: 8000
+  port: 80
+  targetPort: 8000
 
 ingress:
   enabled: true
-  className: traefik
   host: jenkins-watchdog.platform.ctera.com
   path: /
   pathType: Prefix

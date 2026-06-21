@@ -10,7 +10,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  ingressClassName: {{ .Values.ingress.className }}
+  ingressClassName: traefik
   {{- if .Values.ingress.tls.enabled }}
   tls:
     - hosts:
