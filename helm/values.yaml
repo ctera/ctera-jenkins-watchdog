@@ -3,6 +3,9 @@ image:
   tag: "0.1.0"
   pullPolicy: Always
 
+imagePullSecrets:
+  - name: acr-credentials
+
 replicas: 1
 revisionHistoryLimit: 2
 
