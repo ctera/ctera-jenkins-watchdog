@@ -1,0 +1,13 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "jenkins-watchdog.fullname" . }}
+  labels:
+    {{- include "jenkins-watchdog.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "jenkins-watchdog.selectorLabels" . | nindent 6 }}
+{{- end }}

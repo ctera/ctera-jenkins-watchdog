@@ -1,0 +1,195 @@
+"""Jira integration — create bug tickets from findings."""
+
+import json
+import logging
+from base64 import b64encode
+from datetime import datetime, timezone
+
+import httpx
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
+
+from jenkins_watchdog.clients.valkey import get_valkey_client
+from jenkins_watchdog.config import settings
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/jira", tags=["jira"])
+
+JIRA_ISSUES_KEY = "watchdog:jira_issues"
+
+
+class CreateBugRequest(BaseModel):
+    project_key: str = Field(description="Jira project key (e.g. CI)")
+    issue_type: str = Field(default="Bug", description="Issue type name (e.g. Bug, Task)")
+    summary: str = Field(description="Bug title")
+    description: str = Field(description="Bug description (markdown)")
+    assignee_email: str | None = Field(None, description="Assignee email (optional)")
+    finding_fingerprint: str | None = Field(None, description="Link to the finding that triggered this")
+
+
+class CreateBugResponse(BaseModel):
+    key: str
+    url: str
+
+
+@router.get("/projects")
+async def list_projects():
+    """Return the configured Jira projects available for bug creation."""
+    return {"projects": [p.strip() for p in settings.jira_projects.split(",") if p.strip()]}
+
+
+@router.post("/create-bug", response_model=CreateBugResponse)
+async def create_bug(req: CreateBugRequest):
+    """Create a Bug issue in Jira from a finding investigation."""
+    if not settings.jira_api_token:
+        return {"error": "Jira not configured"}, 503
+
+    auth_str = b64encode(f"{settings.jira_user_email}:{settings.jira_api_token}".encode()).decode()
+
+    fields: dict = {
+        "project": {"key": req.project_key},
+        "issuetype": {"name": req.issue_type},
+        "summary": req.summary[:255],
+        "description": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": line}]}
+                for line in req.description.split("\n")
+                if line.strip()
+            ],
+        },
+    }
+
+    labels = ["jenkins-watchdog"]
+    if req.finding_fingerprint:
+        labels.append(f"fp-{req.finding_fingerprint}")
+    fields["labels"] = labels
+
+    if req.assignee_email:
+        account_id = await _lookup_account_id(auth_str, req.assignee_email)
+        if account_id:
+            fields["assignee"] = {"accountId": account_id}
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{settings.jira_base_url}/rest/api/3/issue",
+            headers={
+                "Authorization": f"Basic {auth_str}",
+                "Content-Type": "application/json",
+            },
+            json={"fields": fields},
+        )
+
+    if resp.status_code not in (200, 201):
+        logger.error("Jira create failed (%d): %s", resp.status_code, resp.text[:500])
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            {"error": f"Jira API error: {resp.status_code}", "detail": resp.text[:500]},
+            status_code=resp.status_code,
+        )
+
+    data = resp.json()
+    issue_key = data["key"]
+    issue_url = f"{settings.jira_base_url}/browse/{issue_key}"
+    logger.info("Created Jira bug %s for project %s", issue_key, req.project_key)
+
+    issue_record = {
+        "key": issue_key,
+        "url": issue_url,
+        "project": req.project_key,
+        "issue_type": req.issue_type,
+        "summary": req.summary[:255],
+        "assignee": req.assignee_email or "",
+        "finding_fingerprint": req.finding_fingerprint or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        valkey = await get_valkey_client()
+        await valkey.lpush(JIRA_ISSUES_KEY, json.dumps(issue_record))
+        await valkey.ltrim(JIRA_ISSUES_KEY, 0, 99)
+
+        if req.finding_fingerprint:
+            from jenkins_watchdog.state import FINDINGS_KEY
+            raw = await valkey.get(FINDINGS_KEY)
+            if raw:
+                findings = json.loads(raw)
+                for f in findings:
+                    if f.get("fingerprint") == req.finding_fingerprint:
+                        f["jira_issue"] = {"key": issue_key, "url": issue_url}
+                        break
+                await valkey.set(FINDINGS_KEY, json.dumps(findings, default=str), ex=604800)
+    except Exception as e:
+        logger.warning("Failed to store Jira issue record: %s", e)
+
+    return CreateBugResponse(key=issue_key, url=issue_url)
+
+
+@router.get("/issues")
+async def list_issues():
+    """Return Jira issues created by the Watchdog — fetches live from Jira API."""
+    if not settings.jira_api_token:
+        return {"issues": []}
+
+    auth_str = b64encode(f"{settings.jira_user_email}:{settings.jira_api_token}".encode()).decode()
+    jql = "labels = jenkins-watchdog ORDER BY created DESC"
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{settings.jira_base_url}/rest/api/3/search/jql",
+                headers={
+                    "Authorization": f"Basic {auth_str}",
+                    "Content-Type": "application/json",
+                },
+                json={"jql": jql, "maxResults": 50, "fields": ["summary", "assignee", "issuetype", "project", "created", "status", "labels"]},
+            )
+        if resp.status_code != 200:
+            logger.warning("Jira issues fetch failed (%d): %s", resp.status_code, resp.text[:200])
+            return {"issues": []}
+
+        data = resp.json()
+        issues = []
+        for item in data.get("issues", []):
+            fields = item.get("fields", {})
+            assignee = fields.get("assignee")
+            labels = fields.get("labels", [])
+            fingerprint = ""
+            for label in labels:
+                if label.startswith("fp-"):
+                    fingerprint = label[3:]
+                    break
+            issues.append({
+                "key": item["key"],
+                "url": f"{settings.jira_base_url}/browse/{item['key']}",
+                "project": fields.get("project", {}).get("key", ""),
+                "issue_type": fields.get("issuetype", {}).get("name", ""),
+                "summary": fields.get("summary", ""),
+                "assignee": assignee.get("displayName", "") if assignee else "",
+                "status": fields.get("status", {}).get("name", ""),
+                "created_at": fields.get("created", ""),
+                "finding_fingerprint": fingerprint,
+            })
+        return {"issues": issues}
+    except Exception as e:
+        logger.warning("Failed to fetch Jira issues: %s", e)
+        return {"issues": []}
+
+
+async def _lookup_account_id(auth_str: str, email: str) -> str | None:
+    """Find Jira account ID by email."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{settings.jira_base_url}/rest/api/3/user/search",
+                params={"query": email},
+                headers={"Authorization": f"Basic {auth_str}"},
+            )
+        if resp.status_code == 200:
+            users = resp.json()
+            if users:
+                return users[0].get("accountId")
+    except Exception as e:
+        logger.warning("Jira user lookup failed for %s: %s", email, e)
+    return None

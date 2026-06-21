@@ -1,0 +1,69 @@
+image:
+  repository: cteraacrdevops.azurecr.io/jenkins-watchdog
+  tag: "0.1.0"
+  pullPolicy: Always
+
+replicas: 1
+revisionHistoryLimit: 2
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+
+config:
+  port: "8000"
+  logLevel: info
+  jenkinsUrl: "http://jenkins.jenkins.svc.cluster.local:8080"
+  jenkinsUser: ""
+  jenkinsAgentLabel: ""
+  prometheusEndpoint: "http://prometheus.monitoring.svc.cluster.local:9090"
+  valkeyHost: "valkey.valkey.svc.cluster.local"
+  valkeyPort: "6379"
+  valkeySsl: "false"
+  llmModel: "anthropic/claude-sonnet-4-6"
+  llmFallbackModels: "anthropic/claude-opus-4-6"
+  llmTemperature: "0.1"
+  llmMaxTokens: "4096"
+  llmMaxRetries: "2"
+  maxToolRounds: "10"
+  maxInvestigationsPerScan: "10"
+  oidcIssuer: ""
+  oidcClientId: "jenkins-watchdog"
+  oidcRedirectUri: ""
+  oidcAllowedGroups: "DevOps Team"
+  jiraBaseUrl: "https://ctera.atlassian.net"
+  jiraUserEmail: ""
+  jiraProjects: "CI"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+healthCheck:
+  liveness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 30
+  readiness:
+    path: /ready
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+reloader:
+  enabled: false
+
+externalSecrets:
+  enabled: false
+  secretStoreName: ""
+  secretStoreKind: ClusterSecretStore
+  anthropicApiKey: ""
+  jenkinsToken: ""
+  oidcClientSecret: ""
+  jiraApiToken: ""

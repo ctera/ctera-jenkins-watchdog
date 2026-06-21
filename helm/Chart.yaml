@@ -1,0 +1,5 @@
+apiVersion: v2
+name: jenkins-watchdog
+version: 0.1.0
+appVersion: "0.1.0"
+description: Jenkins agent health watchdog — detects issues on k3s, investigates root causes via LLM, streams findings to dashboard

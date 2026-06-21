@@ -1,0 +1,76 @@
+name: Build and Push
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'helm/values.yaml'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v --tb=short
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          VERSION=$(grep '^version' pyproject.toml | head -1 | cut -d'"' -f2)
+          IMAGE_TAG="${VERSION}-${GITHUB_SHA::7}"
+          FULL_ACR_TAG="jenkins-watchdog-${IMAGE_TAG}"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "acr_tag=${FULL_ACR_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Image tag: ${FULL_ACR_TAG}"
+
+      - name: Log in to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: cteraacrdevops.azurecr.io
+          username: cteraacrdevops
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          tags: cteraacrdevops.azurecr.io/jenkins-watchdog:${{ steps.tag.outputs.image_tag }}
+
+      - name: Update Helm values
+        env:
+          ACR_TAG: ${{ steps.tag.outputs.acr_tag }}
+        run: |
+          sed -i "s|tag:.*|tag: ${ACR_TAG}|" helm/values.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/values.yaml
+          git diff --cached --quiet && exit 0
+          git commit -m "ci: update image tag to ${ACR_TAG}"
+          git push

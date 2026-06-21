@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "jenkins-watchdog.fullname" . }}-config
+  labels:
+    {{- include "jenkins-watchdog.labels" . | nindent 4 }}
+data:
+  WATCHDOG_PORT: {{ .Values.config.port | quote }}
+  WATCHDOG_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  WATCHDOG_JENKINS_URL: {{ .Values.config.jenkinsUrl | quote }}
+  WATCHDOG_JENKINS_USER: {{ .Values.config.jenkinsUser | quote }}
+  WATCHDOG_JENKINS_AGENT_LABEL: {{ .Values.config.jenkinsAgentLabel | quote }}
+  WATCHDOG_PROMETHEUS_ENDPOINT: {{ .Values.config.prometheusEndpoint | quote }}
+  WATCHDOG_VALKEY_HOST: {{ .Values.config.valkeyHost | quote }}
+  WATCHDOG_VALKEY_PORT: {{ .Values.config.valkeyPort | quote }}
+  WATCHDOG_VALKEY_SSL: {{ .Values.config.valkeySsl | quote }}
+  WATCHDOG_LLM_MODEL: {{ .Values.config.llmModel | quote }}
+  WATCHDOG_LLM_FALLBACK_MODELS: {{ .Values.config.llmFallbackModels | quote }}
+  WATCHDOG_LLM_TEMPERATURE: {{ .Values.config.llmTemperature | quote }}
+  WATCHDOG_LLM_MAX_TOKENS: {{ .Values.config.llmMaxTokens | quote }}
+  WATCHDOG_LLM_MAX_RETRIES: {{ .Values.config.llmMaxRetries | quote }}
+  WATCHDOG_MAX_TOOL_ROUNDS: {{ .Values.config.maxToolRounds | quote }}
+  WATCHDOG_MAX_INVESTIGATIONS_PER_SCAN: {{ .Values.config.maxInvestigationsPerScan | quote }}
+  WATCHDOG_OIDC_ISSUER: {{ .Values.config.oidcIssuer | quote }}
+  WATCHDOG_OIDC_CLIENT_ID: {{ .Values.config.oidcClientId | quote }}
+  WATCHDOG_OIDC_REDIRECT_URI: {{ .Values.config.oidcRedirectUri | quote }}
+  WATCHDOG_OIDC_ALLOWED_GROUPS: {{ .Values.config.oidcAllowedGroups | quote }}
+  WATCHDOG_JIRA_BASE_URL: {{ .Values.config.jiraBaseUrl | quote }}
+  WATCHDOG_JIRA_USER_EMAIL: {{ .Values.config.jiraUserEmail | quote }}
+  WATCHDOG_JIRA_PROJECTS: {{ .Values.config.jiraProjects | quote }}

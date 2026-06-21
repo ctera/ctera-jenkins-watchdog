@@ -1,0 +1,47 @@
+"""Cluster context gathering — lightweight snapshot injected into system prompt."""
+
+import logging
+
+from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
+
+logger = logging.getLogger(__name__)
+
+
+async def gather_cluster_context() -> str:
+    """Gather a lightweight cluster snapshot for the investigation system prompt.
+
+    Called once per scan and shared across all investigations.
+    """
+    try:
+        v1 = get_core_v1()
+
+        nodes = await run_sync(v1.list_node, timeout_seconds=10)
+        namespaces = await run_sync(v1.list_namespace, timeout_seconds=10)
+        ns_names = [ns.metadata.name for ns in namespaces.items]
+
+        node_info = []
+        for node in nodes.items:
+            conditions = {c.type: c.status for c in (node.status.conditions or [])}
+            alloc = node.status.allocatable or {}
+            node_info.append(
+                f"  - {node.metadata.name}: Ready={conditions.get('Ready', '?')} "
+                f"cpu={alloc.get('cpu', '?')} mem={alloc.get('memory', '?')}"
+            )
+
+        jenkins_pods = await run_sync(v1.list_pod_for_all_namespaces, timeout_seconds=15)
+        agent_count = sum(
+            1 for p in jenkins_pods.items
+            if any(kw in (p.metadata.name or "").lower() for kw in ("jenkins-agent", "jnlp-agent", "jenkins-worker"))
+        )
+
+        return (
+            f"## k3s Cluster Snapshot (pre-gathered)\n"
+            f"- Nodes: {len(nodes.items)}\n"
+            + "\n".join(node_info) + "\n"
+            f"- Namespaces: {len(ns_names)} total ({', '.join(ns_names[:10])}{'...' if len(ns_names) > 10 else ''})\n"
+            f"- Jenkins agent pods running: {agent_count}\n"
+            f"\nUse this context to avoid querying for basic cluster info.\n"
+        )
+    except Exception as e:
+        logger.warning("Failed to gather cluster context: %s", e)
+        return ""
