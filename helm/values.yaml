@@ -45,6 +45,19 @@ service:
   type: ClusterIP
   port: 8000
 
+ingress:
+  enabled: true
+  className: traefik
+  host: jenkins-watchdog.platform.ctera.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: jenkins-watchdog-tls
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+
 healthCheck:
   liveness:
     path: /health
