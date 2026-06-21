@@ -36,6 +36,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "jenkins-watchdog.fullname" . }}-config
+            - secretRef:
+                name: jenkins-watchdog-secrets
             {{- if .Values.externalSecrets.enabled }}
             - secretRef:
                 name: {{ include "jenkins-watchdog.fullname" . }}-secrets

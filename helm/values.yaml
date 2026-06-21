@@ -19,7 +19,7 @@ resources:
 config:
   port: "8000"
   logLevel: info
-  jenkinsUrl: "http://jenkins.jenkins.svc.cluster.local:8080"
+  jenkinsUrl: "https://jenkins.ctera.dev"
   jenkinsUser: ""
   jenkinsAgentLabel: ""
   prometheusEndpoint: "http://prometheus.monitoring.svc.cluster.local:9090"
