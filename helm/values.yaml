@@ -23,7 +23,7 @@ config:
   jenkinsUser: ""
   jenkinsAgentLabel: ""
   prometheusEndpoint: "http://prometheus.monitoring.svc.cluster.local:9090"
-  valkeyHost: "valkey.valkey.svc.cluster.local"
+  valkeyHost: "valkey-primary.valkey.svc.cluster.local"
   valkeyPort: "6379"
   valkeySsl: "false"
   llmModel: "anthropic/claude-sonnet-4-6"

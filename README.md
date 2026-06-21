@@ -103,10 +103,17 @@ Only investigates:
 Deployed to k3s cluster via Helm chart.
 
 Helm chart in `helm/` with:
-- mTLS for Valkey (cert-manager)
 - ExternalSecrets for API keys
 - Read-only ClusterRole for K8s API access
 - PDB (minAvailable: 1)
+
+### Valkey Dependency
+
+Jenkins Watchdog requires a Valkey (Redis-compatible) instance for distributed locking, findings storage, and chat sessions. Valkey is **not** included in the jenkins-watchdog Helm chart — it must be deployed separately.
+
+See [docs/valkey-deployment.md](docs/valkey-deployment.md) for Helm commands, service endpoint, and verification steps.
+
+The chart configures the connection via `config.valkeyHost` and `config.valkeySsl` in `helm/values.yaml` (currently `valkey-primary.valkey.svc.cluster.local:6379`, no TLS).
 
 ## Environment Variables
 
