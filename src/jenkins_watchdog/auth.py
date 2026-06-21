@@ -24,6 +24,11 @@ SESSION_COOKIE = "watchdog_session"
 SESSION_MAX_AGE = 8 * 3600
 
 
+def is_auth_enabled() -> bool:
+    """Return True when OIDC is configured (issuer set)."""
+    return bool(settings.oidc_issuer.strip())
+
+
 def _get_secret_key() -> bytes:
     """Derive a signing key from the OIDC client secret."""
     return hashlib.sha256(settings.oidc_client_secret.encode()).digest()
@@ -82,6 +87,8 @@ def _get_allowed_groups() -> set[str]:
 @router.get("/login")
 async def login():
     """Redirect to DEX authorization endpoint."""
+    if not is_auth_enabled():
+        return RedirectResponse(url="/")
     oidc = await _get_oidc_config()
     state = secrets.token_urlsafe(32)
     params = {
@@ -158,6 +165,8 @@ async def callback(request: Request, code: str = "", state: str = ""):
 @router.get("/me")
 async def me(request: Request):
     """Return current user info if authenticated."""
+    if not is_auth_enabled():
+        return {"authenticated": True, "email": "", "name": "Guest"}
     session = request.cookies.get(SESSION_COOKIE)
     if not session:
         return JSONResponse({"authenticated": False}, status_code=401)

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 
-from jenkins_watchdog.auth import require_auth
+from jenkins_watchdog.auth import is_auth_enabled, require_auth
 from jenkins_watchdog.auth import router as auth_router
 from jenkins_watchdog.clients.prometheus import close_prometheus_client
 from jenkins_watchdog.clients.valkey import close_valkey_client
@@ -42,7 +42,7 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     if any(path.startswith(p) for p in PUBLIC_PATHS):
         return await call_next(request)
-    if not settings.oidc_client_secret:
+    if not is_auth_enabled():
         return await call_next(request)
     user = require_auth(request)
     if not user:
