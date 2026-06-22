@@ -17,6 +17,7 @@ from jenkins_watchdog.api.models import (
     JiraIssueRef,
     ScanRequest,
 )
+from jenkins_watchdog.checks.agent_utils import group_agent_findings
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.checks.registry import run_all_checks
 from jenkins_watchdog.clients.valkey import get_valkey_client
@@ -53,7 +54,7 @@ CATEGORY_WEIGHT = {
 SEVERITY_WEIGHT = {"critical": 50, "warning": 20, "low": 5}
 
 _STATEFULSET_SUFFIX = re.compile(r"-\d+$")
-_DEPLOYMENT_SUFFIX = re.compile(r"-[a-f0-9]{8,10}-[a-z0-9]{5}$")
+_DEPLOYMENT_SUFFIX = re.compile(r"-[a-z0-9]{5,10}-[a-z0-9]{4,5}$")
 
 
 def priority_score(finding: Finding) -> int:
@@ -114,24 +115,8 @@ def deduplicate_findings(findings: list[Finding]) -> list[Finding]:
 
 
 def correlate_findings(findings: list[Finding]) -> list[Finding]:
-    """Group findings from the same workload into one representative finding."""
-    groups: dict[str, list[Finding]] = {}
-    for f in findings:
-        key = _extract_workload_key(f.resource)
-        groups.setdefault(key, []).append(f)
-
-    merged = []
-    for _key, group in groups.items():
-        if len(group) == 1:
-            merged.append(group[0])
-        else:
-            primary = max(group, key=lambda f: SEVERITY_WEIGHT.get(f.severity, 0))
-            primary.context["affected_pods"] = [f.resource for f in group]
-            primary.context["group_size"] = len(group)
-            primary.symptom = f"{primary.symptom} (affects {len(group)} pods)"
-            merged.append(primary)
-
-    return merged
+    """Group findings from the same agent pool with the same issue."""
+    return group_agent_findings(findings)
 
 
 _active_scan: asyncio.Task | None = None

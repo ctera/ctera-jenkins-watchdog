@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 
+from jenkins_watchdog.checks.agent_utils import group_agent_findings
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.config import settings
 
@@ -56,8 +57,17 @@ async def run_all_checks() -> list[Finding]:
         elif isinstance(result, list):
             findings.extend(result)
 
+    raw_count = len(findings)
+    findings = group_agent_findings(findings)
+
     elapsed = time.monotonic() - start
-    logger.info("All checks completed in %.2fs, %d findings", elapsed, len(findings))
+    logger.info(
+        "All checks completed in %.2fs, %d findings (%d raw, %d grouped)",
+        elapsed,
+        len(findings),
+        raw_count,
+        raw_count - len(findings),
+    )
     return findings
 
 
