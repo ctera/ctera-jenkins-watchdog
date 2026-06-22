@@ -49,7 +49,7 @@ export async function deleteFinding(fingerprint: string): Promise<void> {
 }
 
 export interface ScanEvent {
-  type: "scan_started" | "detection_complete" | "investigation_plan" | "investigation_start" | "tool_call" | "reasoning" | "investigation_complete" | "investigation_error" | "scan_complete" | "error";
+  type: "scan_started" | "detection_complete" | "investigation_plan" | "investigation_start" | "tool_call" | "reasoning" | "investigation_complete" | "investigation_error" | "scan_complete" | "scan_stopped" | "error";
   scan_id?: string;
   total_findings?: number;
   count?: number;
@@ -106,6 +106,12 @@ export async function* streamScan(
       }
     }
   }
+}
+
+export async function stopScan(): Promise<{ status: string }> {
+  const res = await fetch(`${BASE}/scan/stop`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to stop scan: ${res.status}`);
+  return res.json();
 }
 
 export interface ChatEvent {

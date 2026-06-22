@@ -10,6 +10,7 @@ from jenkins_watchdog.clients.valkey import get_valkey_client
 logger = logging.getLogger(__name__)
 
 LOCK_KEY = "watchdog:lock"
+SCAN_CANCELLED_KEY = "watchdog:scan:cancelled"
 LOCK_TTL = 300
 LAST_RUN_KEY = "watchdog:last_run"
 FINDINGS_KEY = "watchdog:findings:latest"
@@ -49,7 +50,23 @@ async def refresh_lock() -> None:
 
 async def release_lock() -> None:
     client = await get_valkey_client()
-    await client.delete(LOCK_KEY)
+    await client.delete(LOCK_KEY, SCAN_CANCELLED_KEY)
+
+
+async def request_scan_cancel() -> None:
+    """Signal that the current scan should stop."""
+    client = await get_valkey_client()
+    await client.set(SCAN_CANCELLED_KEY, "1", ex=LOCK_TTL)
+
+
+async def is_scan_cancelled() -> bool:
+    client = await get_valkey_client()
+    return await client.get(SCAN_CANCELLED_KEY) is not None
+
+
+async def clear_scan_cancel() -> None:
+    client = await get_valkey_client()
+    await client.delete(SCAN_CANCELLED_KEY)
 
 
 async def get_previous_findings() -> list[dict]:

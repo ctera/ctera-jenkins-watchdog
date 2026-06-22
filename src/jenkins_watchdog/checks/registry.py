@@ -40,15 +40,33 @@ def register_checks() -> None:
     ]
 
 
-async def run_all_checks() -> list[Finding]:
+async def run_all_checks(cancel_event: asyncio.Event | None = None) -> list[Finding]:
     """Run all registered checks in parallel, collect findings."""
     register_checks()
 
     start = time.monotonic()
-    results = await asyncio.gather(
-        *[_run_single(check) for check in _checks],
-        return_exceptions=True,
-    )
+    tasks = [asyncio.create_task(_run_single(check)) for check in _checks]
+    try:
+        while True:
+            if cancel_event and cancel_event.is_set():
+                raise asyncio.CancelledError()
+            if all(t.done() for t in tasks):
+                break
+            await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
+        results = []
+        for t in tasks:
+            if t.cancelled():
+                raise asyncio.CancelledError()
+            try:
+                results.append(t.result())
+            except Exception as exc:
+                results.append(exc)
+    except asyncio.CancelledError:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
     findings: list[Finding] = []
     for i, result in enumerate(results):

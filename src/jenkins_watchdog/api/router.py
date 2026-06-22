@@ -28,13 +28,16 @@ from jenkins_watchdog.reasoning.gate import should_investigate
 from jenkins_watchdog.state import (
     INVESTIGATIONS_KEY,
     acquire_lock,
+    clear_scan_cancel,
     compute_diff,
     get_last_run_info,
     get_previous_findings,
     get_scan_history,
     get_stored_investigations,
+    is_scan_cancelled,
     refresh_lock,
     release_lock,
+    request_scan_cancel,
     store_investigations,
     store_run_result,
 )
@@ -121,6 +124,8 @@ def correlate_findings(findings: list[Finding]) -> list[Finding]:
 
 _active_scan: asyncio.Task | None = None
 _scan_events: asyncio.Queue | None = None
+_scan_cancel_event: asyncio.Event | None = None
+_current_investigation: asyncio.Task | None = None
 
 
 @router.post("/scan")
@@ -137,9 +142,30 @@ async def trigger_scan(request: ScanRequest | None = None):
         return EventSourceResponse(_error_stream(), media_type="text/event-stream")
 
     _scan_events = asyncio.Queue()
+    _scan_cancel_event = asyncio.Event()
+    await clear_scan_cancel()
     _active_scan = asyncio.create_task(_run_scan_background(request or ScanRequest(), _scan_events))
 
     return EventSourceResponse(_follow_active_scan(), media_type="text/event-stream")
+
+
+@router.post("/scan/stop")
+async def stop_scan():
+    """Request cancellation of the currently running scan."""
+    global _active_scan, _scan_cancel_event, _current_investigation
+
+    if _active_scan is None or _active_scan.done():
+        return {"status": "not_running"}
+
+    await request_scan_cancel()
+    if _scan_cancel_event:
+        _scan_cancel_event.set()
+
+    if _current_investigation and not _current_investigation.done():
+        _current_investigation.cancel()
+
+    _active_scan.cancel()
+    return {"status": "stopping"}
 
 
 async def _follow_active_scan():
@@ -164,7 +190,7 @@ async def _follow_active_scan():
 
 async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue):
     """Background scan task — runs to completion regardless of SSE client state."""
-    global _active_scan, _scan_events
+    global _active_scan, _scan_events, _scan_cancel_event, _current_investigation
     scan_id = str(uuid.uuid4())[:8]
     started_at = datetime.now(timezone.utc)
     total_prompt_tokens = 0
@@ -173,7 +199,9 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
     try:
         await event_queue.put({"type": "scan_started", "scan_id": scan_id})
 
-        findings = await run_all_checks()
+        findings = await run_all_checks(_scan_cancel_event)
+        if _scan_cancel_event and _scan_cancel_event.is_set():
+            raise asyncio.CancelledError()
         await event_queue.put({"type": "detection_complete", "total_findings": len(findings)})
 
         previous = await get_previous_findings()
@@ -204,6 +232,10 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
 
         investigations: dict[str, Investigation] = {}
         for idx, finding in enumerate(to_investigate):
+            if _scan_cancel_event and _scan_cancel_event.is_set():
+                raise asyncio.CancelledError()
+            if await is_scan_cancelled():
+                raise asyncio.CancelledError()
 
             await refresh_lock()
             await event_queue.put({
@@ -222,7 +254,13 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
                     return on_progress
 
                 on_progress = make_progress_emitter(finding.resource, event_queue)
-                result = await investigate_finding(finding, on_progress=on_progress, cluster_context=cluster_context)
+                _current_investigation = asyncio.create_task(
+                    investigate_finding(finding, on_progress=on_progress, cluster_context=cluster_context)
+                )
+                try:
+                    result = await _current_investigation
+                finally:
+                    _current_investigation = None
 
                 if result:
                     investigations[finding.fingerprint] = result
@@ -239,6 +277,8 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
                         "completion_tokens": result.completion_tokens,
                         "estimated_cost_usd": result.estimated_cost_usd,
                     })
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.exception("[scan:%s] Investigation failed for %s", scan_id, finding.resource)
                 await event_queue.put({"type": "investigation_error", "resource": finding.resource, "error": str(e)[:200]})
@@ -266,14 +306,27 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
             "duration_s": round(duration_s, 1),
             **token_usage,
         })
+    except asyncio.CancelledError:
+        duration_s = (datetime.now(timezone.utc) - started_at).total_seconds()
+        logger.info("[scan:%s] Scan cancelled by user after %.1fs", scan_id, duration_s)
+        await event_queue.put({
+            "type": "scan_stopped",
+            "scan_id": scan_id,
+            "duration_s": round(duration_s, 1),
+        })
     except Exception as e:
         logger.exception("[scan:%s] Scan failed", scan_id)
         await event_queue.put({"type": "error", "message": f"Scan failed: {str(e)[:200]}"})
     finally:
+        if _current_investigation and not _current_investigation.done():
+            _current_investigation.cancel()
+            _current_investigation = None
         await release_lock()
+        await clear_scan_cancel()
         await event_queue.put(None)
         _active_scan = None
         _scan_events = None
+        _scan_cancel_event = None
 
 
 @router.get("/findings", response_model=FindingsResponse)

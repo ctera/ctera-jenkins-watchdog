@@ -1,8 +1,9 @@
 import { createContext, useContext, useCallback, useRef, useState, type ReactNode } from "react";
-import { streamScan, type ScanEvent } from "../services/api";
+import { stopScan, streamScan, type ScanEvent } from "../services/api";
 
 interface ScanState {
   scanning: boolean;
+  stopping: boolean;
   status: string;
   events: ScanEvent[];
 }
@@ -10,18 +11,19 @@ interface ScanState {
 interface ScanContextValue {
   scan: ScanState;
   startScan: () => void;
+  stopScan: () => void;
 }
 
 const ScanContext = createContext<ScanContextValue | null>(null);
 
 export function ScanProvider({ children }: { children: ReactNode }) {
-  const [scan, setScan] = useState<ScanState>({ scanning: false, status: "", events: [] });
+  const [scan, setScan] = useState<ScanState>({ scanning: false, stopping: false, status: "", events: [] });
   const runningRef = useRef(false);
 
   const startScan = useCallback(() => {
     if (runningRef.current) return;
     runningRef.current = true;
-    setScan({ scanning: true, status: "Starting scan...", events: [] });
+    setScan({ scanning: true, stopping: false, status: "Starting scan...", events: [] });
 
     (async () => {
       try {
@@ -54,23 +56,45 @@ export function ScanProvider({ children }: { children: ReactNode }) {
               case "error":
                 status = `Error: ${event.message || "Unknown error"}`;
                 break;
+              case "scan_stopped":
+                status = `Scan stopped (${event.duration_s}s)`;
+                break;
               case "scan_complete":
                 status = `Done: ${event.total_findings} findings, ${event.investigations_performed} investigated (${event.duration_s}s)`;
                 break;
             }
-            return { scanning: true, status, events };
+            return { scanning: true, stopping: prev.stopping, status, events };
           });
+
+          if (event.type === "scan_stopped" || event.type === "scan_complete") {
+            break;
+          }
         }
       } catch (e) {
         setScan((prev) => ({ ...prev, status: `Error: ${e instanceof Error ? e.message : "unknown"}` }));
       } finally {
-        setScan((prev) => ({ ...prev, scanning: false }));
+        setScan((prev) => ({ ...prev, scanning: false, stopping: false }));
         runningRef.current = false;
       }
     })();
   }, []);
 
-  return <ScanContext.Provider value={{ scan, startScan }}>{children}</ScanContext.Provider>;
+  const handleStopScan = useCallback(() => {
+    setScan((prev) => ({ ...prev, stopping: true, status: "Stopping scan..." }));
+    stopScan().catch((e) => {
+      setScan((prev) => ({
+        ...prev,
+        stopping: false,
+        status: `Failed to stop: ${e instanceof Error ? e.message : "unknown"}`,
+      }));
+    });
+  }, []);
+
+  return (
+    <ScanContext.Provider value={{ scan, startScan, stopScan: handleStopScan }}>
+      {children}
+    </ScanContext.Provider>
+  );
 }
 
 export function useScan() {

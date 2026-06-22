@@ -17,6 +17,7 @@ import {
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import StopIcon from "@mui/icons-material/Stop";
 import { deleteFinding, fetchFindings, type FindingsResponse } from "../services/api";
 import { useScan } from "../context/ScanContext";
 
@@ -39,7 +40,7 @@ export default function Dashboard() {
   const [data, setData] = useState<FindingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { scan, startScan } = useScan();
+  const { scan, startScan, stopScan } = useScan();
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -96,15 +97,29 @@ export default function Dashboard() {
             </Typography>
           )}
         </Box>
-        <Button
-          variant="contained"
-          startIcon={scan.scanning ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
-          onClick={startScan}
-          disabled={scan.scanning}
-          size="large"
-        >
-          {scan.scanning ? "Scanning..." : "Run Scan"}
-        </Button>
+        <Box sx={{ display: "flex", gap: 1 }}>
+          {scan.scanning ? (
+            <Button
+              variant="contained"
+              color="error"
+              startIcon={scan.stopping ? <CircularProgress size={16} color="inherit" /> : <StopIcon />}
+              onClick={stopScan}
+              disabled={scan.stopping}
+              size="large"
+            >
+              {scan.stopping ? "Stopping..." : "Stop Scan"}
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              startIcon={<PlayArrowIcon />}
+              onClick={startScan}
+              size="large"
+            >
+              Run Scan
+            </Button>
+          )}
+        </Box>
       </Box>
 
       {error && <Alert severity="error">{error}</Alert>}
@@ -138,6 +153,7 @@ export default function Dashboard() {
                 {evt.type === "investigation_error" && `   Error: ${evt.error}`}
                 {evt.type === "error" && `ERROR: ${evt.message}`}
                 {evt.type === "scan_complete" && `Complete: ${evt.total_findings} findings, ${evt.investigations_performed} investigated (${evt.duration_s}s)`}
+                {evt.type === "scan_stopped" && `Stopped after ${evt.duration_s}s`}
               </Box>
             ))}
           </Box>
