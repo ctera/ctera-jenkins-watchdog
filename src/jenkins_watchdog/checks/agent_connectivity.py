@@ -1,4 +1,4 @@
-"""Jenkins agent connectivity checks — agents offline/disconnected from controller."""
+"""Jenkins agent health checks — executors, memory, and disk monitors."""
 
 import logging
 
@@ -36,37 +36,8 @@ class AgentConnectivityCheck:
 
             resource = f"jenkins-agent/{name}"
             offline = node.get("offline", False)
-            temporarily_offline = node.get("temporarilyOffline", False)
-            offline_reason = node.get("offlineCauseReason", "")
             idle = node.get("idle", True)
             num_executors = node.get("numExecutors", 0)
-
-            if offline and not temporarily_offline:
-                findings.append(
-                    Finding(
-                        severity="critical",
-                        category="jenkins_agent",
-                        resource=resource,
-                        symptom=f"Agent offline: {offline_reason or 'no reason given'}",
-                        context={
-                            "offline_reason": offline_reason,
-                            "num_executors": num_executors,
-                        },
-                    )
-                )
-            elif temporarily_offline:
-                findings.append(
-                    Finding(
-                        severity="warning",
-                        category="jenkins_agent",
-                        resource=resource,
-                        symptom=f"Agent temporarily offline: {offline_reason or 'no reason given'}",
-                        context={
-                            "offline_reason": offline_reason,
-                            "num_executors": num_executors,
-                        },
-                    )
-                )
 
             if not offline and not idle and num_executors == 0:
                 findings.append(
