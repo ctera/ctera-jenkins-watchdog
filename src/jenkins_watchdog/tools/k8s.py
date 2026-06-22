@@ -130,6 +130,74 @@ async def list_resources(kind: str, namespace: str | None = None, label_selector
         return f"Error listing {kind}: {e}"
 
 
+async def get_events(
+    namespace: str | None = None,
+    pod_name: str | None = None,
+    node_name: str | None = None,
+    event_type: str = "Warning",
+    limit: int = 50,
+) -> str:
+    """Query Kubernetes events scoped by namespace, pod, or node."""
+    try:
+        field_parts: list[str] = []
+        if event_type:
+            field_parts.append(f"type={event_type}")
+        if pod_name:
+            field_parts.append(f"involvedObject.name={pod_name}")
+            field_parts.append("involvedObject.kind=Pod")
+        elif node_name:
+            field_parts.append(f"involvedObject.name={node_name}")
+            field_parts.append("involvedObject.kind=Node")
+
+        field_selector = ",".join(field_parts) if field_parts else None
+        limit = min(limit, 100)
+
+        if namespace:
+            result = await run_sync(
+                get_core_v1().list_namespaced_event,
+                namespace,
+                field_selector=field_selector,
+            )
+        else:
+            result = await run_sync(
+                get_core_v1().list_event_for_all_namespaces,
+                field_selector=field_selector,
+            )
+
+        if not result.items:
+            scope = namespace or "all namespaces"
+            if pod_name:
+                scope = f"{namespace or '?'}/{pod_name}"
+            elif node_name:
+                scope = f"node/{node_name}"
+            return f"No events found for {scope}"
+
+        sorted_events = sorted(
+            result.items,
+            key=lambda e: (
+                e.last_timestamp or e.metadata.creation_timestamp or datetime.min.replace(tzinfo=timezone.utc)
+            ),
+            reverse=True,
+        )[:limit]
+
+        lines = []
+        for ev in sorted_events:
+            ts = ev.last_timestamp or ev.metadata.creation_timestamp or ""
+            obj = ev.involved_object
+            obj_ref = f"{obj.namespace or ''}/{obj.kind}/{obj.name}".strip("/")
+            count = ev.count or 1
+            source = ""
+            if ev.source and ev.source.host:
+                source = f", host={ev.source.host}"
+            lines.append(
+                f"[{ev.type}] {obj_ref} {ev.reason}: {ev.message} (count={count}, last={ts}{source})"
+            )
+
+        return _truncate("\n".join(lines))
+    except Exception as e:
+        return f"Error getting events: {e}"
+
+
 async def get_pod_events(namespace: str, pod_name: str) -> str:
     """Get events for a specific pod."""
     try:
@@ -196,6 +264,20 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "k8s_get_events",
+        "description": "Query Kubernetes cluster events by namespace, pod, or node. Returns Warning events by default (Unhealthy, BackOff, FailedScheduling, etc.).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string", "description": "Namespace to scope events (omit for all namespaces)"},
+                "pod_name": {"type": "string", "description": "Filter to events for a specific pod"},
+                "node_name": {"type": "string", "description": "Filter to events for a specific node"},
+                "event_type": {"type": "string", "description": "Event type filter (Warning or Normal)", "default": "Warning"},
+                "limit": {"type": "integer", "description": "Max events to return (max 100)", "default": 50},
+            },
+        },
+    },
+    {
         "name": "k8s_get_pod_events",
         "description": "Get Kubernetes events for a specific pod. Useful for OOMKill, scheduling failures, image pull errors, etc.",
         "input_schema": {
@@ -226,6 +308,13 @@ TOOL_DEFINITIONS = [
 TOOL_HANDLERS = {
     "k8s_get_resource": lambda args: get_resource(args["kind"], args["name"], args.get("namespace", "default")),
     "k8s_list_resources": lambda args: list_resources(args["kind"], args.get("namespace"), args.get("label_selector", "")),
+    "k8s_get_events": lambda args: get_events(
+        args.get("namespace"),
+        args.get("pod_name"),
+        args.get("node_name"),
+        args.get("event_type", "Warning"),
+        args.get("limit", 50),
+    ),
     "k8s_get_pod_events": lambda args: get_pod_events(args["namespace"], args["pod_name"]),
     "k8s_get_pod_logs": lambda args: get_pod_logs(args["namespace"], args["pod_name"], args.get("container"), args.get("tail_lines", 100)),
 }

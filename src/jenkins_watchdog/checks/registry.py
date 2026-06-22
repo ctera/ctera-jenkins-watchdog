@@ -26,6 +26,7 @@ def register_checks() -> None:
     from jenkins_watchdog.checks.agent_pods import AgentPodCheck
     from jenkins_watchdog.checks.agent_resources import AgentResourceCheck
     from jenkins_watchdog.checks.jenkins_jobs import JenkinsJobCheck
+    from jenkins_watchdog.checks.k8s_events import K8sEventsCheck
     from jenkins_watchdog.checks.k8s_nodes import NodeCheck
     from jenkins_watchdog.checks.k8s_workloads import WorkloadCheck
 
@@ -37,6 +38,7 @@ def register_checks() -> None:
         JenkinsJobCheck(),
         NodeCheck(),
         WorkloadCheck(),
+        K8sEventsCheck(),
     ]
 
 

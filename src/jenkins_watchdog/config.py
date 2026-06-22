@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     jenkins_token: str = ""
     jenkins_agent_label: str = ""
     jenkins_namespace: str = "jenkins"
+    k8s_events_window_minutes: int = 30
 
     # Prometheus
     prometheus_endpoint: str = "http://prometheus.monitoring.svc.cluster.local:9090"
