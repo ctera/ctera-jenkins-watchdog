@@ -5,8 +5,11 @@ import logging
 import time
 
 from jenkins_watchdog.checks.base import Finding
+from jenkins_watchdog.config import settings
 
 logger = logging.getLogger(__name__)
+
+CHECK_TIMEOUT_S = max(settings.request_timeout_s, 20.0)
 
 _checks: list = []
 
@@ -61,7 +64,7 @@ async def run_all_checks() -> list[Finding]:
 async def _run_single(check) -> list[Finding]:
     """Run a single check with timeout."""
     try:
-        return await asyncio.wait_for(check.run(), timeout=60)
+        return await asyncio.wait_for(check.run(), timeout=CHECK_TIMEOUT_S)
     except asyncio.TimeoutError:
-        logger.error("Check '%s' timed out after 60s", check.name)
+        logger.error("Check '%s' timed out after %.0fs", check.name, CHECK_TIMEOUT_S)
         return []

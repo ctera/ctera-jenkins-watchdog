@@ -68,11 +68,12 @@ class JenkinsJobCheck:
                 job_name = build.get("name", "unknown")
                 number = build.get("number", 0)
                 url = build.get("url", "")
-                executor = build.get("executor", {})
 
-                progress = executor.get("progress", -1) if executor else -1
-                elapsed_ms = executor.get("elapsedTime", 0) if executor else 0
-                elapsed_s = elapsed_ms / 1000 if elapsed_ms else 0
+                timestamp = build.get("timestamp")
+                if timestamp:
+                    elapsed_s = max(0, (time.time() * 1000 - timestamp) / 1000)
+                else:
+                    elapsed_s = 0
 
                 if elapsed_s > LONG_BUILD_THRESHOLD_S:
                     findings.append(
@@ -80,12 +81,11 @@ class JenkinsJobCheck:
                             severity="warning",
                             category="jenkins_build",
                             resource=f"jenkins-build/{job_name}#{number}",
-                            symptom=f"Build running for {elapsed_s / 3600:.1f}h (progress: {progress}%)",
+                            symptom=f"Build running for {elapsed_s / 3600:.1f}h",
                             context={
                                 "job_name": job_name,
                                 "build_number": number,
                                 "elapsed_hours": round(elapsed_s / 3600, 1),
-                                "progress_pct": progress,
                                 "url": url,
                             },
                         )

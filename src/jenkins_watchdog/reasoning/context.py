@@ -2,6 +2,7 @@
 
 import logging
 
+from jenkins_watchdog.checks.agent_utils import list_jenkins_agent_pods
 from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,8 @@ async def gather_cluster_context() -> str:
                 f"cpu={alloc.get('cpu', '?')} mem={alloc.get('memory', '?')}"
             )
 
-        jenkins_pods = await run_sync(v1.list_pod_for_all_namespaces, timeout_seconds=15)
-        agent_count = sum(
-            1 for p in jenkins_pods.items
-            if any(kw in (p.metadata.name or "").lower() for kw in ("jenkins-agent", "jnlp-agent", "jenkins-worker"))
-        )
+        agent_pods = await list_jenkins_agent_pods()
+        agent_count = len(agent_pods)
 
         return (
             f"## k3s Cluster Snapshot (pre-gathered)\n"

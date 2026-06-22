@@ -2,17 +2,10 @@
 
 import logging
 
+from jenkins_watchdog.checks.agent_utils import list_jenkins_agent_pods
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
 
 logger = logging.getLogger(__name__)
-
-_JENKINS_LABELS = [
-    "jenkins=agent",
-    "jenkins/label",
-    "app=jenkins-agent",
-    "jenkins-agent=true",
-]
 
 
 class AgentPodCheck:
@@ -20,17 +13,11 @@ class AgentPodCheck:
 
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
-        v1 = get_core_v1()
-        pods = await run_sync(v1.list_pod_for_all_namespaces, timeout_seconds=30)
+        pods = await list_jenkins_agent_pods()
 
-        for pod in pods.items:
+        for pod in pods:
             ns = pod.metadata.namespace
             name = pod.metadata.name
-            labels = pod.metadata.labels or {}
-
-            if not self._is_jenkins_agent(name, labels):
-                continue
-
             resource = f"{ns}/{name}"
 
             if not pod.status or not pod.status.container_statuses:
@@ -102,19 +89,3 @@ class AgentPodCheck:
                 )
 
         return findings
-
-    def _is_jenkins_agent(self, name: str, labels: dict) -> bool:
-        """Detect Jenkins agent pods by name pattern or labels."""
-        name_lower = name.lower()
-        if any(kw in name_lower for kw in ("jenkins-agent", "jnlp-agent", "jenkins-slave", "jenkins-worker")):
-            return True
-        for label_key in _JENKINS_LABELS:
-            if "=" in label_key:
-                key, val = label_key.split("=", 1)
-                if labels.get(key) == val:
-                    return True
-            elif label_key in labels:
-                return True
-        if labels.get("app") == "jenkins" and labels.get("component") == "agent":
-            return True
-        return False

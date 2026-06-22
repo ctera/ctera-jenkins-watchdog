@@ -62,6 +62,13 @@ def get_custom() -> CustomObjectsApi:
     return _custom
 
 
-async def run_sync(func: Callable[..., T], *args, **kwargs) -> T:
+async def run_sync(func: Callable[..., T], *args, timeout: float | None = None, **kwargs) -> T:
     """Run a synchronous K8s API call in a thread to avoid blocking the event loop."""
-    return await asyncio.to_thread(functools.partial(func, *args, **kwargs))
+    from jenkins_watchdog.config import settings
+
+    call = functools.partial(func, *args, **kwargs)
+    thread_timeout = timeout if timeout is not None else settings.request_timeout_s
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(call), timeout=thread_timeout)
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"Kubernetes API call timed out after {thread_timeout}s") from None

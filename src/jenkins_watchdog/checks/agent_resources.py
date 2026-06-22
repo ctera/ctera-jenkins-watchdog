@@ -2,8 +2,10 @@
 
 import logging
 
+from jenkins_watchdog.checks.agent_utils import is_jenkins_agent_pod
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.clients.prometheus import query_instant
+from jenkins_watchdog.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +14,10 @@ class AgentResourceCheck:
     name = "jenkins_agent_resources"
 
     async def run(self) -> list[Finding]:
+        if not settings.prometheus_enabled:
+            logger.debug("Prometheus checks disabled")
+            return []
+
         findings: list[Finding] = []
 
         try:
@@ -24,7 +30,7 @@ class AgentResourceCheck:
                 pod = r["metric"].get("pod", "")
                 ns = r["metric"].get("namespace", "")
                 container = r["metric"].get("container", "")
-                if not self._is_jenkins_agent_pod(pod):
+                if not is_jenkins_agent_pod(pod):
                     continue
                 usage_pct = float(r["value"][1]) * 100
                 findings.append(
@@ -52,7 +58,7 @@ class AgentResourceCheck:
                 pod = r["metric"].get("pod", "")
                 ns = r["metric"].get("namespace", "")
                 container = r["metric"].get("container", "")
-                if not self._is_jenkins_agent_pod(pod):
+                if not is_jenkins_agent_pod(pod):
                     continue
                 usage_pct = float(r["value"][1]) * 100
                 findings.append(
@@ -77,7 +83,7 @@ class AgentResourceCheck:
             for r in restart_results:
                 pod = r["metric"].get("pod", "")
                 ns = r["metric"].get("namespace", "")
-                if not self._is_jenkins_agent_pod(pod):
+                if not is_jenkins_agent_pod(pod):
                     continue
                 restarts = int(float(r["value"][1]))
                 findings.append(
@@ -93,7 +99,3 @@ class AgentResourceCheck:
             logger.warning("Prometheus restart query failed: %s", e)
 
         return findings
-
-    def _is_jenkins_agent_pod(self, name: str) -> bool:
-        name_lower = name.lower()
-        return any(kw in name_lower for kw in ("jenkins-agent", "jnlp-agent", "jenkins-slave", "jenkins-worker"))

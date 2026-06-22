@@ -10,7 +10,9 @@ data:
   WATCHDOG_JENKINS_URL: {{ .Values.config.jenkinsUrl | quote }}
   WATCHDOG_JENKINS_USER: {{ .Values.config.jenkinsUser | quote }}
   WATCHDOG_JENKINS_AGENT_LABEL: {{ .Values.config.jenkinsAgentLabel | quote }}
+  WATCHDOG_JENKINS_NAMESPACE: {{ .Values.config.jenkinsNamespace | quote }}
   WATCHDOG_PROMETHEUS_ENDPOINT: {{ .Values.config.prometheusEndpoint | quote }}
+  WATCHDOG_PROMETHEUS_ENABLED: {{ .Values.config.prometheusEnabled | quote }}
   WATCHDOG_VALKEY_HOST: {{ .Values.config.valkeyHost | quote }}
   WATCHDOG_VALKEY_PORT: {{ .Values.config.valkeyPort | quote }}
   WATCHDOG_VALKEY_SSL: {{ .Values.config.valkeySsl | quote }}

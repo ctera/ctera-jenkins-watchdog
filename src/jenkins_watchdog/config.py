@@ -12,9 +12,14 @@ class Settings(BaseSettings):
     jenkins_user: str = ""
     jenkins_token: str = ""
     jenkins_agent_label: str = ""
+    jenkins_namespace: str = "jenkins"
 
     # Prometheus
     prometheus_endpoint: str = "http://prometheus.monitoring.svc.cluster.local:9090"
+    prometheus_enabled: bool = True
+
+    # External call timeouts (seconds)
+    request_timeout_s: float = 15.0
 
     # Valkey
     valkey_host: str = "valkey.valkey.svc.cluster.local"

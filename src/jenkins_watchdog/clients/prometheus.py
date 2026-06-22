@@ -16,13 +16,15 @@ def get_prometheus_client() -> httpx.AsyncClient:
     if _client is None:
         _client = httpx.AsyncClient(
             base_url=settings.prometheus_endpoint,
-            timeout=30,
+            timeout=httpx.Timeout(settings.request_timeout_s, connect=5.0),
         )
     return _client
 
 
 async def query_instant(promql: str) -> list[dict]:
     """Execute an instant PromQL query."""
+    if not settings.prometheus_enabled or not settings.prometheus_endpoint:
+        return []
     client = get_prometheus_client()
     resp = await client.get("/api/v1/query", params={"query": promql})
     resp.raise_for_status()
