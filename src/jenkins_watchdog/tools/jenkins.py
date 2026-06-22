@@ -10,6 +10,7 @@ from jenkins_watchdog.clients.jenkins import (
     get_node_info,
     get_nodes,
     get_queue_info,
+    get_recent_failed_builds,
     get_running_builds,
 )
 
@@ -140,6 +141,36 @@ async def jenkins_get_job(name: str) -> str:
         return f"Error getting Jenkins job {name}: {e}"
 
 
+async def jenkins_get_recent_failed_builds(
+    window_hours: int | None = None,
+    mr_only: bool = False,
+    limit: int = 25,
+) -> str:
+    """Get recent failed Jenkins builds within a time window."""
+    try:
+        failed_builds = await get_recent_failed_builds(window_hours=window_hours, mr_only=mr_only)
+        if not failed_builds:
+            hours = window_hours if window_hours is not None else "configured"
+            scope = "MR/PR " if mr_only else ""
+            return f"No recent failed {scope}builds in the last {hours} hour(s)"
+
+        lines = []
+        for build in failed_builds[:limit]:
+            mr_tag = " [MR]" if build.is_mr else ""
+            duration_min = build.duration_ms / 60000
+            lines.append(
+                f"- {build.job_name}#{build.build_number}{mr_tag}: {build.result} "
+                f"({duration_min:.1f} min) url={build.url}"
+            )
+
+        if len(failed_builds) > limit:
+            lines.append(f"... and {len(failed_builds) - limit} more")
+
+        return _truncate("\n".join(lines))
+    except Exception as e:
+        return f"Error getting recent failed builds: {e}"
+
+
 async def jenkins_get_build(job_name: str, build_number: int) -> str:
     """Get info about a specific build."""
     try:
@@ -220,6 +251,32 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "jenkins_get_recent_failed_builds",
+        "description": (
+            "List recent failed Jenkins builds (FAILURE, UNSTABLE, ABORTED) within a time window. "
+            "Use to find broken MR/PR pipelines or other failing jobs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "window_hours": {
+                    "type": "integer",
+                    "description": "Look back this many hours (default: configured window, usually 4)",
+                },
+                "mr_only": {
+                    "type": "boolean",
+                    "description": "Only return merge-request / PR style jobs",
+                    "default": False,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of builds to return (default 25)",
+                    "default": 25,
+                },
+            },
+        },
+    },
+    {
         "name": "jenkins_get_build",
         "description": "Get info about a specific build: result, duration, what node ran it, change sets.",
         "input_schema": {
@@ -251,6 +308,11 @@ TOOL_HANDLERS = {
     "jenkins_get_agent": lambda args: jenkins_get_agent(args["name"]),
     "jenkins_get_queue": lambda args: jenkins_get_queue(),
     "jenkins_get_running_builds": lambda args: jenkins_get_running_builds(),
+    "jenkins_get_recent_failed_builds": lambda args: jenkins_get_recent_failed_builds(
+        args.get("window_hours"),
+        args.get("mr_only", False),
+        args.get("limit", 25),
+    ),
     "jenkins_get_job": lambda args: jenkins_get_job(args["name"]),
     "jenkins_get_build": lambda args: jenkins_get_build(args["job_name"], args["build_number"]),
     "jenkins_get_build_log": lambda args: jenkins_get_build_log(

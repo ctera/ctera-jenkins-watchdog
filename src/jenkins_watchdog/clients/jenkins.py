@@ -4,6 +4,8 @@ import asyncio
 import functools
 import logging
 import re
+import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -15,6 +17,13 @@ from jenkins_watchdog.config import settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 15
+
+MR_JOB_PATTERN = re.compile(
+    r"(?:^|[/_-])(?:MR|mr|PR|pr)(?:[/_-]|$)|merge[-_]?request|MergeRequest|GatedMergeRequest|/MR-|/PR-",
+    re.IGNORECASE,
+)
+FAILED_BUILD_RESULTS = frozenset({"FAILURE", "UNSTABLE", "ABORTED"})
+FAILED_JOB_COLORS = frozenset({"red", "yellow", "aborted"})
 
 _server: jenkins.Jenkins | None = None
 _client: httpx.AsyncClient | None = None
@@ -75,6 +84,16 @@ async def _get_computers() -> list[dict[str, Any]]:
     resp.raise_for_status()
     data = resp.json()
     return data.get("computer", [])
+
+
+def is_mr_job(name: str) -> bool:
+    """Return True when the job name looks like a merge/PR pipeline."""
+    return bool(MR_JOB_PATTERN.search(name))
+
+
+def job_to_api_path(name: str) -> str:
+    """Convert a Jenkins full job name to its REST API path prefix."""
+    return "/job/" + "/job/".join(name.split("/"))
 
 
 def _job_name_from_build_url(url: str) -> str:
@@ -156,6 +175,96 @@ async def get_all_jobs(folder_depth: int = 1) -> list[dict]:
     """Get all Jenkins jobs."""
     server = _get_server()
     return await _run_sync(server.get_all_jobs, folder_depth=folder_depth)
+
+
+async def get_job_recent_builds(job_name: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Fetch recent builds for a job via the tree API (includes result and timestamp)."""
+    client = get_jenkins_http_client()
+    tree = f"builds[number,result,timestamp,duration,url]{{0,{limit}}}"
+    resp = await client.get(f"{job_to_api_path(job_name)}/api/json", params={"tree": tree})
+    resp.raise_for_status()
+    return resp.json().get("builds", [])
+
+
+@dataclass(frozen=True)
+class FailedBuildSummary:
+    job_name: str
+    build_number: int
+    result: str
+    duration_ms: int
+    timestamp_ms: int
+    url: str
+    is_mr: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_name": self.job_name,
+            "build_number": self.build_number,
+            "result": self.result,
+            "duration_ms": self.duration_ms,
+            "duration_minutes": round(self.duration_ms / 60000, 1),
+            "timestamp_ms": self.timestamp_ms,
+            "url": self.url,
+            "is_mr": self.is_mr,
+        }
+
+
+async def get_recent_failed_builds(
+    window_hours: float | None = None,
+    *,
+    mr_only: bool = False,
+    folder_depth: int = 2,
+    build_limit: int = 10,
+    max_concurrency: int = 30,
+) -> list[FailedBuildSummary]:
+    """Return failed builds from jobs whose last status indicates failure."""
+    if window_hours is None:
+        window_hours = settings.jenkins_failed_build_window_hours
+
+    cutoff_ms = (time.time() - window_hours * 3600) * 1000
+    jobs = await get_all_jobs(folder_depth=folder_depth)
+    candidates = [
+        job.get("fullname") or job.get("name", "")
+        for job in jobs
+        if job.get("color") in FAILED_JOB_COLORS and (job.get("fullname") or job.get("name"))
+    ]
+
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _fetch_job_builds(job_name: str) -> list[FailedBuildSummary]:
+        async with semaphore:
+            try:
+                builds = await get_job_recent_builds(job_name, limit=build_limit)
+            except Exception as exc:
+                logger.debug("Failed to fetch builds for %s: %s", job_name, exc)
+                return []
+
+            failed: list[FailedBuildSummary] = []
+            is_mr = is_mr_job(job_name)
+            for build in builds:
+                result = build.get("result")
+                timestamp_ms = build.get("timestamp", 0)
+                if result not in FAILED_BUILD_RESULTS or timestamp_ms < cutoff_ms:
+                    continue
+                failed.append(
+                    FailedBuildSummary(
+                        job_name=job_name,
+                        build_number=build.get("number", 0),
+                        result=result,
+                        duration_ms=build.get("duration", 0),
+                        timestamp_ms=timestamp_ms,
+                        url=build.get("url", ""),
+                        is_mr=is_mr,
+                    )
+                )
+            return failed
+
+    results = await asyncio.gather(*[_fetch_job_builds(name) for name in candidates])
+    failed_builds = [build for job_builds in results for build in job_builds]
+    if mr_only:
+        failed_builds = [build for build in failed_builds if build.is_mr]
+    failed_builds.sort(key=lambda build: build.timestamp_ms, reverse=True)
+    return failed_builds
 
 
 async def get_version() -> str:

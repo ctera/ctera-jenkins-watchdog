@@ -23,6 +23,7 @@ config:
   jenkinsUser: ""
   jenkinsAgentLabel: ""
   jenkinsNamespace: "jenkins"
+  jenkinsFailedBuildWindowHours: "4"
   prometheusEndpoint: "http://prometheus.monitoring.svc.cluster.local:9090"
   prometheusEnabled: "false"
   valkeyHost: "valkey-primary.valkey.svc.cluster.local"

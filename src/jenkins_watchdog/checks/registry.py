@@ -25,6 +25,7 @@ def register_checks() -> None:
     from jenkins_watchdog.checks.agent_errors import AgentErrorCheck
     from jenkins_watchdog.checks.agent_pods import AgentPodCheck
     from jenkins_watchdog.checks.agent_resources import AgentResourceCheck
+    from jenkins_watchdog.checks.jenkins_failed_builds import JenkinsFailedBuildCheck
     from jenkins_watchdog.checks.jenkins_jobs import JenkinsJobCheck
     from jenkins_watchdog.checks.k8s_events import K8sEventsCheck
     from jenkins_watchdog.checks.k8s_nodes import NodeCheck
@@ -36,6 +37,7 @@ def register_checks() -> None:
         AgentErrorCheck(),
         AgentConnectivityCheck(),
         JenkinsJobCheck(),
+        JenkinsFailedBuildCheck(),
         NodeCheck(),
         WorkloadCheck(),
         K8sEventsCheck(),
