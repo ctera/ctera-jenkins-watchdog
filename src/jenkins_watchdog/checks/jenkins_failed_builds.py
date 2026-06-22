@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _worst_severity(results: list[str]) -> str:
-    return "critical" if "FAILURE" in results else "warning"
+    return "critical"
 
 
 def _format_timestamp(timestamp_ms: int) -> str:
@@ -24,7 +24,7 @@ def _build_symptom(job_name: str, builds: list[FailedBuildSummary]) -> str:
     prefix = "MR build" if latest.is_mr else "Build"
     if len(builds) == 1:
         return f"{prefix} {latest.result}: {job_name} #{latest.build_number}"
-    counts = ", ".join(f"{result}={sum(1 for b in builds if b.result == result)}" for result in ("FAILURE", "UNSTABLE", "ABORTED") if any(b.result == result for b in builds))
+    counts = f"FAILURE={len(builds)}"
     return f"{len(builds)} failed {prefix.lower()}s on {job_name} ({counts})"
 
 

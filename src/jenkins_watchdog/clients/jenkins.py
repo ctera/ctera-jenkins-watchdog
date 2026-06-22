@@ -22,7 +22,7 @@ MR_JOB_PATTERN = re.compile(
     r"(?:^|[/_-])(?:MR|mr|PR|pr)(?:[/_-]|$)|merge[-_]?request|MergeRequest|GatedMergeRequest|/MR-|/PR-",
     re.IGNORECASE,
 )
-FAILED_BUILD_RESULTS = frozenset({"FAILURE", "UNSTABLE", "ABORTED"})
+FAILED_BUILD_RESULTS = frozenset({"FAILURE"})
 FAILED_JOB_COLORS = frozenset({"red", "yellow", "aborted"})
 
 _server: jenkins.Jenkins | None = None
