@@ -5,6 +5,16 @@ import logging
 from datetime import datetime, timezone
 
 from jenkins_watchdog.clients.k8s import get_apps_v1, get_batch_v1, get_core_v1, run_sync
+from jenkins_watchdog.clients.k8s_metrics import (
+    MetricsUnavailableError,
+    format_bytes,
+    format_cores,
+    get_node_allocatable,
+    list_node_metrics,
+    list_pod_metrics,
+    usage_pct,
+)
+from jenkins_watchdog.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +233,65 @@ async def get_pod_events(namespace: str, pod_name: str) -> str:
         return f"Error getting events for {namespace}/{pod_name}: {e}"
 
 
+async def top_pods(namespace: str | None = None, sort_by: str = "memory") -> str:
+    """Return resource usage for pods in a namespace (kubectl top pods equivalent)."""
+    ns = namespace or settings.jenkins_namespace
+    try:
+        metrics = await list_pod_metrics(ns)
+    except MetricsUnavailableError:
+        return "Metrics-server unavailable — cannot fetch pod resource usage"
+    except Exception as e:
+        return f"Error fetching pod metrics in {ns}: {e}"
+
+    if not metrics:
+        return f"No pod metrics found in namespace {ns}"
+
+    rows: list[tuple[str, float, int]] = []
+    for pod in metrics:
+        cpu = sum(c.cpu_cores for c in pod.containers)
+        memory = sum(c.memory_bytes for c in pod.containers)
+        rows.append((pod.name, cpu, memory))
+
+    if sort_by == "cpu":
+        rows.sort(key=lambda r: r[1], reverse=True)
+    else:
+        rows.sort(key=lambda r: r[2], reverse=True)
+
+    lines = [f"{'NAME':<60} {'CPU':>8} {'MEMORY':>10}"]
+    for name, cpu, memory in rows:
+        lines.append(f"{name:<60} {format_cores(cpu):>8} {format_bytes(memory):>10}")
+
+    return _truncate("\n".join(lines))
+
+
+async def top_nodes() -> str:
+    """Return resource usage for all nodes (kubectl top nodes equivalent)."""
+    try:
+        node_metrics = await list_node_metrics()
+        allocatable = await get_node_allocatable()
+    except MetricsUnavailableError:
+        return "Metrics-server unavailable — cannot fetch node resource usage"
+    except Exception as e:
+        return f"Error fetching node metrics: {e}"
+
+    if not node_metrics:
+        return "No node metrics found"
+
+    lines = [f"{'NAME':<30} {'CPU(cores)':>10} {'CPU%':>6} {'MEMORY':>10} {'MEM%':>6}"]
+    for metrics in sorted(node_metrics, key=lambda m: m.name):
+        limits = allocatable.get(metrics.name, {})
+        cpu_pct = usage_pct(metrics.cpu_cores, limits.get("cpu_cores", 0))
+        mem_pct = usage_pct(metrics.memory_bytes, limits.get("memory_bytes", 0))
+        cpu_pct_str = f"{cpu_pct:.0f}%" if cpu_pct is not None else "?"
+        mem_pct_str = f"{mem_pct:.0f}%" if mem_pct is not None else "?"
+        lines.append(
+            f"{metrics.name:<30} {format_cores(metrics.cpu_cores):>10} {cpu_pct_str:>6} "
+            f"{format_bytes(metrics.memory_bytes):>10} {mem_pct_str:>6}"
+        )
+
+    return _truncate("\n".join(lines))
+
+
 async def get_pod_logs(namespace: str, pod_name: str, container: str | None = None, tail_lines: int = 100) -> str:
     """Get recent logs from a pod container."""
     try:
@@ -303,6 +372,25 @@ TOOL_DEFINITIONS = [
             "required": ["namespace", "pod_name"],
         },
     },
+    {
+        "name": "k8s_top_pods",
+        "description": "Get CPU and memory usage for pods in a namespace via metrics-server (like kubectl top pods).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string", "description": "Namespace to query (defaults to jenkins namespace)"},
+                "sort_by": {"type": "string", "description": "Sort by 'memory' or 'cpu'", "default": "memory"},
+            },
+        },
+    },
+    {
+        "name": "k8s_top_nodes",
+        "description": "Get CPU and memory usage for all cluster nodes via metrics-server (like kubectl top nodes).",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
@@ -317,4 +405,6 @@ TOOL_HANDLERS = {
     ),
     "k8s_get_pod_events": lambda args: get_pod_events(args["namespace"], args["pod_name"]),
     "k8s_get_pod_logs": lambda args: get_pod_logs(args["namespace"], args["pod_name"], args.get("container"), args.get("tail_lines", 100)),
+    "k8s_top_pods": lambda args: top_pods(args.get("namespace"), args.get("sort_by", "memory")),
+    "k8s_top_nodes": lambda args: top_nodes(),
 }
