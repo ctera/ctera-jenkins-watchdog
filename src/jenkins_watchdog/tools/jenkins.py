@@ -6,13 +6,16 @@ import logging
 from jenkins_watchdog.clients.jenkins import (
     get_build_console_output,
     get_build_info,
+    get_build_parameters,
     get_job_info,
+    get_job_recent_builds,
     get_node_info,
     get_nodes,
     get_queue_info,
     get_recent_failed_builds,
     get_running_builds,
 )
+from jenkins_watchdog.clients.log_analysis import classify_failure, extract_error_lines
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +206,60 @@ async def jenkins_get_build_log(job_name: str, build_number: int, tail_lines: in
         return f"Error getting build log for {job_name}#{build_number}: {e}"
 
 
+async def jenkins_get_job_build_history(job_name: str, limit: int = 10) -> str:
+    """Get recent build history for a job with results and failure analysis."""
+    try:
+        builds = await get_job_recent_builds(job_name, limit=limit)
+        if not builds:
+            return f"No builds found for job {job_name}"
+
+        sorted_builds = sorted(builds, key=lambda b: b.get("number", 0), reverse=True)
+        lines = [f"Build history for {job_name} (last {len(sorted_builds)}):"]
+        consecutive_failures = 0
+        for build in sorted_builds:
+            result = build.get("result", "RUNNING")
+            number = build.get("number", 0)
+            duration_min = (build.get("duration") or 0) / 60000
+            if result == "FAILURE":
+                consecutive_failures += 1
+            else:
+                if consecutive_failures > 0:
+                    lines.append(f"  → {consecutive_failures} consecutive failure(s) before this build")
+                consecutive_failures = 0
+            lines.append(f"- #{number}: {result} ({duration_min:.1f} min) url={build.get('url', '')}")
+
+        if consecutive_failures > 0:
+            lines.append(f"  → Current streak: {consecutive_failures} consecutive failure(s)")
+
+        return _truncate("\n".join(lines))
+    except Exception as e:
+        return f"Error getting build history for {job_name}: {e}"
+
+
+async def jenkins_analyze_build_failure(job_name: str, build_number: int) -> str:
+    """Analyze a failed build's console log — extract errors and classify failure type."""
+    try:
+        output = await get_build_console_output(job_name, build_number)
+        error_lines = extract_error_lines(output)
+        failure_class = classify_failure(error_lines)
+        params = await get_build_parameters(job_name, build_number)
+        info = await get_build_info(job_name, build_number)
+
+        result = {
+            "job": job_name,
+            "build_number": build_number,
+            "result": info.get("result"),
+            "built_on": info.get("builtOn"),
+            "duration_ms": info.get("duration"),
+            "failure_class": failure_class,
+            "parameters": params,
+            "error_lines": error_lines[:20],
+        }
+        return _truncate(json.dumps(result, indent=2, default=str))
+    except Exception as e:
+        return f"Error analyzing build {job_name}#{build_number}: {e}"
+
+
 TOOL_DEFINITIONS = [
     {
         "name": "jenkins_list_agents",
@@ -290,13 +347,47 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "jenkins_get_build_log",
-        "description": "Get console output (logs) for a specific build. Use to find error messages, stack traces, or failure reasons.",
+        "description": (
+            "Get console output (logs) for a specific build. Use to find error messages, stack traces, "
+            "or failure reasons. For failed builds, also try jenkins_analyze_build_failure for structured analysis."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "job_name": {"type": "string", "description": "Job name"},
                 "build_number": {"type": "integer", "description": "Build number"},
                 "tail_lines": {"type": "integer", "description": "Number of recent lines to return (default 100)", "default": 100},
+            },
+            "required": ["job_name", "build_number"],
+        },
+    },
+    {
+        "name": "jenkins_get_job_build_history",
+        "description": (
+            "Get recent build history for a job showing results, durations, and failure streaks. "
+            "Use to detect recurring failures or regressions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_name": {"type": "string", "description": "Job name"},
+                "limit": {"type": "integer", "description": "Number of recent builds (default 10)", "default": 10},
+            },
+            "required": ["job_name"],
+        },
+    },
+    {
+        "name": "jenkins_analyze_build_failure",
+        "description": (
+            "Analyze a failed build's console log — extracts error lines, classifies failure type "
+            "(test_failure, compilation_error, infrastructure, configuration, resource_exhaustion), "
+            "and returns build parameters. Use this as the first step for pipeline failure investigations."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_name": {"type": "string", "description": "Job name"},
+                "build_number": {"type": "integer", "description": "Build number"},
             },
             "required": ["job_name", "build_number"],
         },
@@ -317,5 +408,11 @@ TOOL_HANDLERS = {
     "jenkins_get_build": lambda args: jenkins_get_build(args["job_name"], args["build_number"]),
     "jenkins_get_build_log": lambda args: jenkins_get_build_log(
         args["job_name"], args["build_number"], args.get("tail_lines", 100)
+    ),
+    "jenkins_get_job_build_history": lambda args: jenkins_get_job_build_history(
+        args["job_name"], args.get("limit", 10)
+    ),
+    "jenkins_analyze_build_failure": lambda args: jenkins_analyze_build_failure(
+        args["job_name"], args["build_number"]
     ),
 }

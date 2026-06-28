@@ -171,6 +171,23 @@ async def get_build_console_output(name: str, number: int) -> str:
     return await _run_sync(server.get_build_console_output, name, number)
 
 
+async def get_build_parameters(name: str, number: int) -> dict[str, str]:
+    """Extract build parameters from build actions."""
+    info = await get_build_info(name, number)
+    params: dict[str, str] = {}
+    for action in info.get("actions") or []:
+        if not isinstance(action, dict):
+            continue
+        param_list = action.get("parameters")
+        if not param_list:
+            continue
+        for param in param_list:
+            if isinstance(param, dict) and param.get("name"):
+                value = param.get("value")
+                params[param["name"]] = str(value) if value is not None else ""
+    return params
+
+
 async def get_all_jobs(folder_depth: int = 1) -> list[dict]:
     """Get all Jenkins jobs."""
     server = _get_server()

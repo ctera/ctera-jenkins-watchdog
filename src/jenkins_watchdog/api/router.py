@@ -25,6 +25,7 @@ from jenkins_watchdog.config import settings
 from jenkins_watchdog.reasoning.context import gather_cluster_context
 from jenkins_watchdog.reasoning.engine import investigate_finding
 from jenkins_watchdog.reasoning.gate import should_investigate
+from jenkins_watchdog.reasoning.triage import triage_findings
 from jenkins_watchdog.state import (
     INVESTIGATIONS_KEY,
     acquire_lock,
@@ -50,8 +51,11 @@ CATEGORY_WEIGHT = {
     "jenkins_controller": 100,
     "jenkins_agent": 80,
     "jenkins_queue": 70,
-    "jenkins_build": 60,
+    "jenkins_pipeline_pattern": 65,
+    "jenkins_failed_build": 60,
+    "jenkins_build": 55,
     "k8s_workload": 50,
+    "k8s_event": 45,
     "k8s_node": 40,
 }
 SEVERITY_WEIGHT = {"critical": 50, "warning": 20, "low": 5}
@@ -118,8 +122,85 @@ def deduplicate_findings(findings: list[Finding]) -> list[Finding]:
 
 
 def correlate_findings(findings: list[Finding]) -> list[Finding]:
-    """Group findings from the same agent pool with the same issue."""
-    return group_agent_findings(findings)
+    """Group related findings: agents, pipeline failures, infrastructure."""
+    findings = group_agent_findings(findings)
+
+    # Group jenkins-job findings with same error signature
+    sig_groups: dict[str, list[Finding]] = {}
+    no_sig: list[Finding] = []
+    for f in findings:
+        sig = f.context.get("error_signature") or ""
+        if sig and f.category in ("jenkins_failed_build", "jenkins_pipeline_pattern"):
+            sig_groups.setdefault(sig, []).append(f)
+        else:
+            no_sig.append(f)
+
+    merged: list[Finding] = list(no_sig)
+    for sig, group in sig_groups.items():
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        primary = max(group, key=priority_score)
+        related = [g for g in group if g is not primary]
+        primary.context["correlated_jobs"] = [g.context.get("job_name", g.resource) for g in related]
+        primary.context["correlated_findings"] = primary.context.get("correlated_findings", []) + [
+            f"{g.resource}: {g.symptom}" for g in related
+        ]
+        primary.context["correlation_group_size"] = 1 + len(related)
+        primary.symptom = f"{primary.symptom} (+{len(related)} jobs with same error signature)"
+        merged.append(primary)
+
+    # Link build failures to K8s events on same node/pod
+    build_findings = [f for f in merged if f.category.startswith("jenkins_")]
+    k8s_findings = [f for f in merged if f.category.startswith("k8s_")]
+    linked_k8s: set[str] = set()
+
+    for bf in build_findings:
+        node = bf.context.get("built_on") or bf.context.get("node", "")
+        for kf in k8s_findings:
+            if kf.fingerprint in linked_k8s:
+                continue
+            host = kf.context.get("source", {}).get("host", "")
+            obj_name = kf.context.get("involved_object", {}).get("name", "")
+            if node and (node in host or node in obj_name or node in kf.resource):
+                bf.context.setdefault("correlated_findings", []).append(
+                    f"{kf.resource}: {kf.symptom}"
+                )
+                linked_k8s.add(kf.fingerprint)
+
+    # Group multiple failures on same K8s node
+    node_groups: dict[str, list[Finding]] = {}
+    ungrouped: list[Finding] = []
+    for f in merged:
+        node = ""
+        if f.context.get("source", {}).get("host"):
+            node = f.context["source"]["host"]
+        elif f.category == "k8s_node":
+            node = f.resource.split("/")[-1]
+        if node:
+            node_groups.setdefault(node, []).append(f)
+        else:
+            ungrouped.append(f)
+
+    for node, group in node_groups.items():
+        if len(group) == 1:
+            ungrouped.append(group[0])
+            continue
+        jenkins_related = [g for g in group if g.category.startswith("jenkins_")]
+        if len(jenkins_related) >= 2 or (jenkins_related and len(group) >= 2):
+            primary = max(group, key=priority_score)
+            related = [g for g in group if g is not primary]
+            primary.context.setdefault("correlated_findings", []).extend(
+                f"{g.resource}: {g.symptom}" for g in related
+            )
+            primary.context["node_correlation"] = node
+            primary.context["correlation_group_size"] = 1 + len(related)
+            primary.symptom = f"{primary.symptom} (node {node}: {len(group)} related issues)"
+            ungrouped.append(primary)
+        else:
+            ungrouped.extend(group)
+
+    return ungrouped
 
 
 _active_scan: asyncio.Task | None = None
@@ -204,6 +285,29 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
             raise asyncio.CancelledError()
         await event_queue.put({"type": "detection_complete", "total_findings": len(findings)})
 
+        # Dedup and correlate ALL findings before diff/investigation
+        findings = deduplicate_findings(findings)
+        findings = correlate_findings(findings)
+
+        cluster_context = await gather_cluster_context()
+
+        # LLM triage — classify noise vs investigate-worthy findings
+        if findings and not request.investigate_all:
+            await event_queue.put({"type": "triage_start", "count": len(findings)})
+            triage_result = await triage_findings(findings, cluster_context=cluster_context)
+            total_prompt_tokens += triage_result.prompt_tokens
+            total_completion_tokens += triage_result.completion_tokens
+
+            dismissed_fps = {d.finding.fingerprint for d in triage_result.dismissed}
+            findings = [f for f in findings if f.fingerprint not in dismissed_fps]
+
+            await event_queue.put({
+                "type": "triage_complete",
+                "total_findings": len(findings),
+                "dismissed_count": len(triage_result.dismissed),
+                "correlation_groups": len(triage_result.correlations),
+            })
+
         previous = await get_previous_findings()
         diff = compute_diff(previous, findings)
         existing_investigations = await get_stored_investigations()
@@ -214,9 +318,14 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
         else:
             to_investigate = [f for f in diff.new if f.severity in ("critical", "warning")]
             to_investigate += [f for f in diff.ongoing if f.severity == "critical"]
+            # Always investigate pipeline patterns and shared failure signatures
+            to_investigate += [
+                f for f in findings
+                if f.category == "jenkins_pipeline_pattern"
+                and f.context.get("pattern") in ("consecutive_failures", "shared_failure_signature", "regression")
+                and f not in to_investigate
+            ]
 
-        to_investigate = deduplicate_findings(to_investigate)
-        to_investigate = correlate_findings(to_investigate)
         to_investigate.sort(key=priority_score, reverse=True)
         to_investigate = to_investigate[: settings.max_investigations_per_scan]
 
@@ -225,8 +334,6 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
                 f for f in to_investigate
                 if should_investigate(f, diff, existing_investigations)
             ]
-
-        cluster_context = await gather_cluster_context()
 
         await event_queue.put({"type": "investigation_plan", "count": len(to_investigate)})
 
@@ -255,7 +362,12 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
 
                 on_progress = make_progress_emitter(finding.resource, event_queue)
                 _current_investigation = asyncio.create_task(
-                    investigate_finding(finding, on_progress=on_progress, cluster_context=cluster_context)
+                    investigate_finding(
+                        finding,
+                        on_progress=on_progress,
+                        cluster_context=cluster_context,
+                        all_findings=findings,
+                    )
                 )
                 try:
                     result = await _current_investigation

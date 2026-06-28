@@ -57,6 +57,9 @@ async def test_failed_build_check_emits_grouped_findings():
     with patch(
         "jenkins_watchdog.checks.jenkins_failed_builds.get_recent_failed_builds",
         new=AsyncMock(return_value=builds),
+    ), patch(
+        "jenkins_watchdog.checks.jenkins_failed_builds.get_build_console_output",
+        new=AsyncMock(return_value="ERROR: test failed\nBUILD FAILED"),
     ):
         findings = await JenkinsFailedBuildCheck().run()
 

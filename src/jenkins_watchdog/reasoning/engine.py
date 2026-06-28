@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,6 @@ _RETRYABLE_EXCEPTIONS = (
 
 
 def _get_model_chain() -> list[str]:
-    """Build ordered model list from primary + fallbacks."""
     models = [settings.llm_model]
     if settings.llm_fallback_models:
         models.extend(m.strip() for m in settings.llm_fallback_models.split(",") if m.strip())
@@ -38,33 +38,78 @@ def _load_system_prompt() -> str:
     prompt_file = PROMPTS_DIR / "system.md"
     if prompt_file.exists():
         return prompt_file.read_text()
-    return "You are a Jenkins platform engineer investigating CI/CD agent issues on a k3s cluster using tools."
+    return "You are a Jenkins platform engineer investigating CI/CD issues on a k3s cluster using tools."
 
 
-def _format_investigation_prompt(finding: Finding) -> str:
-    return (
-        f"Investigate this Jenkins agent issue and determine the root cause:\n\n"
+def _format_investigation_prompt(finding: Finding, all_findings: list[Finding] | None = None) -> str:
+    prompt = (
+        f"Investigate this Jenkins/CI issue and determine the root cause:\n\n"
         f"- Severity: {finding.severity}\n"
         f"- Category: {finding.category}\n"
         f"- Resource: {finding.resource}\n"
         f"- Symptom: {finding.symptom}\n"
         f"- Context: {json.dumps(finding.context, default=str)}\n\n"
-        f"Use tools to gather evidence. When done, explain what you found."
     )
+
+    if finding.context.get("correlated_findings"):
+        prompt += (
+            "## Correlated findings (same incident):\n"
+            + "\n".join(f"- {c}" for c in finding.context["correlated_findings"])
+            + "\n\n"
+        )
+
+    if finding.category in ("jenkins_failed_build", "jenkins_pipeline_pattern"):
+        prompt += (
+            "## Investigation checklist for pipeline failures:\n"
+            "1. Read build console log (jenkins_get_build_log) — find the FIRST error, not just the last line\n"
+            "2. Compare with previous builds (jenkins_get_job_build_history) — is this recurring?\n"
+            "3. Check build parameters (jenkins_get_build) — wrong branch, missing params?\n"
+            "4. If agent/infrastructure suspected: check which node ran the build, then k8s pod logs/events\n"
+            "5. Classify: test failure vs compilation vs infra vs config — explain WHY\n\n"
+        )
+
+    prompt += "Use tools to gather evidence. When done, explain what you found."
+
+    if all_findings and len(all_findings) > 1:
+        others = [f for f in all_findings if f.fingerprint != finding.fingerprint]
+        if others:
+            lines = [f"- [{f.severity}] {f.resource}: {f.symptom}" for f in others[:15]]
+            prompt += (
+                f"\n\n## Other findings in this scan (for correlation):\n"
+                + "\n".join(lines)
+                + "\n\nConsider whether this issue is related to or caused by any of the above."
+            )
+
+    return prompt
 
 
 ProgressCallback = Callable[[dict[str, Any]], Any]
 
 
-async def investigate_finding(
-    finding: Finding,
+@dataclass
+class ToolLoopResult:
+    raw_reasoning: str = ""
+    tools_used: list[str] = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+async def run_tool_loop(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    max_rounds: int | None = None,
+    max_tokens: int | None = None,
+    model_chain: list[str] | None = None,
     on_progress: ProgressCallback | None = None,
-    cluster_context: str = "",
-) -> Investigation | None:
-    """Run LiteLLM tool-use loop to investigate a single finding."""
+    label: str = "tool_loop",
+    summary_prompt: str = "Summarize your findings so far. What is the root cause, impact, and fix?",
+) -> ToolLoopResult:
+    """Reusable LLM tool-use loop for investigations."""
     if not settings.anthropic_api_key:
-        logger.warning("No Anthropic API key — skipping investigation for %s", finding.resource)
-        return None
+        logger.warning("[%s] No Anthropic API key — skipping", label)
+        return ToolLoopResult()
 
     async def _emit(event: dict) -> None:
         if on_progress:
@@ -72,29 +117,27 @@ async def investigate_finding(
             if asyncio.iscoroutine(result):
                 await result
 
-    system_prompt = _load_system_prompt()
-    if cluster_context:
-        system_prompt = f"{system_prompt}\n\n{cluster_context}"
+    max_rounds = max_rounds or settings.max_tool_rounds
+    model_chain = model_chain or _get_model_chain()
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": _format_investigation_prompt(finding)},
+        {"role": "user", "content": user_prompt},
     ]
     tools_used: list[str] = []
-    model_chain = _get_model_chain()
     total_prompt_tokens = 0
     total_completion_tokens = 0
     total_cost = 0.0
-
     raw_reasoning_parts: list[str] = []
 
-    for iteration in range(settings.max_tool_rounds):
-        logger.debug("[investigate:%s] Round %d", finding.resource, iteration + 1)
+    for iteration in range(max_rounds):
+        logger.debug("[%s] Round %d", label, iteration + 1)
 
         content, tool_calls, usage = await _call_with_fallback(
             model_chain=model_chain,
             messages=messages,
             tools=ALL_TOOL_DEFINITIONS,
+            max_tokens=max_tokens,
         )
         total_prompt_tokens += usage[0]
         total_completion_tokens += usage[1]
@@ -120,7 +163,7 @@ async def investigate_finding(
                 tool_args = {}
 
             await _emit({"type": "tool_call", "tool": tool_name, "args": tool_args})
-            logger.info("[investigate:%s] Calling tool: %s(%s)", finding.resource, tool_name, list(tool_args.keys()))
+            logger.info("[%s] Calling tool: %s(%s)", label, tool_name, list(tool_args.keys()))
             result = await execute_tool(tool_name, tool_args)
             tools_used.append(tool_name)
 
@@ -130,33 +173,59 @@ async def investigate_finding(
                 "content": result,
             })
     else:
-        logger.warning("[investigate:%s] Hit max tool rounds (%d)", finding.resource, settings.max_tool_rounds)
-        messages.append({
-            "role": "user",
-            "content": "Summarize your findings so far. What is the root cause, impact, and fix?",
-        })
-        content, _, usage = await _call_with_fallback(model_chain=model_chain, messages=messages, tools=None)
+        logger.warning("[%s] Hit max tool rounds (%d)", label, max_rounds)
+        messages.append({"role": "user", "content": summary_prompt})
+        content, _, usage = await _call_with_fallback(
+            model_chain=model_chain, messages=messages, tools=None, max_tokens=max_tokens,
+        )
         total_prompt_tokens += usage[0]
         total_completion_tokens += usage[1]
         total_cost += usage[2]
         if content:
             raw_reasoning_parts.append(content)
 
-    raw_reasoning = "\n\n".join(raw_reasoning_parts)
-    inv = await _extract_structured_output(
-        raw_reasoning=raw_reasoning,
-        finding=finding,
+    return ToolLoopResult(
+        raw_reasoning="\n\n".join(raw_reasoning_parts),
         tools_used=tools_used,
+        prompt_tokens=total_prompt_tokens,
+        completion_tokens=total_completion_tokens,
+        cost_usd=total_cost,
+    )
+
+
+async def investigate_finding(
+    finding: Finding,
+    on_progress: ProgressCallback | None = None,
+    cluster_context: str = "",
+    all_findings: list[Finding] | None = None,
+) -> Investigation | None:
+    """Run LiteLLM tool-use loop to investigate a single finding."""
+    system_prompt = _load_system_prompt()
+    if cluster_context:
+        system_prompt = f"{system_prompt}\n\n{cluster_context}"
+
+    loop_result = await run_tool_loop(
+        system_prompt=system_prompt,
+        user_prompt=_format_investigation_prompt(finding, all_findings),
+        on_progress=on_progress,
+        label=f"investigate:{finding.resource}",
+    )
+
+    if not loop_result.raw_reasoning and not loop_result.tools_used:
+        return None
+
+    model_chain = _get_model_chain()
+    inv = await _extract_structured_output(
+        raw_reasoning=loop_result.raw_reasoning,
+        finding=finding,
+        tools_used=loop_result.tools_used,
         model_chain=model_chain,
     )
-    total_prompt_tokens += inv.prompt_tokens
-    total_completion_tokens += inv.completion_tokens
-    total_cost += inv.estimated_cost_usd
 
-    inv.prompt_tokens = total_prompt_tokens
-    inv.completion_tokens = total_completion_tokens
-    inv.estimated_cost_usd = round(total_cost, 4)
-    inv.raw_reasoning = raw_reasoning
+    inv.prompt_tokens = loop_result.prompt_tokens + inv.prompt_tokens
+    inv.completion_tokens = loop_result.completion_tokens + inv.completion_tokens
+    inv.estimated_cost_usd = round(loop_result.cost_usd + inv.estimated_cost_usd, 4)
+    inv.raw_reasoning = loop_result.raw_reasoning
     return inv
 
 
@@ -166,12 +235,18 @@ Use ONLY these 6 fields — no others:
 {"root_cause":"One clear sentence explaining WHY this is happening","evidence":["specific data point 1","specific data point 2"],"impact":"What breaks or degrades if not fixed","suggested_fix":"Exact actionable fix: what to change, to what value","fix_location":"K8s resource or file path to modify","confidence":"high|medium|low"}
 
 Rules:
-- root_cause: one sentence explaining the ACTUAL MECHANISM (not just symptoms)
-- evidence: JSON array of strings — concrete data points that PROVE the root cause
-- impact: what happens if this is NOT fixed
-- suggested_fix: actionable — specific values, commands, or config changes
-- fix_location: exact K8s resource, file path, or Jenkins config to modify
-- confidence: "high" ONLY if root cause confirmed by multiple data sources. "medium" if supported by data. "low" if uncertain.
+- root_cause: one sentence explaining the ACTUAL MECHANISM (not just symptoms). Bad: "Build failed". Good: "Maven test phase fails because integration test cannot reach mock server — connection refused on port 8081"
+- evidence: JSON array of strings — concrete data points (log lines, build numbers, node names, metric values) that PROVE the root cause
+- impact: what happens if NOT fixed — blocked MRs, recurring failures, agent pool exhaustion, etc.
+- suggested_fix: actionable — specific Jenkinsfile change, parameter value, resource limit, or config. NEVER say "investigate further" or "check logs"
+- fix_location: exact Jenkins job, Jenkinsfile path, K8s resource, or pipeline stage to modify
+- confidence: "high" ONLY if root cause confirmed by build log + supporting data. "medium" if supported by logs but mechanism unclear. "low" if uncertain or might be transient.
+
+Quality gates — set confidence="low" if ANY apply:
+- You did not read the actual build console log for pipeline failures
+- The failure might be a flaky test with no recurring pattern
+- You are treating a downstream symptom (agent offline) as root cause when the build log shows a test failure
+- Your fix targets infrastructure when the build log shows an application/test error
 
 Investigation findings to extract from:
 """
@@ -183,9 +258,8 @@ async def _extract_structured_output(
     tools_used: list[str],
     model_chain: list[str],
 ) -> Investigation:
-    """Pass 2: Extract structured JSON from raw investigation reasoning."""
     messages = [
-        {"role": "user", "content": f"{_EXTRACTION_PROMPT}\n{raw_reasoning[:6000]}"},
+        {"role": "user", "content": f"{_EXTRACTION_PROMPT}\n{raw_reasoning[:8000]}"},
     ]
 
     try:
@@ -220,7 +294,6 @@ async def _call_with_fallback(
     tools: list[dict] | None,
     max_tokens: int | None = None,
 ) -> tuple[str, list[dict], tuple[int, int, float]]:
-    """Call LiteLLM with model fallback and retries."""
     last_error: Exception | None = None
     max_attempts = settings.llm_max_retries + 1
 

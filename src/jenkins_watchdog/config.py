@@ -53,8 +53,8 @@ class Settings(BaseSettings):
     jira_projects: str = "CI"
 
     # Agent
-    max_tool_rounds: int = 10
-    max_investigations_per_scan: int = 10
+    max_tool_rounds: int = 15
+    max_investigations_per_scan: int = 12
 
     model_config = {"env_prefix": "WATCHDOG_"}
 
