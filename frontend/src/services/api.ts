@@ -49,7 +49,7 @@ export async function deleteFinding(fingerprint: string): Promise<void> {
 }
 
 export interface ScanEvent {
-  type: "scan_started" | "detection_complete" | "investigation_plan" | "investigation_start" | "tool_call" | "reasoning" | "investigation_complete" | "investigation_error" | "scan_complete" | "scan_stopped" | "error";
+  type: "scan_started" | "detection_complete" | "investigation_plan" | "investigation_start" | "tool_call" | "reasoning" | "investigation_complete" | "investigation_error" | "scan_complete" | "scan_stopped" | "heartbeat" | "error";
   scan_id?: string;
   deep?: boolean;
   total_findings?: number;

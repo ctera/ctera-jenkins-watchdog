@@ -47,6 +47,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+SSE_PING_INTERVAL = 15
+SSE_HEARTBEAT_INTERVAL = 15
+
+
+def _scan_sse(content):
+    """SSE response with periodic pings to keep proxies (Traefik) from timing out."""
+    return EventSourceResponse(content, media_type="text/event-stream", ping=SSE_PING_INTERVAL)
+
+
 CATEGORY_WEIGHT = {
     "jenkins_controller": 100,
     "jenkins_agent": 80,
@@ -215,19 +224,19 @@ async def trigger_scan(request: ScanRequest | None = None):
     global _active_scan, _scan_events
 
     if _active_scan and not _active_scan.done():
-        return EventSourceResponse(_follow_active_scan(), media_type="text/event-stream")
+        return _scan_sse(_follow_active_scan())
 
     if not await acquire_lock():
         async def _error_stream():
             yield {"data": json.dumps({"type": "error", "message": "Another scan is already running. Please wait."})}
-        return EventSourceResponse(_error_stream(), media_type="text/event-stream")
+        return _scan_sse(_error_stream())
 
     _scan_events = asyncio.Queue()
     _scan_cancel_event = asyncio.Event()
     await clear_scan_cancel()
     _active_scan = asyncio.create_task(_run_scan_background(request or ScanRequest(), _scan_events))
 
-    return EventSourceResponse(_follow_active_scan(), media_type="text/event-stream")
+    return _scan_sse(_follow_active_scan())
 
 
 @router.post("/scan/stop")
@@ -259,7 +268,7 @@ async def _follow_active_scan():
     queue = _scan_events
     while True:
         try:
-            event = await asyncio.wait_for(queue.get(), timeout=120)
+            event = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_INTERVAL)
         except asyncio.TimeoutError:
             yield {"data": json.dumps({"type": "heartbeat"})}
             continue
