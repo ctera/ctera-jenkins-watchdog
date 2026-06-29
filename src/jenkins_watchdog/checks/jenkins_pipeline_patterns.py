@@ -19,13 +19,18 @@ from jenkins_watchdog.clients.log_analysis import (
     error_signature,
     extract_error_lines,
 )
-from jenkins_watchdog.config import settings
+from jenkins_watchdog.scan_options import get_scan_options
 
 logger = logging.getLogger(__name__)
 
 CONSECUTIVE_FAILURE_THRESHOLD = 3
 HISTORY_LIMIT = 15
 LOG_FETCH_CONCURRENCY = 8
+
+
+def _thresholds() -> tuple[int, int]:
+    opts = get_scan_options()
+    return opts.consecutive_failure_threshold, opts.pipeline_history_limit
 
 
 def _format_ts(timestamp_ms: int) -> str:
@@ -91,10 +96,13 @@ class JenkinsPipelinePatternCheck:
 
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
+        opts = get_scan_options()
+        consecutive_threshold, history_limit = _thresholds()
 
         try:
             failed_builds = await get_recent_failed_builds(
-                window_hours=settings.jenkins_failed_build_window_hours,
+                window_hours=opts.jenkins_failed_build_window_hours,
+                build_limit=opts.jenkins_build_depth,
             )
         except Exception as exc:
             logger.warning("Pipeline pattern check: failed to get recent builds: %s", exc)
@@ -113,7 +121,7 @@ class JenkinsPipelinePatternCheck:
         async def _analyze_job(job_name: str, builds: list[FailedBuildSummary]) -> list[Finding]:
             job_findings: list[Finding] = []
             try:
-                history = await get_job_recent_builds(job_name, limit=HISTORY_LIMIT)
+                history = await get_job_recent_builds(job_name, limit=history_limit)
             except Exception as exc:
                 logger.debug("Failed to fetch history for %s: %s", job_name, exc)
                 return job_findings
@@ -151,7 +159,7 @@ class JenkinsPipelinePatternCheck:
                 "streak_analysis": streak,
             }
 
-            if streak["consecutive_failures"] >= CONSECUTIVE_FAILURE_THRESHOLD:
+            if streak["consecutive_failures"] >= consecutive_threshold:
                 job_findings.append(
                     Finding(
                         severity="critical",
@@ -169,7 +177,7 @@ class JenkinsPipelinePatternCheck:
                     )
                 )
 
-            if streak["regression"] and streak["consecutive_failures"] < CONSECUTIVE_FAILURE_THRESHOLD:
+            if streak["regression"] and streak["consecutive_failures"] < consecutive_threshold:
                 job_findings.append(
                     Finding(
                         severity="warning" if streak["consecutive_failures"] == 2 else "critical",

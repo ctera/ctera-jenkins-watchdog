@@ -13,6 +13,7 @@ import litellm
 from jenkins_watchdog.api.models import Investigation
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.config import settings
+from jenkins_watchdog.scan_options import get_scan_options
 from jenkins_watchdog.tools import ALL_TOOL_DEFINITIONS, execute_tool
 
 logger = logging.getLogger(__name__)
@@ -34,14 +35,26 @@ def _get_model_chain() -> list[str]:
     return models
 
 
-def _load_system_prompt() -> str:
+def _load_system_prompt(*, deep: bool = False) -> str:
     prompt_file = PROMPTS_DIR / "system.md"
-    if prompt_file.exists():
-        return prompt_file.read_text()
-    return "You are a Jenkins platform engineer investigating CI/CD issues on a k3s cluster using tools."
+    base = prompt_file.read_text() if prompt_file.exists() else (
+        "You are a Jenkins platform engineer investigating CI/CD issues on a k3s cluster using tools."
+    )
+    if not deep:
+        return base
+    return (
+        f"{base}\n\n"
+        "## Deep scan mode\n"
+        "This is a thorough deep scan. Take your time and use more tool rounds:\n"
+        "- Read full build console logs, not just tails — find the FIRST error and trace upstream\n"
+        "- Compare multiple recent builds to confirm recurring vs one-off failures\n"
+        "- Assess blast radius: which jobs, MRs, or agents are affected\n"
+        "- Provide fix verification steps: how to confirm the fix worked (re-run build, check metric, etc.)\n"
+        "- Cross-correlate with other findings in this scan before concluding\n"
+    )
 
 
-def _format_investigation_prompt(finding: Finding, all_findings: list[Finding] | None = None) -> str:
+def _format_investigation_prompt(finding: Finding, all_findings: list[Finding] | None = None, *, deep: bool = False) -> str:
     prompt = (
         f"Investigate this Jenkins/CI issue and determine the root cause:\n\n"
         f"- Severity: {finding.severity}\n"
@@ -69,6 +82,14 @@ def _format_investigation_prompt(finding: Finding, all_findings: list[Finding] |
         )
 
     prompt += "Use tools to gather evidence. When done, explain what you found."
+
+    if deep:
+        prompt += (
+            "\n\n## Deep scan requirements:\n"
+            "- Perform full root cause analysis with impact assessment\n"
+            "- Include concrete fix verification steps (what to re-run or check after applying the fix)\n"
+            "- Use jenkins_get_build_log without relying on truncated output\n"
+        )
 
     if all_findings and len(all_findings) > 1:
         others = [f for f in all_findings if f.fingerprint != finding.fingerprint]
@@ -200,15 +221,24 @@ async def investigate_finding(
     all_findings: list[Finding] | None = None,
 ) -> Investigation | None:
     """Run LiteLLM tool-use loop to investigate a single finding."""
-    system_prompt = _load_system_prompt()
+    scan_opts = get_scan_options()
+    system_prompt = _load_system_prompt(deep=scan_opts.deep)
     if cluster_context:
         system_prompt = f"{system_prompt}\n\n{cluster_context}"
 
+    summary_prompt = (
+        "Summarize your findings so far. What is the root cause, impact, fix, and how to verify the fix worked?"
+        if scan_opts.deep
+        else "Summarize your findings so far. What is the root cause, impact, and fix?"
+    )
+
     loop_result = await run_tool_loop(
         system_prompt=system_prompt,
-        user_prompt=_format_investigation_prompt(finding, all_findings),
+        user_prompt=_format_investigation_prompt(finding, all_findings, deep=scan_opts.deep),
+        max_rounds=scan_opts.max_tool_rounds,
         on_progress=on_progress,
         label=f"investigate:{finding.resource}",
+        summary_prompt=summary_prompt,
     )
 
     if not loop_result.raw_reasoning and not loop_result.tools_used:
@@ -220,6 +250,7 @@ async def investigate_finding(
         finding=finding,
         tools_used=loop_result.tools_used,
         model_chain=model_chain,
+        deep=scan_opts.deep,
     )
 
     inv.prompt_tokens = loop_result.prompt_tokens + inv.prompt_tokens
@@ -252,14 +283,35 @@ Investigation findings to extract from:
 """
 
 
+_EXTRACTION_PROMPT_DEEP = """Extract the investigation findings into this exact JSON format.
+Use ONLY these 7 fields — no others:
+
+{"root_cause":"One clear sentence explaining WHY this is happening","evidence":["specific data point 1","specific data point 2"],"impact":"What breaks or degrades if not fixed","suggested_fix":"Exact actionable fix: what to change, to what value","fix_location":"K8s resource or file path to modify","fix_verification":"Steps to confirm the fix worked (re-run job, check metric, etc.)","confidence":"high|medium|low"}
+
+Rules:
+- root_cause: one sentence explaining the ACTUAL MECHANISM (not just symptoms)
+- evidence: JSON array of strings — concrete data points that PROVE the root cause
+- impact: what happens if NOT fixed
+- suggested_fix: actionable — specific Jenkinsfile change, parameter value, resource limit, or config
+- fix_location: exact Jenkins job, Jenkinsfile path, K8s resource, or pipeline stage to modify
+- fix_verification: concrete steps to validate the fix after applying it
+- confidence: "high" ONLY if root cause confirmed by build log + supporting data
+
+Investigation findings to extract from:
+"""
+
+
 async def _extract_structured_output(
     raw_reasoning: str,
     finding: Finding,
     tools_used: list[str],
     model_chain: list[str],
+    *,
+    deep: bool = False,
 ) -> Investigation:
+    extraction_prompt = _EXTRACTION_PROMPT_DEEP if deep else _EXTRACTION_PROMPT
     messages = [
-        {"role": "user", "content": f"{_EXTRACTION_PROMPT}\n{raw_reasoning[:8000]}"},
+        {"role": "user", "content": f"{extraction_prompt}\n{raw_reasoning[:12000 if deep else 8000]}"},
     ]
 
     try:
@@ -432,12 +484,16 @@ def _parse_investigation(text: str, fingerprint: str, tools_used: list[str]) -> 
             confidence = data.get("confidence", "medium")
             if confidence not in ("high", "medium", "low"):
                 confidence = "medium"
+            suggested_fix = str(data.get("suggested_fix", "No fix suggested"))
+            fix_verification = data.get("fix_verification")
+            if fix_verification:
+                suggested_fix = f"{suggested_fix}\n\nVerification: {fix_verification}"
             return Investigation(
                 finding_fingerprint=fingerprint,
                 root_cause=str(data.get("root_cause", "Unknown")),
                 evidence=_coerce_evidence(data.get("evidence", [])),
                 impact=str(data.get("impact", "Unknown impact")),
-                suggested_fix=str(data.get("suggested_fix", "No fix suggested")),
+                suggested_fix=suggested_fix,
                 fix_location=data.get("fix_location"),
                 confidence=confidence,
                 tools_used=tools_used,

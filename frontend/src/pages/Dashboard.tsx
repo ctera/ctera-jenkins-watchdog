@@ -18,6 +18,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
+import RadarIcon from "@mui/icons-material/Radar";
 import { deleteFinding, fetchFindings, type FindingsResponse } from "../services/api";
 import { useScan } from "../context/ScanContext";
 
@@ -40,7 +41,7 @@ export default function Dashboard() {
   const [data, setData] = useState<FindingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { scan, startScan, stopScan } = useScan();
+  const { scan, startScan, startDeepScan, stopScan } = useScan();
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -97,7 +98,7 @@ export default function Dashboard() {
             </Typography>
           )}
         </Box>
-        <Box sx={{ display: "flex", gap: 1 }}>
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
           {scan.scanning ? (
             <Button
               variant="contained"
@@ -107,17 +108,36 @@ export default function Dashboard() {
               disabled={scan.stopping}
               size="large"
             >
-              {scan.stopping ? "Stopping..." : "Stop Scan"}
+              {scan.stopping ? "Stopping..." : scan.deep ? "Stop Deep Scan" : "Stop Scan"}
             </Button>
           ) : (
-            <Button
-              variant="contained"
-              startIcon={<PlayArrowIcon />}
-              onClick={startScan}
-              size="large"
-            >
-              Run Scan
-            </Button>
+            <>
+              <Button
+                variant="contained"
+                startIcon={<PlayArrowIcon />}
+                onClick={startScan}
+                size="large"
+              >
+                Run Scan
+              </Button>
+              <Tooltip
+                title="Thorough analysis: 24h build window, up to 50 investigations, full build logs. Takes longer and uses more LLM credits."
+                arrow
+              >
+                <Button
+                  variant="contained"
+                  startIcon={<RadarIcon />}
+                  onClick={startDeepScan}
+                  size="large"
+                  sx={{
+                    bgcolor: "secondary.main",
+                    "&:hover": { bgcolor: "secondary.dark" },
+                  }}
+                >
+                  Deep Scan
+                </Button>
+              </Tooltip>
+            </>
           )}
         </Box>
       </Box>
@@ -127,7 +147,14 @@ export default function Dashboard() {
       {scan.events.length > 0 && (
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
-            {scan.scanning ? "Scanning... " : "Complete: "}{scan.status}
+            {scan.scanning
+              ? scan.deep
+                ? "Deep scanning... "
+                : "Scanning... "
+              : scan.deep
+                ? "Deep scan complete: "
+                : "Complete: "}
+            {scan.status}
           </Typography>
           <Box
             ref={logRef}
@@ -143,7 +170,7 @@ export default function Dashboard() {
           >
             {scan.events.map((evt, i) => (
               <Box key={i} sx={{ color: evt.type === "investigation_complete" ? "success.main" : evt.type === "tool_call" ? "info.main" : evt.type === "error" || evt.type === "investigation_error" ? "error.main" : "text.secondary" }}>
-                {evt.type === "scan_started" && `> Scan ${evt.scan_id} started`}
+                {evt.type === "scan_started" && `> ${evt.deep ? "Deep scan" : "Scan"} ${evt.scan_id} started`}
                 {evt.type === "detection_complete" && `Detection: ${evt.total_findings} findings`}
                 {evt.type === "investigation_plan" && `Will investigate ${evt.count} findings`}
                 {evt.type === "investigation_start" && `-- [${evt.index}/${evt.total}] ${evt.resource}`}

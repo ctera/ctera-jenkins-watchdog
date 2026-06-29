@@ -16,15 +16,22 @@ from jenkins_watchdog.clients.jenkins import (
     get_running_builds,
 )
 from jenkins_watchdog.clients.log_analysis import classify_failure, extract_error_lines
+from jenkins_watchdog.scan_options import get_scan_options
 
 logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_BYTES = 4096
+MAX_OUTPUT_BYTES_DEEP = 65536
+
+
+def _max_output_bytes() -> int:
+    return MAX_OUTPUT_BYTES_DEEP if get_scan_options().full_build_logs else MAX_OUTPUT_BYTES
 
 
 def _truncate(text: str) -> str:
-    if len(text) > MAX_OUTPUT_BYTES:
-        return text[:MAX_OUTPUT_BYTES] + "\n... [truncated]"
+    limit = _max_output_bytes()
+    if len(text) > limit:
+        return text[:limit] + "\n... [truncated]"
     return text
 
 
@@ -198,10 +205,12 @@ async def jenkins_get_build_log(job_name: str, build_number: int, tail_lines: in
     """Get console output for a specific build."""
     try:
         output = await get_build_console_output(job_name, build_number)
-        lines = output.split("\n")
-        if len(lines) > tail_lines:
-            lines = lines[-tail_lines:]
-        return _truncate("\n".join(lines))
+        if not get_scan_options().full_build_logs:
+            lines = output.split("\n")
+            if len(lines) > tail_lines:
+                lines = lines[-tail_lines:]
+            output = "\n".join(lines)
+        return _truncate(output)
     except Exception as e:
         return f"Error getting build log for {job_name}#{build_number}: {e}"
 

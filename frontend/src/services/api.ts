@@ -51,6 +51,7 @@ export async function deleteFinding(fingerprint: string): Promise<void> {
 export interface ScanEvent {
   type: "scan_started" | "detection_complete" | "investigation_plan" | "investigation_start" | "tool_call" | "reasoning" | "investigation_complete" | "investigation_error" | "scan_complete" | "scan_stopped" | "error";
   scan_id?: string;
+  deep?: boolean;
   total_findings?: number;
   count?: number;
   index?: number;
@@ -72,13 +73,16 @@ export interface ScanEvent {
 }
 
 export async function* streamScan(
-  investigateAll = false,
+  options: { investigateAll?: boolean; deep?: boolean } = {},
   signal?: AbortSignal
 ): AsyncGenerator<ScanEvent> {
   const res = await fetch(`${BASE}/scan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ investigate_all: investigateAll }),
+    body: JSON.stringify({
+      investigate_all: options.investigateAll ?? false,
+      deep: options.deep ?? false,
+    }),
     signal,
   });
 

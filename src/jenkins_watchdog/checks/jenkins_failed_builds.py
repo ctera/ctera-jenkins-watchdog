@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.clients.jenkins import FailedBuildSummary, get_build_console_output, get_recent_failed_builds
 from jenkins_watchdog.clients.log_analysis import classify_failure, error_signature, extract_error_lines
-from jenkins_watchdog.config import settings
+from jenkins_watchdog.scan_options import get_scan_options
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +63,12 @@ class JenkinsFailedBuildCheck:
 
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
+        opts = get_scan_options()
 
         try:
             failed_builds = await get_recent_failed_builds(
-                window_hours=settings.jenkins_failed_build_window_hours,
+                window_hours=opts.jenkins_failed_build_window_hours,
+                build_limit=opts.jenkins_build_depth,
             )
         except Exception as exc:
             logger.warning("Failed to check recent Jenkins builds: %s", exc)
@@ -92,7 +94,9 @@ class JenkinsFailedBuildCheck:
                 context={
                     "job_name": job_name,
                     "is_mr": builds[0].is_mr,
-                    "window_hours": settings.jenkins_failed_build_window_hours,
+                    "window_hours": opts.jenkins_failed_build_window_hours,
+                    "build_depth": opts.jenkins_build_depth,
+                    "deep_scan": opts.deep,
                     "failure_class": failure_class,
                     "error_signature": log_context.get("error_signature", ""),
                     "error_lines": log_context.get("error_lines", []),

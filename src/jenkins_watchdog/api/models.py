@@ -13,6 +13,7 @@ class ScanRequest(BaseModel):
 
     categories: list[str] | None = Field(None, description="Only run these check categories")
     investigate_all: bool = Field(False, description="Investigate all findings, not just new/critical")
+    deep: bool = Field(False, description="Deep scan — wider time window, more investigations, full build logs")
 
 
 class Investigation(BaseModel):

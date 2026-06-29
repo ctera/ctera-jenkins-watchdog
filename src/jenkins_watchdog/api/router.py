@@ -21,11 +21,11 @@ from jenkins_watchdog.checks.agent_utils import group_agent_findings
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.checks.registry import run_all_checks
 from jenkins_watchdog.clients.valkey import get_valkey_client
-from jenkins_watchdog.config import settings
 from jenkins_watchdog.reasoning.context import gather_cluster_context
 from jenkins_watchdog.reasoning.engine import investigate_finding
 from jenkins_watchdog.reasoning.gate import should_investigate
 from jenkins_watchdog.reasoning.triage import triage_findings
+from jenkins_watchdog.scan_options import ScanOptions, activate_scan_options, reset_scan_options
 from jenkins_watchdog.state import (
     INVESTIGATIONS_KEY,
     acquire_lock,
@@ -276,9 +276,17 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
     started_at = datetime.now(timezone.utc)
     total_prompt_tokens = 0
     total_completion_tokens = 0
+    token = None
 
     try:
-        await event_queue.put({"type": "scan_started", "scan_id": scan_id})
+        scan_opts = ScanOptions.deep_scan() if request.deep else ScanOptions.from_settings()
+        token = activate_scan_options(scan_opts)
+
+        await event_queue.put({
+            "type": "scan_started",
+            "scan_id": scan_id,
+            "deep": request.deep,
+        })
 
         findings = await run_all_checks(_scan_cancel_event)
         if _scan_cancel_event and _scan_cancel_event.is_set():
@@ -315,6 +323,8 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
         to_investigate = []
         if request.investigate_all:
             to_investigate = list(findings)
+        elif request.deep:
+            to_investigate = [f for f in findings if f.severity in ("critical", "warning")]
         else:
             to_investigate = [f for f in diff.new if f.severity in ("critical", "warning")]
             to_investigate += [f for f in diff.ongoing if f.severity == "critical"]
@@ -327,15 +337,15 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
             ]
 
         to_investigate.sort(key=priority_score, reverse=True)
-        to_investigate = to_investigate[: settings.max_investigations_per_scan]
+        to_investigate = to_investigate[: scan_opts.max_investigations_per_scan]
 
         if not request.investigate_all:
             to_investigate = [
                 f for f in to_investigate
-                if should_investigate(f, diff, existing_investigations)
+                if should_investigate(f, diff, existing_investigations, deep=request.deep)
             ]
 
-        await event_queue.put({"type": "investigation_plan", "count": len(to_investigate)})
+        await event_queue.put({"type": "investigation_plan", "count": len(to_investigate), "deep": request.deep})
 
         investigations: dict[str, Investigation] = {}
         for idx, finding in enumerate(to_investigate):
@@ -411,6 +421,7 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
         await event_queue.put({
             "type": "scan_complete",
             "scan_id": scan_id,
+            "deep": request.deep,
             "total_findings": len(findings),
             "new_findings": diff.new_count,
             "critical_findings": len([f for f in findings if f.severity == "critical"]),
@@ -424,6 +435,7 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
         await event_queue.put({
             "type": "scan_stopped",
             "scan_id": scan_id,
+            "deep": request.deep,
             "duration_s": round(duration_s, 1),
         })
     except Exception as e:
@@ -433,6 +445,10 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
         if _current_investigation and not _current_investigation.done():
             _current_investigation.cancel()
             _current_investigation = None
+        try:
+            reset_scan_options(token)
+        except Exception:
+            pass
         await release_lock()
         await clear_scan_cancel()
         await event_queue.put(None)

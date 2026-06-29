@@ -15,6 +15,8 @@ def should_investigate(
     finding: Finding,
     diff: FindingsDiff,
     existing_investigations: dict | None = None,
+    *,
+    deep: bool = False,
 ) -> bool:
     """Decide whether to investigate. Skips already-investigated high-confidence ongoing findings."""
     existing_investigations = existing_investigations or {}
@@ -23,6 +25,11 @@ def should_investigate(
     if existing and isinstance(existing, dict):
         if existing.get("confidence") == "high" and finding in diff.ongoing:
             return False
+
+    if deep:
+        if finding.severity in ("critical", "warning"):
+            return True
+        return False
 
     # Pipeline patterns and build failures are high-value — always investigate when new
     if finding.category in _HIGH_VALUE_CATEGORIES:

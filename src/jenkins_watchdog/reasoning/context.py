@@ -5,7 +5,7 @@ import logging
 from jenkins_watchdog.checks.agent_utils import list_jenkins_agent_pods
 from jenkins_watchdog.clients.jenkins import get_queue_info, get_recent_failed_builds, get_running_builds
 from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
-from jenkins_watchdog.config import settings
+from jenkins_watchdog.scan_options import get_scan_options
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +46,18 @@ async def gather_cluster_context() -> str:
     try:
         queue = await get_queue_info()
         running = await get_running_builds()
-        failed = await get_recent_failed_builds(window_hours=settings.jenkins_failed_build_window_hours)
+        opts = get_scan_options()
+        failed = await get_recent_failed_builds(
+            window_hours=opts.jenkins_failed_build_window_hours,
+            build_limit=opts.jenkins_build_depth,
+        )
 
         mr_failures = sum(1 for b in failed if b.is_mr)
         sections.append(
             f"## Jenkins Snapshot\n"
             f"- Build queue: {len(queue)} items\n"
             f"- Running builds: {len(running)}\n"
-            f"- Failed builds (last {settings.jenkins_failed_build_window_hours}h): {len(failed)} "
+            f"- Failed builds (last {opts.jenkins_failed_build_window_hours}h): {len(failed)} "
             f"({mr_failures} MR/PR)\n"
         )
         if failed:
