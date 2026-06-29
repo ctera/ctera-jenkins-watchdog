@@ -83,6 +83,7 @@ async def store_run_result(
     duration_s: float = 0.0,
     token_usage: dict | None = None,
     diff: "FindingsDiff | None" = None,
+    deep: bool = False,
 ) -> None:
     client = await get_valkey_client()
     now = datetime.now(timezone.utc).isoformat()
@@ -124,6 +125,7 @@ async def store_run_result(
         "findings_count": len(findings),
         "scan_id": scan_id,
         "duration_s": round(duration_s, 1),
+        "deep": deep,
     }
     if token_usage:
         run_info["token_usage"] = token_usage
@@ -140,6 +142,7 @@ async def store_run_result(
         "critical_count": len([f for f in findings if f.severity == "critical"]),
         "warning_count": len([f for f in findings if f.severity == "warning"]),
         "duration_s": round(duration_s, 1),
+        "deep": deep,
         "token_usage": token_usage or {},
     }, default=str)
     await client.lpush(HISTORY_KEY, history_entry)

@@ -47,7 +47,18 @@ function runScanStream(
                 : `Scan ${event.scan_id} started`;
               break;
             case "detection_complete":
-              status = `Detection complete: ${event.total_findings} findings`;
+              status = event.deep
+                ? `Detection complete (${event.window_hours}h window): ${event.total_findings} findings`
+                : `Detection complete: ${event.total_findings} findings`;
+              break;
+            case "triage_start":
+              status = `Triaging ${event.count} findings...`;
+              break;
+            case "triage_complete":
+              status = `Triage complete: ${event.total_findings} findings (${event.dismissed_count} dismissed)`;
+              break;
+            case "triage_skipped":
+              status = `Deep scan: keeping all ${event.count} findings (no triage)`;
               break;
             case "investigation_plan":
               status = event.deep

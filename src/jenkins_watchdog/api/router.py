@@ -300,7 +300,12 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
         findings = await run_all_checks(_scan_cancel_event)
         if _scan_cancel_event and _scan_cancel_event.is_set():
             raise asyncio.CancelledError()
-        await event_queue.put({"type": "detection_complete", "total_findings": len(findings)})
+        await event_queue.put({
+            "type": "detection_complete",
+            "total_findings": len(findings),
+            "deep": request.deep,
+            "window_hours": scan_opts.jenkins_failed_build_window_hours,
+        })
 
         # Dedup and correlate ALL findings before diff/investigation
         findings = deduplicate_findings(findings)
@@ -308,8 +313,8 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
 
         cluster_context = await gather_cluster_context()
 
-        # LLM triage — classify noise vs investigate-worthy findings
-        if findings and not request.investigate_all:
+        # LLM triage — skip in deep scan to keep more findings for investigation
+        if findings and not request.investigate_all and not request.deep:
             await event_queue.put({"type": "triage_start", "count": len(findings)})
             triage_result = await triage_findings(findings, cluster_context=cluster_context)
             total_prompt_tokens += triage_result.prompt_tokens
@@ -323,6 +328,13 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
                 "total_findings": len(findings),
                 "dismissed_count": len(triage_result.dismissed),
                 "correlation_groups": len(triage_result.correlations),
+            })
+
+        elif findings and request.deep:
+            await event_queue.put({
+                "type": "triage_skipped",
+                "count": len(findings),
+                "deep": True,
             })
 
         previous = await get_previous_findings()
@@ -345,14 +357,22 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
                 and f not in to_investigate
             ]
 
-        to_investigate.sort(key=priority_score, reverse=True)
-        to_investigate = to_investigate[: scan_opts.max_investigations_per_scan]
-
         if not request.investigate_all:
             to_investigate = [
                 f for f in to_investigate
                 if should_investigate(f, diff, existing_investigations, deep=request.deep)
             ]
+
+        to_investigate.sort(key=priority_score, reverse=True)
+        to_investigate = to_investigate[: scan_opts.max_investigations_per_scan]
+
+        logger.info(
+            "[scan:%s] Investigation plan: deep=%s count=%d max=%d",
+            scan_id,
+            request.deep,
+            len(to_investigate),
+            scan_opts.max_investigations_per_scan,
+        )
 
         await event_queue.put({"type": "investigation_plan", "count": len(to_investigate), "deep": request.deep})
 
@@ -424,7 +444,7 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
             "estimated_cost_usd": round(total_cost, 4),
         }
 
-        await store_run_result(findings, scan_id, duration_s, token_usage, diff=diff)
+        await store_run_result(findings, scan_id, duration_s, token_usage, diff=diff, deep=request.deep)
         await store_investigations(investigations)
 
         await event_queue.put({
@@ -503,6 +523,7 @@ async def get_findings():
 
     return FindingsResponse(
         last_scan=last_scan,
+        last_scan_deep=info.get("deep"),
         total_findings=len(finding_responses),
         findings=finding_responses,
     )

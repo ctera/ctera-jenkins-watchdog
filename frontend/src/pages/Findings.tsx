@@ -158,7 +158,14 @@ function InvestigationDetails({ finding }: { finding: Finding }) {
   const [showRaw, setShowRaw] = useState(false);
   const [bugDialogOpen, setBugDialogOpen] = useState(false);
   const [jiraInfo, setJiraInfo] = useState<{ key: string; url: string; assignee: string } | null>(null);
-  if (!inv) return <Typography color="text.secondary">Not investigated</Typography>;
+  if (!inv) {
+    return (
+      <Alert severity="info" sx={{ mt: 1 }}>
+        Not investigated yet. Run a <strong>Deep Scan</strong> from the Dashboard to get root cause analysis,
+        evidence, and fix recommendations for this finding.
+      </Alert>
+    );
+  }
 
   return (
     <Stack spacing={2} sx={{ mt: 1 }}>
@@ -322,7 +329,12 @@ export default function Findings() {
       </Box>
 
       {filtered.map((f) => (
-        <Accordion key={f.fingerprint} disableGutters sx={{ bgcolor: "background.paper", "&:before": { display: "none" } }}>
+        <Accordion
+          key={f.fingerprint}
+          disableGutters
+          defaultExpanded={!!f.investigation}
+          sx={{ bgcolor: "background.paper", "&:before": { display: "none" } }}
+        >
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, width: "100%" }}>
               {f.status === "new" && (

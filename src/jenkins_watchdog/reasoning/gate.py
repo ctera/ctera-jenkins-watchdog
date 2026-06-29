@@ -23,7 +23,8 @@ def should_investigate(
 
     existing = existing_investigations.get(finding.fingerprint)
     if existing and isinstance(existing, dict):
-        if existing.get("confidence") == "high" and finding in diff.ongoing:
+        # Deep scan re-investigates ongoing findings for fresh root-cause analysis.
+        if not deep and existing.get("confidence") == "high" and finding in diff.ongoing:
             return False
 
     if deep:

@@ -31,6 +31,7 @@ export interface Finding {
 
 export interface FindingsResponse {
   last_scan: string | null;
+  last_scan_deep?: boolean | null;
   total_findings: number;
   findings: Finding[];
 }
@@ -49,11 +50,13 @@ export async function deleteFinding(fingerprint: string): Promise<void> {
 }
 
 export interface ScanEvent {
-  type: "scan_started" | "detection_complete" | "investigation_plan" | "investigation_start" | "tool_call" | "reasoning" | "investigation_complete" | "investigation_error" | "scan_complete" | "scan_stopped" | "heartbeat" | "error";
+  type: "scan_started" | "detection_complete" | "triage_start" | "triage_complete" | "triage_skipped" | "investigation_plan" | "investigation_start" | "tool_call" | "reasoning" | "investigation_complete" | "investigation_error" | "scan_complete" | "scan_stopped" | "heartbeat" | "error";
   scan_id?: string;
   deep?: boolean;
   total_findings?: number;
+  window_hours?: number;
   count?: number;
+  dismissed_count?: number;
   index?: number;
   total?: number;
   resource?: string;

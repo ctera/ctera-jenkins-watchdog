@@ -95,6 +95,9 @@ export default function Dashboard() {
           {data?.last_scan && (
             <Typography variant="body2" color="text.secondary">
               Last scan: {new Date(data.last_scan).toLocaleString()}
+              {data.last_scan_deep && (
+                <Chip label="Deep Scan" size="small" color="secondary" sx={{ ml: 1, height: 20, fontSize: "0.65rem" }} />
+              )}
             </Typography>
           )}
         </Box>
@@ -169,17 +172,32 @@ export default function Dashboard() {
             }}
           >
             {scan.events.map((evt, i) => (
-              <Box key={i} sx={{ color: evt.type === "investigation_complete" ? "success.main" : evt.type === "tool_call" ? "info.main" : evt.type === "error" || evt.type === "investigation_error" ? "error.main" : "text.secondary" }}>
+              <Box key={i} sx={{ color: evt.type === "investigation_complete" ? "success.main" : evt.type === "tool_call" ? "info.main" : evt.type === "error" || evt.type === "investigation_error" ? "error.main" : evt.type === "triage_skipped" ? "secondary.main" : "text.secondary" }}>
                 {evt.type === "scan_started" && `> ${evt.deep ? "Deep scan" : "Scan"} ${evt.scan_id} started`}
-                {evt.type === "detection_complete" && `Detection: ${evt.total_findings} findings`}
-                {evt.type === "investigation_plan" && `Will investigate ${evt.count} findings`}
+                {evt.type === "detection_complete" && (
+                  evt.deep
+                    ? `Detection (${evt.window_hours}h window): ${evt.total_findings} findings`
+                    : `Detection: ${evt.total_findings} findings`
+                )}
+                {evt.type === "triage_start" && `Triaging ${evt.count} findings...`}
+                {evt.type === "triage_complete" && `Triage: ${evt.total_findings} kept, ${evt.dismissed_count} dismissed`}
+                {evt.type === "triage_skipped" && `Deep scan: keeping all ${evt.count} findings (no triage filter)`}
+                {evt.type === "investigation_plan" && (
+                  evt.deep
+                    ? `Deep investigating ${evt.count} findings (warning+)...`
+                    : `Will investigate ${evt.count} findings`
+                )}
                 {evt.type === "investigation_start" && `-- [${evt.index}/${evt.total}] ${evt.resource}`}
                 {evt.type === "tool_call" && `   > ${evt.tool}(${Object.keys(evt.args || {}).join(", ")})`}
                 {evt.type === "reasoning" && `   Analyzing: ${evt.content?.slice(0, 120)}...`}
                 {evt.type === "investigation_complete" && `   Done: ${evt.confidence}: ${evt.root_cause?.slice(0, 100)}`}
                 {evt.type === "investigation_error" && `   Error: ${evt.error}`}
                 {evt.type === "error" && `ERROR: ${evt.message}`}
-                {evt.type === "scan_complete" && `Complete: ${evt.total_findings} findings, ${evt.investigations_performed} investigated (${evt.duration_s}s)`}
+                {evt.type === "scan_complete" && (
+                  evt.deep
+                    ? `Deep scan complete: ${evt.total_findings} findings, ${evt.investigations_performed} investigated (${evt.duration_s}s)`
+                    : `Complete: ${evt.total_findings} findings, ${evt.investigations_performed} investigated (${evt.duration_s}s)`
+                )}
                 {evt.type === "scan_stopped" && `Stopped after ${evt.duration_s}s`}
               </Box>
             ))}
@@ -253,8 +271,24 @@ export default function Dashboard() {
                   </Tooltip>
                 </Box>
                 {f.investigation && (
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1, ml: 8 }}>
-                    Root cause: {f.investigation.root_cause.slice(0, 150)}...
+                  <Box sx={{ mt: 1, ml: 8, p: 1.5, bgcolor: "action.hover", borderRadius: 1, borderLeft: 3, borderColor: "success.main" }}>
+                    <Typography variant="caption" color="success.main" sx={{ fontWeight: 700 }}>
+                      ROOT CAUSE ({f.investigation.confidence} confidence)
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
+                      {f.investigation.root_cause}
+                    </Typography>
+                    {f.investigation.suggested_fix && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                        Fix: {f.investigation.suggested_fix.slice(0, 200)}
+                        {f.investigation.suggested_fix.length > 200 ? "..." : ""}
+                      </Typography>
+                    )}
+                  </Box>
+                )}
+                {!f.investigation && (f.severity === "critical" || f.severity === "warning") && (
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 8, display: "block" }}>
+                    Not investigated — run Deep Scan for root cause analysis
                   </Typography>
                 )}
               </CardContent>

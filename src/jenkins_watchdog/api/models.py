@@ -73,5 +73,6 @@ class FindingsResponse(BaseModel):
     """Response from GET /api/findings."""
 
     last_scan: datetime | None
+    last_scan_deep: bool | None = Field(None, description="Whether the last scan was a deep scan")
     total_findings: int
     findings: list[FindingResponse]
