@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from jenkins_watchdog.clients.valkey import get_valkey_client
@@ -33,6 +34,21 @@ class CreateBugResponse(BaseModel):
     url: str
 
 
+def _jira_configured() -> bool:
+    return bool(settings.jira_api_token and settings.jira_user_email)
+
+
+@router.get("/status")
+async def jira_status():
+    """Return whether Jira integration is configured."""
+    configured = _jira_configured()
+    return {
+        "configured": configured,
+        "base_url": settings.jira_base_url if configured else "",
+        "message": "" if configured else "Jira is not configured. Set WATCHDOG_JIRA_USER_EMAIL and WATCHDOG_JIRA_API_TOKEN.",
+    }
+
+
 @router.get("/projects")
 async def list_projects():
     """Return the configured Jira projects available for bug creation."""
@@ -42,8 +58,11 @@ async def list_projects():
 @router.post("/create-bug", response_model=CreateBugResponse)
 async def create_bug(req: CreateBugRequest):
     """Create a Bug issue in Jira from a finding investigation."""
-    if not settings.jira_api_token:
-        return {"error": "Jira not configured"}, 503
+    if not _jira_configured():
+        return JSONResponse(
+            {"error": "Jira not configured", "detail": "Set WATCHDOG_JIRA_USER_EMAIL and WATCHDOG_JIRA_API_TOKEN."},
+            status_code=503,
+        )
 
     auth_str = b64encode(f"{settings.jira_user_email}:{settings.jira_api_token}".encode()).decode()
 
@@ -83,14 +102,21 @@ async def create_bug(req: CreateBugRequest):
         )
 
     if resp.status_code not in (200, 201):
-        logger.error("Jira create failed (%d): %s", resp.status_code, resp.text[:500])
-        from fastapi.responses import JSONResponse
+        detail = _jira_error_detail(resp)
+        logger.error("Jira create failed (%d): %s", resp.status_code, detail)
         return JSONResponse(
-            {"error": f"Jira API error: {resp.status_code}", "detail": resp.text[:500]},
-            status_code=resp.status_code,
+            {"error": f"Jira API error: {resp.status_code}", "detail": detail},
+            status_code=502,
         )
 
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError:
+        logger.error("Jira create returned non-JSON response: %s", resp.text[:500])
+        return JSONResponse(
+            {"error": "Jira API returned an invalid response", "detail": resp.text[:500]},
+            status_code=502,
+        )
     issue_key = data["key"]
     issue_url = f"{settings.jira_base_url}/browse/{issue_key}"
     logger.info("Created Jira bug %s for project %s", issue_key, req.project_key)
@@ -129,7 +155,7 @@ async def create_bug(req: CreateBugRequest):
 @router.get("/issues")
 async def list_issues():
     """Return Jira issues created by the Watchdog — fetches live from Jira API."""
-    if not settings.jira_api_token:
+    if not _jira_configured():
         return {"issues": []}
 
     auth_str = b64encode(f"{settings.jira_user_email}:{settings.jira_api_token}".encode()).decode()
@@ -175,6 +201,22 @@ async def list_issues():
     except Exception as e:
         logger.warning("Failed to fetch Jira issues: %s", e)
         return {"issues": []}
+
+
+def _jira_error_detail(resp: httpx.Response) -> str:
+    """Extract a readable error message from a Jira API response."""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            errors = body.get("errors")
+            if errors:
+                return "; ".join(f"{k}: {v}" for k, v in errors.items())
+            messages = body.get("errorMessages")
+            if messages:
+                return "; ".join(messages)
+    except ValueError:
+        pass
+    return resp.text[:500]
 
 
 async def _lookup_account_id(auth_str: str, email: str) -> str | None:

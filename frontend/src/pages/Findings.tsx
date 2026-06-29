@@ -60,6 +60,15 @@ function CreateBugDialog({ open, onClose, finding, onCreated }: { open: boolean;
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ key: string; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [jiraConfigured, setJiraConfigured] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/jira/status")
+      .then((r) => r.json())
+      .then((data) => setJiraConfigured(data.configured ?? false))
+      .catch(() => setJiraConfigured(false));
+  }, [open]);
 
   const handleSubmit = async () => {
     setSubmitting(true);
@@ -77,7 +86,10 @@ function CreateBugDialog({ open, onClose, finding, onCreated }: { open: boolean;
           finding_fingerprint: finding.fingerprint,
         }),
       });
-      const data = await resp.json();
+      const contentType = resp.headers.get("content-type") || "";
+      const data = contentType.includes("application/json")
+        ? await resp.json()
+        : { error: await resp.text() };
       if (!resp.ok) {
         setError(data.detail ? `${data.error}: ${data.detail}` : data.error || "Failed to create bug");
       } else {
@@ -86,7 +98,7 @@ function CreateBugDialog({ open, onClose, finding, onCreated }: { open: boolean;
         onCreated({ key: data.key, url: data.url, assignee: resolvedAssignee || "" });
       }
     } catch (e: any) {
-      setError(e.message);
+      setError(e.message || "Failed to create Jira issue");
     } finally {
       setSubmitting(false);
     }
@@ -102,6 +114,11 @@ function CreateBugDialog({ open, onClose, finding, onCreated }: { open: boolean;
           </Alert>
         ) : (
           <Stack spacing={2} sx={{ mt: 1 }}>
+            {jiraConfigured === false && (
+              <Alert severity="warning">
+                Jira is not configured on this server. Ask an admin to set WATCHDOG_JIRA_USER_EMAIL and WATCHDOG_JIRA_API_TOKEN.
+              </Alert>
+            )}
             {error && <Alert severity="error">{error}</Alert>}
             <FormControl fullWidth size="small">
               <InputLabel>Project</InputLabel>
@@ -127,7 +144,7 @@ function CreateBugDialog({ open, onClose, finding, onCreated }: { open: boolean;
       <DialogActions>
         <Button onClick={onClose}>{result ? "Close" : "Cancel"}</Button>
         {!result && (
-          <Button onClick={handleSubmit} variant="contained" disabled={submitting || !summary}>
+          <Button onClick={handleSubmit} variant="contained" disabled={submitting || !summary || jiraConfigured === false}>
             {submitting ? "Creating..." : "Create Issue"}
           </Button>
         )}
