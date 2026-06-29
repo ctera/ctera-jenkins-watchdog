@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     oidc_allowed_groups: str = "DevOps Team"
 
     # Jira
-    jira_base_url: str = "https://ctera.atlassian.net"
+    jira_base_url: str = "https://cteranet.atlassian.net"
     jira_user_email: str = ""
     jira_api_token: str = ""
     jira_projects: str = "CI"

@@ -40,7 +40,7 @@ config:
   oidcClientId: "jenkins-watchdog"
   oidcRedirectUri: ""
   oidcAllowedGroups: "DevOps Team"
-  jiraBaseUrl: "https://ctera.atlassian.net"
+  jiraBaseUrl: "https://cteranet.atlassian.net"
   jiraUserEmail: ""
   jiraProjects: "CI"
 

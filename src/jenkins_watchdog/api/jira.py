@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from base64 import b64encode
 from datetime import datetime, timezone
 
@@ -22,7 +23,7 @@ JIRA_ISSUES_KEY = "watchdog:jira_issues"
 
 class CreateBugRequest(BaseModel):
     project_key: str = Field(description="Jira project key (e.g. CI)")
-    issue_type: str = Field(default="Bug", description="Issue type name (e.g. Bug, Task)")
+    issue_type: str = Field(default="Task", description="Issue type name (e.g. Task, New Feature)")
     summary: str = Field(description="Bug title")
     description: str = Field(description="Bug description (markdown)")
     assignee_email: str | None = Field(None, description="Assignee email (optional)")
@@ -38,13 +39,33 @@ def _jira_configured() -> bool:
     return bool(settings.jira_api_token and settings.jira_user_email)
 
 
+def _jira_base_url() -> str:
+    return settings.jira_base_url.rstrip("/")
+
+
+def _jira_auth() -> str:
+    return b64encode(f"{settings.jira_user_email}:{settings.jira_api_token}".encode()).decode()
+
+
+def _jira_headers(auth_str: str | None = None) -> dict[str, str]:
+    return {
+        "Authorization": f"Basic {auth_str or _jira_auth()}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def _allowed_projects() -> list[str]:
+    return [p.strip() for p in settings.jira_projects.split(",") if p.strip()]
+
+
 @router.get("/status")
 async def jira_status():
     """Return whether Jira integration is configured."""
     configured = _jira_configured()
     return {
         "configured": configured,
-        "base_url": settings.jira_base_url if configured else "",
+        "base_url": _jira_base_url() if configured else "",
         "message": "" if configured else "Jira is not configured. Set WATCHDOG_JIRA_USER_EMAIL and WATCHDOG_JIRA_API_TOKEN.",
     }
 
@@ -52,7 +73,7 @@ async def jira_status():
 @router.get("/projects")
 async def list_projects():
     """Return the configured Jira projects available for bug creation."""
-    return {"projects": [p.strip() for p in settings.jira_projects.split(",") if p.strip()]}
+    return {"projects": _allowed_projects()}
 
 
 @router.post("/create-bug", response_model=CreateBugResponse)
@@ -64,7 +85,29 @@ async def create_bug(req: CreateBugRequest):
             status_code=503,
         )
 
-    auth_str = b64encode(f"{settings.jira_user_email}:{settings.jira_api_token}".encode()).decode()
+    allowed = _allowed_projects()
+    if req.project_key not in allowed:
+        return JSONResponse(
+            {
+                "error": "Invalid project key",
+                "detail": f"Project '{req.project_key}' is not allowed. Allowed: {', '.join(allowed)}",
+            },
+            status_code=400,
+        )
+
+    issue_types = await _fetch_issue_types(req.project_key)
+    if issue_types and req.issue_type not in issue_types:
+        return JSONResponse(
+            {
+                "error": "Invalid issue type",
+                "detail": f"Issue type '{req.issue_type}' is not available in project {req.project_key}. "
+                f"Available: {', '.join(issue_types)}",
+            },
+            status_code=400,
+        )
+
+    auth_str = _jira_auth()
+    base = _jira_base_url()
 
     fields: dict = {
         "project": {"key": req.project_key},
@@ -93,11 +136,8 @@ async def create_bug(req: CreateBugRequest):
 
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
-            f"{settings.jira_base_url}/rest/api/3/issue",
-            headers={
-                "Authorization": f"Basic {auth_str}",
-                "Content-Type": "application/json",
-            },
+            f"{base}/rest/api/3/issue",
+            headers=_jira_headers(auth_str),
             json={"fields": fields},
         )
 
@@ -118,7 +158,7 @@ async def create_bug(req: CreateBugRequest):
             status_code=502,
         )
     issue_key = data["key"]
-    issue_url = f"{settings.jira_base_url}/browse/{issue_key}"
+    issue_url = f"{base}/browse/{issue_key}"
     logger.info("Created Jira bug %s for project %s", issue_key, req.project_key)
 
     issue_record = {
@@ -158,17 +198,15 @@ async def list_issues():
     if not _jira_configured():
         return {"issues": []}
 
-    auth_str = b64encode(f"{settings.jira_user_email}:{settings.jira_api_token}".encode()).decode()
+    auth_str = _jira_auth()
+    base = _jira_base_url()
     jql = "labels = jenkins-watchdog ORDER BY created DESC"
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
-                f"{settings.jira_base_url}/rest/api/3/search/jql",
-                headers={
-                    "Authorization": f"Basic {auth_str}",
-                    "Content-Type": "application/json",
-                },
+                f"{base}/rest/api/3/search/jql",
+                headers=_jira_headers(auth_str),
                 json={"jql": jql, "maxResults": 50, "fields": ["summary", "assignee", "issuetype", "project", "created", "status", "labels"]},
             )
         if resp.status_code != 200:
@@ -188,7 +226,7 @@ async def list_issues():
                     break
             issues.append({
                 "key": item["key"],
-                "url": f"{settings.jira_base_url}/browse/{item['key']}",
+                "url": f"{base}/browse/{item['key']}",
                 "project": fields.get("project", {}).get("key", ""),
                 "issue_type": fields.get("issuetype", {}).get("name", ""),
                 "summary": fields.get("summary", ""),
@@ -214,9 +252,34 @@ def _jira_error_detail(resp: httpx.Response) -> str:
             messages = body.get("errorMessages")
             if messages:
                 return "; ".join(messages)
+            error_message = body.get("errorMessage")
+            if error_message:
+                return error_message
     except ValueError:
         pass
-    return resp.text[:500]
+
+    text = resp.text[:500]
+    if text.lstrip().startswith("<"):
+        title_match = re.search(r"<title>([^<]+)</title>", text, re.IGNORECASE)
+        if title_match:
+            return title_match.group(1).strip()
+    return text
+
+
+async def _fetch_issue_types(project_key: str) -> list[str]:
+    """Return issue type names available for a Jira project."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{_jira_base_url()}/rest/api/3/issue/createmeta/{project_key}/issuetypes",
+                headers=_jira_headers(),
+            )
+        if resp.status_code == 200:
+            return [t["name"] for t in resp.json().get("issueTypes", [])]
+        logger.warning("Jira issue type lookup failed (%d): %s", resp.status_code, _jira_error_detail(resp))
+    except Exception as e:
+        logger.warning("Jira issue type lookup failed for %s: %s", project_key, e)
+    return []
 
 
 async def _lookup_account_id(auth_str: str, email: str) -> str | None:
@@ -224,9 +287,9 @@ async def _lookup_account_id(auth_str: str, email: str) -> str | None:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
-                f"{settings.jira_base_url}/rest/api/3/user/search",
+                f"{_jira_base_url()}/rest/api/3/user/search",
                 params={"query": email},
-                headers={"Authorization": f"Basic {auth_str}"},
+                headers={"Authorization": f"Basic {auth_str}", "Accept": "application/json"},
             )
         if resp.status_code == 200:
             users = resp.json()
