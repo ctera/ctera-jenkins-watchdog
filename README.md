@@ -20,17 +20,52 @@ React SPA ──SSE──► FastAPI (uvicorn)
 
 - Python 3.12+
 - Node.js 20+ (frontend)
-- Access to a k3s cluster (kubeconfig)
-- Jenkins API access (URL + credentials)
-- Anthropic API key
+- Docker (for a local Valkey — nothing else needs to be real; see below)
+- Optional for full functionality: access to a k3s cluster (kubeconfig), Jenkins API access, Anthropic API key
 
-### Setup
+### Quick Start
+
+```bash
+cp .env.example .env   # fill in secrets you have — all optional, see comments
+./scripts/dev.sh start
+```
+
+This brings up the backend (`:8000`), frontend (`:3000`), and an isolated,
+ephemeral Valkey container together, bootstrapping `.venv`/`node_modules` on
+first run. Without real Jenkins/K8s/Prometheus access the app still boots and
+scans fine — those checks just fail gracefully and report zero findings.
+Without `WATCHDOG_ANTHROPIC_API_KEY`, findings are still detected but
+investigation is skipped.
+
+```bash
+./scripts/dev.sh status          # is it up? which ports?
+./scripts/dev.sh logs backend    # or frontend / valkey, add -f to follow
+./scripts/dev.sh restart         # after a backend dependency change
+./scripts/dev.sh stop
+```
+
+A Claude Code project skill (`.claude/skills/dev/`) wraps the same commands
+for agent-driven start/stop/status/logs.
+
+#### Running multiple instances (git worktrees)
+
+If you have more than one `git worktree` checkout of this repo (e.g. one per
+branch/agent working in parallel), `./scripts/dev.sh start` is safe to run
+from each of them concurrently — every worktree automatically gets its own
+backend/frontend ports and its own isolated Valkey container, tracked in a
+shared registry at `~/.local/state/jenkins-watchdog-dev/`. No manual port
+bookkeeping needed. See everything running machine-wide with:
+
+```bash
+./scripts/dev.sh status --all
+```
+
+#### Manual setup (what `dev.sh` does under the hood)
 
 ```bash
 # Backend
 pip install -e ".[dev]"
 
-# Set required env vars (or create .env)
 export WATCHDOG_ANTHROPIC_API_KEY="sk-ant-..."
 export WATCHDOG_JENKINS_URL="https://jenkins.example.com"
 export WATCHDOG_JENKINS_USER="admin"
@@ -38,7 +73,10 @@ export WATCHDOG_JENKINS_TOKEN="your-api-token"
 export WATCHDOG_VALKEY_SSL="false"
 export WATCHDOG_VALKEY_HOST="localhost"
 
-# Run
+# Valkey (no docker-compose needed for a one-off)
+docker run -d -p 6379:6379 valkey/valkey:8-alpine
+
+# Run (add WATCHDOG_RELOAD=true for uvicorn autoreload)
 python -m jenkins_watchdog
 
 # Frontend (separate terminal)

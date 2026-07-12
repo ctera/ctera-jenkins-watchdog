@@ -1,0 +1,18 @@
+# Local-dev-only Valkey. Mirrors the production Valkey Helm release
+# (docs/valkey-deployment.md): no auth, no persistence, standalone.
+#
+# Launched by scripts/dev.sh with a per-instance project name so each
+# git-worktree instance gets its own isolated container:
+#   docker compose -p jwd-<instance_id> -f docker-compose.dev.yml up -d --wait
+services:
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: valkey-server --save "" --appendonly no
+    ports:
+      - "${WATCHDOG_VALKEY_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    restart: unless-stopped
