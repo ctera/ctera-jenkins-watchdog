@@ -23,7 +23,7 @@ dependencies = [
     "asyncpg>=0.30.0,<1",
     "alembic>=1.14.0,<2",
     "PyYAML>=6.0.2,<7",
-    "aiosmtplib>=3.0.2,<4",
+    "aiosmtplib>=5.1.1,<6",
 ]
 
 [project.optional-dependencies]
