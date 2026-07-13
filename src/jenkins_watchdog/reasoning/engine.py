@@ -96,7 +96,7 @@ def _format_investigation_prompt(finding: Finding, all_findings: list[Finding] |
         if others:
             lines = [f"- [{f.severity}] {f.resource}: {f.symptom}" for f in others[:15]]
             prompt += (
-                f"\n\n## Other findings in this scan (for correlation):\n"
+                "\n\n## Other findings in this scan (for correlation):\n"
                 + "\n".join(lines)
                 + "\n\nConsider whether this issue is related to or caused by any of the above."
             )
