@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     port: int = 8000
     log_level: str = "info"
+    reload: bool = False
 
     # Jenkins
     jenkins_url: str = "http://jenkins.jenkins.svc.cluster.local:8080"
@@ -56,7 +57,7 @@ class Settings(BaseSettings):
     max_tool_rounds: int = 15
     max_investigations_per_scan: int = 12
 
-    model_config = {"env_prefix": "WATCHDOG_"}
+    model_config = {"env_prefix": "WATCHDOG_", "env_file": ".env", "env_file_encoding": "utf-8"}
 
 
 settings = Settings()
