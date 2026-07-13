@@ -3,21 +3,173 @@ name: PR Build
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
+
+permissions:
+  contents: read
+
+env:
+  WATCHDOG_DATABASE_URL: postgresql+asyncpg://watchdog:watchdog@localhost:5432/watchdog
+  WATCHDOG_TEST_DATABASE_URL: postgresql+asyncpg://watchdog:watchdog@localhost:5432/watchdog
+  WATCHDOG_VALKEY_HOST: localhost
+  WATCHDOG_VALKEY_PORT: "6379"
 
 jobs:
-  test:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_USER: watchdog
+          POSTGRES_PASSWORD: watchdog
+          POSTGRES_DB: watchdog
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U watchdog -d watchdog"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+      mailpit:
+        image: axllent/mailpit:v1.27.8
+        ports: ["1025:1025", "8025:8025"]
+        options: >-
+          --health-cmd "/mailpit readyz"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install backend
+        run: pip install -e ".[dev]"
+      - name: Static checks
+        run: |
+          ruff check src tests scripts
+          mypy
+      - name: Validate migration from empty database
+        run: |
+          python -m jenkins_watchdog migrate
+          python -m jenkins_watchdog schema-check
+          alembic check
+      - name: Backend tests and coverage
+        env:
+          WATCHDOG_TEST_SMTP_HOST: localhost
+          WATCHDOG_TEST_SMTP_PORT: "1025"
+          WATCHDOG_TEST_MAILPIT_URL: http://localhost:8025
+        run: |
+          pytest --cov=jenkins_watchdog --cov-report=term-missing --cov-report=json:/tmp/coverage.json
+          python scripts/check_coverage.py /tmp/coverage.json
+
+  frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-      - name: Lint
-        run: ruff check src/ tests/
-      - name: Test
-        run: pytest tests/ -v --tb=short
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: pip install -e .
+      - run: npm ci
+        working-directory: frontend
+      - name: Check OpenAPI and generated TypeScript drift
+        run: |
+          python scripts/export_openapi.py --check
+          npm --prefix frontend run generate:api
+          git diff --exit-code -- frontend/openapi.json frontend/src/types/api.generated.ts
+      - run: npm run build
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: azure/setup-helm@v4
+      - run: pip install PyYAML
+      - run: helm repo add bitnami https://charts.bitnami.com/bitnami
+      - run: helm dependency build helm
+      - run: git diff --exit-code -- helm/Chart.lock
+      - run: helm lint helm
+      - name: Render and assert v2 workloads
+        run: |
+          helm template jenkins-watchdog helm --namespace jenkins-watchdog --output-dir /tmp/watchdog-rendered
+          IMAGE_TAG=$(python -c 'import yaml; print(yaml.safe_load(open("helm/values.yaml"))["image"]["tag"])')
+          python scripts/assert_helm.py /tmp/watchdog-rendered --image-tag "$IMAGE_TAG"
+
+  image-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_USER: watchdog
+          POSTGRES_PASSWORD: watchdog
+          POSTGRES_DB: watchdog
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U watchdog -d watchdog"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci && npm run build
+        working-directory: frontend
+      - run: docker build -t jenkins-watchdog:pr .
+      - name: Command, API, worker, and schedule smoke tests
+        run: |
+          docker run --rm jenkins-watchdog:pr python -m jenkins_watchdog --help
+          docker run --rm --network host -e WATCHDOG_DATABASE_URL -e WATCHDOG_VALKEY_HOST jenkins-watchdog:pr python -m jenkins_watchdog migrate
+          docker run --rm --network host -e WATCHDOG_DATABASE_URL -e WATCHDOG_VALKEY_HOST jenkins-watchdog:pr python -m jenkins_watchdog enqueue-scheduled --mode regular
+          docker run -d --name watchdog-api --network host -e WATCHDOG_DATABASE_URL -e WATCHDOG_VALKEY_HOST jenkins-watchdog:pr
+          curl --fail --retry 30 --retry-delay 1 --retry-all-errors http://localhost:8000/ready
+          docker run -d --name watchdog-worker --network host -e WATCHDOG_DATABASE_URL -e WATCHDOG_VALKEY_HOST jenkins-watchdog:pr python -m jenkins_watchdog worker
+          sleep 2
+          docker exec watchdog-worker python -m jenkins_watchdog worker-health
+      - name: Container logs
+        if: failure()
+        run: |
+          docker logs watchdog-api || true
+          docker logs watchdog-worker || true
+      - name: Stop smoke containers
+        if: always()
+        run: docker rm -f watchdog-api watchdog-worker || true
+
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/dependency-review-action@v4
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,158 +1,95 @@
-# Jenkins Watchdog
+# Jenkins Watchdog v2
 
-Autonomous Jenkins agent monitor for k3s clusters. Detects agent issues across health checks, investigates root causes via Claude tool-use, and streams findings to a real-time dashboard.
+Jenkins Watchdog runs durable Jenkins and Kubernetes scans, correlates every observation into an incident, investigates material changes, and plans idempotent notifications and provider actions.
 
 ## Architecture
 
-```
-React SPA ──SSE──► FastAPI (uvicorn)
-                     ├── 7 detection checks (parallel, async)
-                     ├── Valkey: lock, findings, investigations, chat sessions, history
-                     ├── LiteLLM tool-use (K8s, Prometheus, Jenkins API)
-                     └── DEX OIDC auth (group-gated)
+```text
+React SPA -> FastAPI /api/v2 -> PostgreSQL
+                 |                 ^
+                 v                 |
+              Valkey SSE       scan/action worker
+                                   |
+                  Jenkins + Kubernetes + LiteLLM + Jira/GitHub/GitLab/SMTP
 ```
 
-**Scan flow:** acquire lock → detect → diff (new/ongoing/resolved) → gate/dedupe/correlate → investigate (budget-capped, priority-sorted) → merge-store → release lock.
+- PostgreSQL is the source of truth for scans, checks, findings, incidents, occurrences, investigations, actions, delivery attempts, and event replay.
+- Valkey carries bounded per-scan event streams for low-latency SSE only. It is not business-state storage.
+- The API validates and enqueues work. A separate worker claims scans and actions with 60-second leases and 15-second heartbeats.
+- `domain` and `application` contain the dependency-free core and ports. `infrastructure` contains adapters, `entrypoints` contains HTTP/CLI adapters, and `bootstrap.py` is the composition root.
+- External automation is disabled by default.
+
+Finding identity is a full SHA-256 over canonical compact JSON containing `[rule_id, resource_id, identity_dimensions]`. Correlation is deterministic and never discards an observation.
 
 ## Local Development
 
-### Prerequisites
-
-- Python 3.12+
-- Node.js 20+ (frontend)
-- Docker (for a local Valkey — nothing else needs to be real; see below)
-- Optional for full functionality: access to a k3s cluster (kubeconfig), Jenkins API access, Anthropic API key
-
-### Quick Start
+Prerequisites are Python 3.12+, Node.js 20+, Docker, and Helm for chart validation.
 
 ```bash
-cp .env.example .env   # fill in secrets you have — all optional, see comments
 ./scripts/dev.sh start
 ```
 
-This brings up the backend (`:8000`), frontend (`:3000`), and an isolated,
-ephemeral Valkey container together, bootstrapping `.venv`/`node_modules` on
-first run. Without real Jenkins/K8s/Prometheus access the app still boots and
-scans fine — those checks just fail gracefully and report zero findings.
-Without `WATCHDOG_ANTHROPIC_API_KEY`, findings are still detected but
-investigation is skipped.
+Each worktree receives isolated API, frontend, PostgreSQL, Valkey, SMTP, and Mailpit ports. The command migrates PostgreSQL, starts the API and worker separately, and prints all local URLs.
 
 ```bash
-./scripts/dev.sh status          # is it up? which ports?
-./scripts/dev.sh logs backend    # or frontend / valkey, add -f to follow
-./scripts/dev.sh restart         # after a backend dependency change
+./scripts/dev.sh status
+./scripts/dev.sh logs worker -f
 ./scripts/dev.sh stop
 ```
 
-A Claude Code project skill (`.claude/skills/dev/`) wraps the same commands
-for agent-driven start/stop/status/logs.
+Without Jenkins, Kubernetes, LLM, or delivery credentials, the local services still start. Detector failures are persisted as check results and cannot resolve existing incidents.
 
-#### Running multiple instances (git worktrees)
-
-If you have more than one `git worktree` checkout of this repo (e.g. one per
-branch/agent working in parallel), `./scripts/dev.sh start` is safe to run
-from each of them concurrently — every worktree automatically gets its own
-backend/frontend ports and its own isolated Valkey container, tracked in a
-shared registry at `~/.local/state/jenkins-watchdog-dev/`. No manual port
-bookkeeping needed. See everything running machine-wide with:
+## Runtime Commands
 
 ```bash
-./scripts/dev.sh status --all
+python -m jenkins_watchdog                         # API
+python -m jenkins_watchdog worker                  # scan and delivery worker
+python -m jenkins_watchdog enqueue-scheduled --mode regular
+python -m jenkins_watchdog enqueue-scheduled --mode deep
+python -m jenkins_watchdog migrate
+python -m jenkins_watchdog schema-check --wait
+python -m jenkins_watchdog worker-health
 ```
 
-#### Manual setup (what `dev.sh` does under the hood)
+Scheduled overlap is a successful no-op. Interactive overlap returns `409 scan_active` with links to the active scan.
+
+## API
+
+All business routes are under `/api/v2`.
+
+- `POST /api/v2/scans`, scan collection/detail, cancellation, and resumable SSE events.
+- Incident collection/detail, suppression with actor and reason, reinvestigation, and incident chat.
+- Action collection/detail and manual retry for permanently failed actions.
+- Global operational chat through the consolidated reasoning port.
+
+Collections use opaque `(created_at,id)` cursors with a default limit of 25 and maximum of 100. The checked-in contract is [frontend/openapi.json](frontend/openapi.json), and frontend API types are generated from it.
+
+## Tests
+
+Start test dependencies, then run the same core gates used by CI:
 
 ```bash
-# Backend
-pip install -e ".[dev]"
+WATCHDOG_POSTGRES_PORT=55432 docker compose -p jwd-test -f docker-compose.dev.yml up -d --wait
+export WATCHDOG_TEST_DATABASE_URL=postgresql+asyncpg://watchdog:watchdog@localhost:55432/watchdog
 
-export WATCHDOG_ANTHROPIC_API_KEY="sk-ant-..."
-export WATCHDOG_JENKINS_URL="https://jenkins.example.com"
-export WATCHDOG_JENKINS_USER="admin"
-export WATCHDOG_JENKINS_TOKEN="your-api-token"
-export WATCHDOG_VALKEY_SSL="false"
-export WATCHDOG_VALKEY_HOST="localhost"
+uv run ruff check src tests scripts
+uv run mypy
+uv run pytest --cov=jenkins_watchdog --cov-fail-under=80
 
-# Valkey (no docker-compose needed for a one-off)
-docker run -d -p 6379:6379 valkey/valkey:8-alpine
+npm --prefix frontend ci
+npm --prefix frontend run build
+npm --prefix frontend run test:e2e
 
-# Run (add WATCHDOG_RELOAD=true for uvicorn autoreload)
-python -m jenkins_watchdog
-
-# Frontend (separate terminal)
-cd frontend && npm install && npm run dev
+helm dependency build helm
+helm lint helm
 ```
 
-The app serves at `http://localhost:8000`. Without OIDC config, auth is bypassed for local dev.
-
-### Running Tests
-
-```bash
-pytest
-ruff check src/
-```
-
-## Authentication
-
-Uses DEX (OIDC) with group-based access. Only members of configured groups can access the UI and API.
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `WATCHDOG_OIDC_ISSUER` | DEX dev endpoint | OIDC discovery URL |
-| `WATCHDOG_OIDC_CLIENT_ID` | `jenkins-watchdog` | Client registered in DEX |
-| `WATCHDOG_OIDC_CLIENT_SECRET` | (empty = auth disabled) | From ExternalSecret |
-| `WATCHDOG_OIDC_ALLOWED_GROUPS` | `DevOps Team` | Comma-separated groups |
-
-When `OIDC_CLIENT_SECRET` is empty, all routes are unauthenticated (local dev only).
-
-## Scan Behavior
-
-### Detection (7 checks)
-
-| Check | Source | What it detects |
-|-------|--------|-----------------|
-| `jenkins_agent_pods` | K8s API | Agent pods: OOMKilled, CrashLoopBackOff, high restarts, stuck terminating |
-| `jenkins_agent_resources` | K8s API + Prometheus | CPU/memory pressure on agent pods, resource limit violations |
-| `jenkins_agent_errors` | K8s API | Container errors, log error patterns in agent pods |
-| `jenkins_agent_connectivity` | Jenkins API + K8s | Agents offline/disconnected from Jenkins controller |
-| `jenkins_jobs` | Jenkins API | Stuck/failing builds, queue congestion, executor starvation |
-| `k8s_nodes` | K8s API | Worker node NotReady, MemoryPressure, DiskPressure |
-| `k8s_workloads` | K8s API | Jenkins-related workload unavailability, stuck rollouts |
-
-### Investigation Gate (default mode)
-
-Only investigates:
-- **New** findings with severity critical or warning
-- **Ongoing** critical findings (not yet high-confidence)
-- Skips findings already investigated with high confidence
-
-### Cost Controls
-
-| Control | Default | Configurable |
-|---------|---------|-------------|
-| Max investigations per scan | 10 | `WATCHDOG_MAX_INVESTIGATIONS_PER_SCAN` |
-| Max tool rounds per investigation | 10 | `WATCHDOG_MAX_TOOL_ROUNDS` |
-| Default UI mode | Smart (gate-filtered) | `investigate_all: false` |
-| Model | Claude Sonnet 4 | `WATCHDOG_LLM_MODEL` |
-| Fallback | Claude Opus 4 | `WATCHDOG_LLM_FALLBACK_MODELS` |
+CI also verifies migration from empty, Alembic model drift, PostgreSQL/Valkey/Mailpit integration, OpenAPI and generated TypeScript drift, browser workflows, Helm structure, container commands, dependency changes, and secrets.
 
 ## Deployment
 
-Deployed to k3s cluster via Helm chart.
+The chart deploys PostgreSQL chart `18.7.12` (PostgreSQL `18.4.0`), the API, worker, post-install/post-upgrade migration Job, schema-gate init containers, and regular/deep CronJobs in `Asia/Jerusalem`. PostgreSQL persistence is enabled.
 
-Helm chart in `helm/` with:
-- ExternalSecrets for API keys
-- Read-only ClusterRole for K8s API access
-- PDB (minAvailable: 1)
+Release images use one exact tag everywhere: `2.0.0-<sha7>`. The migration hook runs before new API/worker pods can pass their schema gates. Rollback restores the prior chart/image and retains PostgreSQL for diagnosis.
 
-### Valkey Dependency
-
-Jenkins Watchdog requires a Valkey (Redis-compatible) instance for distributed locking, findings storage, and chat sessions. Valkey is **not** included in the jenkins-watchdog Helm chart — it must be deployed separately.
-
-See [docs/valkey-deployment.md](docs/valkey-deployment.md) for Helm commands, service endpoint, and verification steps.
-
-The chart configures the connection via `config.valkeyHost` and `config.valkeySsl` in `helm/values.yaml` (currently `valkey-primary.valkey.svc.cluster.local:6379`, no TLS).
-
-## Environment Variables
-
-All prefixed with `WATCHDOG_`. See `src/jenkins_watchdog/config.py` for full list.
+Valkey remains an external dependency. See [docs/valkey-deployment.md](docs/valkey-deployment.md). All settings use the `WATCHDOG_` prefix; defaults and integration flags are defined in [config.py](src/jenkins_watchdog/config.py).

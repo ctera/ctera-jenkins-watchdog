@@ -1,0 +1,252 @@
+import { expect, test, type Page } from "@playwright/test";
+
+const now = "2026-07-13T12:00:00Z";
+
+function scan(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "scan-active",
+    status: "running",
+    stage: "detecting",
+    mode: "regular",
+    categories: [],
+    created_at: now,
+    started_at: now,
+    completed_at: null,
+    cancel_requested_at: null,
+    attempt_count: 1,
+    failure_summary: null,
+    urls: {
+      detail: "/api/v2/scans/scan-active",
+      events: "/api/v2/scans/scan-active/events",
+      cancel: "/api/v2/scans/scan-active/cancel",
+    },
+    ...overrides,
+  };
+}
+
+function incident(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "incident-1",
+    status: "open",
+    severity: "critical",
+    title: "Compiler failure across MR builds",
+    correlation_rule_id: "jenkins_error_signature",
+    correlation_key: "compiler-error",
+    source: { kind: "merge_request", confirmed: true, provider: "github", repository: "ctera/app", change_number: "42" },
+    actionability: "actionable",
+    classification: "merge_request",
+    priority: "critical",
+    created_at: now,
+    updated_at: now,
+    resolved_at: null,
+    suppressed_reason: null,
+    suppressed_by: null,
+    suppressed_at: null,
+    occurrence_number: 1,
+    ...overrides,
+  };
+}
+
+function action(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "action-1",
+    incident_id: "incident-1",
+    occurrence_id: "occurrence-1",
+    action_type: "github_comment",
+    destination: "github:ctera/app:42",
+    status: "permanently_failed",
+    rendered_payload: { body: "Build investigation summary" },
+    template_version: "v1",
+    external_reference: null,
+    attempt_count: 6,
+    retry_cycle: 1,
+    next_attempt_at: null,
+    failure_summary: "HTTP 503",
+    created_at: now,
+    updated_at: now,
+    completed_at: now,
+    ...overrides,
+  };
+}
+
+async function installApi(page: Page) {
+  let currentScan = scan();
+  let currentIncident = incident();
+  let currentAction = action();
+  const eventHeaders: string[] = [];
+
+  await page.route("**/auth/me", (route) => route.fulfill({ json: { authenticated: true, email: "operator@example.com" } }));
+  await page.route("**/api/v2/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+
+    if (path.endsWith("/events")) {
+      const lastEventId = request.headers()["last-event-id"] ?? "";
+      eventHeaders.push(lastEventId);
+      const sequence = lastEventId === "1" ? 2 : 1;
+      if (sequence >= 2) currentScan = scan({ status: "succeeded", stage: "completed", completed_at: now });
+      const type = sequence >= 2 ? "scan_completed" : "scan_started";
+      const envelope = { sequence, type, occurred_at: now, payload_version: 1, payload: { attempt: 1 } };
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `id: ${sequence}\nevent: ${type}\ndata: ${JSON.stringify(envelope)}\n\n`,
+      });
+      return;
+    }
+    if (path === "/api/v2/scans" && request.method() === "POST") {
+      currentScan = scan({ id: "scan-new", status: "queued", stage: "queued", started_at: null, attempt_count: 0 });
+      await route.fulfill({ status: 202, json: currentScan });
+      return;
+    }
+    if (path === "/api/v2/scans") {
+      await route.fulfill({ json: { items: [currentScan], next_cursor: null } });
+      return;
+    }
+    if (/\/api\/v2\/scans\/[^/]+$/.test(path)) {
+      await route.fulfill({ json: currentScan });
+      return;
+    }
+    if (path === "/api/v2/incidents") {
+      await route.fulfill({ json: { items: [currentIncident], next_cursor: null } });
+      return;
+    }
+    if (path === "/api/v2/incidents/incident-1/suppress") {
+      currentIncident = incident({
+        status: "suppressed",
+        suppressed_reason: "Planned maintenance",
+        suppressed_by: "operator@example.com",
+        suppressed_at: now,
+      });
+      await route.fulfill({ json: currentIncident });
+      return;
+    }
+    if (path === "/api/v2/incidents/incident-1/unsuppress") {
+      currentIncident = incident();
+      await route.fulfill({ json: currentIncident });
+      return;
+    }
+    if (path === "/api/v2/incidents/incident-1/reinvestigate") {
+      await route.fulfill({ json: investigation() });
+      return;
+    }
+    if (path === "/api/v2/incidents/incident-1") {
+      await route.fulfill({ json: incidentDetail(currentIncident, currentAction) });
+      return;
+    }
+    if (path === "/api/v2/actions/action-1/retry") {
+      currentAction = action({ status: "pending", attempt_count: 0, retry_cycle: 2, failure_summary: null, completed_at: null });
+      await route.fulfill({ json: currentAction });
+      return;
+    }
+    if (path === "/api/v2/actions/action-1") {
+      await route.fulfill({
+        json: {
+          action: currentAction,
+          attempts: [{ id: "attempt-1", retry_cycle: 1, attempt_number: 6, status: "permanent_failed", response_metadata: { status_code: 503 }, error_summary: "HTTP 503", started_at: now, completed_at: now }],
+        },
+      });
+      return;
+    }
+    if (path === "/api/v2/actions") {
+      await route.fulfill({ json: { items: [currentAction], next_cursor: null } });
+      return;
+    }
+    if (path === "/api/v2/chat") {
+      await route.fulfill({ json: { content: "The compiler error is isolated to the merge request change." } });
+      return;
+    }
+    await route.fulfill({ status: 404, json: { detail: { code: "not_mocked" } } });
+  });
+
+  return { eventHeaders: () => eventHeaders };
+}
+
+function investigation() {
+  return {
+    id: "investigation-1",
+    status: "succeeded",
+    evidence_hash: "abc123",
+    input_version: "v1",
+    prompt_version: "v1",
+    model: "test-model",
+    confidence: "high",
+    usage: { total_tokens: 150 },
+    result: { root_cause: "Compiler error", impact: "MR blocked", suggested_fix: "Fix the type mismatch" },
+    error_summary: null,
+    created_at: now,
+    completed_at: now,
+  };
+}
+
+function incidentDetail(currentIncident: ReturnType<typeof incident>, currentAction: ReturnType<typeof action>) {
+  return {
+    incident: currentIncident,
+    observations: [{ scan_id: "scan-active", check_name: "jenkins_failed_builds", stable_identity: "stable", rule_id: "jenkins.failed.v1", resource_id: "job/app", category: "jenkins_failed_build", severity: "critical", summary: "Compile failed", observed_at: now, identity_dimensions: { error_signature: "compiler-error" }, evidence: { build_number: 42 } }],
+    occurrences: [{ id: "occurrence-1", number: 1, opened_at: now, last_observed_at: now, resolved_at: null, responsible_checks: ["jenkins_failed_builds"], observation_identities: ["stable"] }],
+    latest_investigation: investigation(),
+    actions: [currentAction],
+  };
+}
+
+test("scan detail replays and reconnects with Last-Event-ID", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  const api = await installApi(page);
+  await page.goto("/scans/scan-active");
+
+  await expect.poll(() => api.eventHeaders().find(Boolean), { timeout: 20_000 }).toBe("1");
+  await expect(page.getByText("Scan Completed")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("scan-detail.png"), fullPage: true });
+});
+
+test("operator can enqueue a regular scan", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  await installApi(page);
+  await page.goto("/scans");
+
+  const requestPromise = page.waitForRequest((request) => request.url().endsWith("/api/v2/scans") && request.method() === "POST");
+  await page.getByRole("button", { name: "Start scan" }).click();
+  const request = await requestPromise;
+
+  expect(request.postDataJSON()).toEqual({ mode: "regular", categories: null });
+  await expect(page.getByText("Active regular scan")).toBeVisible();
+});
+
+test("operator can browse, suppress, inspect retry, and chat", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  await installApi(page);
+  await page.goto("/incidents");
+  await page.getByText("Compiler failure across MR builds").click();
+  await expect(page.getByText("Source association")).toBeVisible();
+
+  await page.getByRole("button", { name: "Suppress" }).click();
+  await page.getByLabel("Audit reason").fill("Planned maintenance");
+  await page.getByRole("button", { name: "Suppress", exact: true }).last().click();
+  await expect(page.getByText(/Suppressed by operator@example.com/)).toBeVisible();
+
+  await page.getByRole("tab", { name: /Actions/ }).click();
+  await page.getByText("Github Comment").click();
+  await expect(page.getByText("Delivery attempts")).toBeVisible();
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("Pending")).toBeVisible();
+
+  await page.getByRole("button", { name: "Incident", exact: true }).click();
+  await page.getByRole("tab", { name: "Chat" }).click();
+  await page.getByLabel("Message about this incident").fill("What changed?");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText(/compiler error is isolated/)).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("incident-chat.png"), fullPage: true });
+});
+
+test("mobile navigation stays within the viewport", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile");
+  await installApi(page);
+  await page.goto("/scans");
+  await expect(page.getByRole("button", { name: "Start scan" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Incidents" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole("button", { name: "Incidents" }).click();
+  await expect(page.getByRole("heading", { name: "Incidents" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("mobile-incidents.png"), fullPage: true });
+});

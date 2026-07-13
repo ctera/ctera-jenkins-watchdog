@@ -1,6 +1,7 @@
 """Tests for Jenkins failed build detection."""
 
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -54,14 +55,11 @@ async def test_failed_build_check_emits_grouped_findings():
         FailedBuildSummary("App_Pipeline_new", 14, "UNSTABLE", 1000, 100, "url/14", False),
         FailedBuildSummary("Automation_GatedMergeRequest", 9, "FAILURE", 500, 300, "url/9", True),
     ]
-    with patch(
-        "jenkins_watchdog.checks.jenkins_failed_builds.get_recent_failed_builds",
-        new=AsyncMock(return_value=builds),
-    ), patch(
-        "jenkins_watchdog.checks.jenkins_failed_builds.get_build_console_output",
-        new=AsyncMock(return_value="ERROR: test failed\nBUILD FAILED"),
-    ):
-        findings = await JenkinsFailedBuildCheck().run()
+    client = SimpleNamespace(
+        get_recent_failed_builds=AsyncMock(return_value=builds),
+        get_build_console_output=AsyncMock(return_value="ERROR: test failed\nBUILD FAILED"),
+    )
+    findings = await JenkinsFailedBuildCheck(client).run()
 
     assert len(findings) == 2
     by_job = {finding.context["job_name"]: finding for finding in findings}

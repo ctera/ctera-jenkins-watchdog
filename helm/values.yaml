@@ -1,12 +1,13 @@
 image:
   repository: cteraacrdevops.azurecr.io/jenkins-watchdog
-  tag: jenkins-watchdog-0.2.0-32ae215
+  tag: 2.0.0-1569a28
   pullPolicy: Always
 
 imagePullSecrets:
   - name: acr-credentials
 
 replicas: 1
+workerReplicas: 1
 revisionHistoryLimit: 2
 
 resources:
@@ -15,6 +16,13 @@ resources:
     cpu: 100m
   limits:
     memory: 512Mi
+
+workerResources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 768Mi
 
 config:
   port: "8000"
@@ -29,6 +37,12 @@ config:
   valkeyHost: "valkey-primary.valkey.svc.cluster.local"
   valkeyPort: "6379"
   valkeySsl: "false"
+  databaseHost: ""
+  databasePort: "5432"
+  databaseUser: watchdog
+  databaseName: watchdog
+  routingConfigPath: /app/config/routing.yaml
+  automationTemplatesPath: /app/templates/automation
   llmModel: "anthropic/claude-sonnet-4-6"
   llmFallbackModels: "anthropic/claude-opus-4-6"
   llmTemperature: "0.1"
@@ -43,6 +57,39 @@ config:
   jiraBaseUrl: "https://cteranet.atlassian.net"
   jiraUserEmail: ""
   jiraProjects: "CI"
+  jiraEnabled: "false"
+  githubEnabled: "false"
+  githubApiUrl: "https://api.github.com"
+  gitlabEnabled: "false"
+  gitlabApiUrl: "https://gitlab.com/api/v4"
+  emailEnabled: "false"
+  smtpHost: mailpit
+  smtpPort: "1025"
+  smtpStartTls: "false"
+  smtpUsername: ""
+  emailFrom: jenkins-watchdog@localhost
+
+migration:
+  backoffLimit: 3
+
+schedules:
+  enabled: true
+  timeZone: Asia/Jerusalem
+  regular: "*/30 * * * *"
+  deep: "0 2 * * *"
+
+postgresql:
+  enabled: true
+  auth:
+    username: watchdog
+    database: watchdog
+    existingSecret: ""
+    secretKeys:
+      userPasswordKey: password
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
 
 service:
   type: ClusterIP
@@ -87,3 +134,7 @@ externalSecrets:
   jenkinsToken: ""
   oidcClientSecret: ""
   jiraApiToken: ""
+  githubToken: ""
+  gitlabToken: ""
+  smtpUsername: ""
+  smtpPassword: ""

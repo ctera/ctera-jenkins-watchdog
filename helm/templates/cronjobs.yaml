@@ -1,0 +1,40 @@
+{{- if .Values.schedules.enabled }}
+{{- range $mode, $schedule := dict "regular" .Values.schedules.regular "deep" .Values.schedules.deep }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "jenkins-watchdog.fullname" $ }}-{{ $mode }}
+  labels:
+    {{- include "jenkins-watchdog.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: schedule
+spec:
+  schedule: {{ $schedule | quote }}
+  timeZone: {{ $.Values.schedules.timeZone | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "jenkins-watchdog.componentSelectorLabels" (dict "root" $ "component" "schedule") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: enqueue
+              image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command: ["python", "-m", "jenkins_watchdog", "enqueue-scheduled", "--mode", {{ $mode | quote }}]
+              envFrom:
+                {{- include "jenkins-watchdog.envFrom" $ | nindent 16 }}
+              env:
+                {{- include "jenkins-watchdog.databasePasswordEnv" $ | nindent 16 }}
+{{- end }}
+{{- end }}

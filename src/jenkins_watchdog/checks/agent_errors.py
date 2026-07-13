@@ -5,8 +5,7 @@ import logging
 
 from jenkins_watchdog.checks.agent_utils import list_jenkins_agent_pods
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
-from jenkins_watchdog.config import settings
+from jenkins_watchdog.clients.k8s import KubernetesClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +27,21 @@ _LOG_READ_CONCURRENCY = 10
 class AgentErrorCheck:
     name = "jenkins_agent_errors"
 
+    def __init__(
+        self,
+        kubernetes: KubernetesClient,
+        *,
+        namespace: str,
+        request_timeout_seconds: float,
+    ) -> None:
+        self._kubernetes = kubernetes
+        self._namespace = namespace
+        self._request_timeout_seconds = request_timeout_seconds
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
-        v1 = get_core_v1()
-        pods = await list_jenkins_agent_pods()
+        v1 = self._kubernetes.core_v1()
+        pods = await list_jenkins_agent_pods(self._kubernetes, self._namespace)
         semaphore = asyncio.Semaphore(_LOG_READ_CONCURRENCY)
 
         async def check_pod(pod) -> list[Finding]:
@@ -62,9 +72,7 @@ class AgentErrorCheck:
                             )
                         )
 
-            running_containers = [
-                cs for cs in pod.status.container_statuses if cs.state and cs.state.running
-            ]
+            running_containers = [cs for cs in pod.status.container_statuses if cs.state and cs.state.running]
             if not running_containers:
                 return pod_findings
 
@@ -72,14 +80,14 @@ class AgentErrorCheck:
                 for cs in running_containers:
                     try:
                         logs = await asyncio.wait_for(
-                            run_sync(
+                            self._kubernetes.run_sync(
                                 v1.read_namespaced_pod_log,
                                 name=name,
                                 namespace=ns,
                                 container=cs.name,
                                 tail_lines=100,
                             ),
-                            timeout=settings.request_timeout_s,
+                            timeout=self._request_timeout_seconds,
                         )
                     except Exception as e:
                         logger.debug("Failed to read logs for %s/%s: %s", ns, name, e)

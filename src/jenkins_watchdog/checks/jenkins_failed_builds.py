@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.jenkins import FailedBuildSummary, get_build_console_output, get_recent_failed_builds
+from jenkins_watchdog.clients.jenkins import FailedBuildSummary, JenkinsClient
 from jenkins_watchdog.clients.log_analysis import classify_failure, error_signature, extract_error_lines
 from jenkins_watchdog.scan_options import get_scan_options
 
@@ -42,10 +42,10 @@ def _group_by_job(failed_builds: list[FailedBuildSummary]) -> dict[str, list[Fai
     return grouped
 
 
-async def _enrich_with_log(job_name: str, build_number: int) -> dict:
+async def _enrich_with_log(jenkins: JenkinsClient, job_name: str, build_number: int) -> dict:
     """Fetch console output and extract error context for the latest failed build."""
     try:
-        console = await get_build_console_output(job_name, build_number)
+        console = await jenkins.get_build_console_output(job_name, build_number)
         error_lines = extract_error_lines(console)
         return {
             "error_lines": error_lines[:15],
@@ -61,12 +61,15 @@ async def _enrich_with_log(job_name: str, build_number: int) -> dict:
 class JenkinsFailedBuildCheck:
     name = "jenkins_failed_builds"
 
+    def __init__(self, jenkins: JenkinsClient) -> None:
+        self._jenkins = jenkins
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
         opts = get_scan_options()
 
         try:
-            failed_builds = await get_recent_failed_builds(
+            failed_builds = await self._jenkins.get_recent_failed_builds(
                 window_hours=opts.jenkins_failed_build_window_hours,
                 build_limit=opts.jenkins_build_depth,
             )
@@ -83,7 +86,7 @@ class JenkinsFailedBuildCheck:
         async def _process_job(job_name: str, builds: list[FailedBuildSummary]) -> Finding:
             log_context: dict = {}
             async with semaphore:
-                log_context = await _enrich_with_log(job_name, builds[0].build_number)
+                log_context = await _enrich_with_log(self._jenkins, job_name, builds[0].build_number)
 
             failure_class = log_context.get("failure_class", "unknown")
             return Finding(

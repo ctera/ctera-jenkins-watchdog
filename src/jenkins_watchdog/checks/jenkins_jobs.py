@@ -4,7 +4,7 @@ import logging
 import time
 
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.jenkins import get_queue_info, get_running_builds
+from jenkins_watchdog.clients.jenkins import JenkinsClient
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +15,14 @@ LONG_BUILD_THRESHOLD_S = 7200  # 2 hours
 class JenkinsJobCheck:
     name = "jenkins_jobs"
 
+    def __init__(self, jenkins: JenkinsClient) -> None:
+        self._jenkins = jenkins
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
 
         try:
-            queue = await get_queue_info()
+            queue = await self._jenkins.get_queue_info()
             if queue:
                 stuck_items = []
                 for item in queue:
@@ -29,11 +32,13 @@ class JenkinsJobCheck:
                         if wait_s > STUCK_QUEUE_THRESHOLD_S:
                             why = item.get("why", "Unknown reason")
                             task_name = item.get("task", {}).get("name", "unknown")
-                            stuck_items.append({
-                                "task": task_name,
-                                "wait_minutes": round(wait_s / 60, 1),
-                                "reason": why[:200],
-                            })
+                            stuck_items.append(
+                                {
+                                    "task": task_name,
+                                    "wait_minutes": round(wait_s / 60, 1),
+                                    "reason": why[:200],
+                                }
+                            )
 
                 if stuck_items:
                     findings.append(
@@ -63,7 +68,7 @@ class JenkinsJobCheck:
             logger.warning("Failed to check Jenkins queue: %s", e)
 
         try:
-            builds = await get_running_builds()
+            builds = await self._jenkins.get_running_builds()
             for build in builds:
                 job_name = build.get("name", "unknown")
                 number = build.get("number", 0)

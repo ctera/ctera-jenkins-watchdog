@@ -1,5 +1,8 @@
 """Application configuration via pydantic-settings."""
 
+from urllib.parse import quote_plus
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -32,6 +35,21 @@ class Settings(BaseSettings):
     valkey_client_cert: str = "/etc/valkey-tls/tls.crt"
     valkey_client_key: str = "/etc/valkey-tls/tls.key"
 
+    # PostgreSQL (v2 business state)
+    database_url: str = ""
+    database_host: str = "localhost"
+    database_port: int = 5432
+    database_user: str = "watchdog"
+    database_password: str = "watchdog"
+    database_name: str = "watchdog"
+    database_pool_size: int = 5
+    database_max_overflow: int = 5
+
+    # Durable workers
+    worker_poll_interval_s: float = 1.0
+    worker_lease_seconds: int = 60
+    worker_heartbeat_seconds: int = 15
+
     # LLM (via LiteLLM)
     anthropic_api_key: str = ""
     llm_model: str = "anthropic/claude-sonnet-4-6"
@@ -53,11 +71,37 @@ class Settings(BaseSettings):
     jira_api_token: str = ""
     jira_projects: str = "CI"
 
+    # Routing and delivery. Every external integration is opt-in.
+    routing_config_path: str = "config/routing.yaml"
+    automation_templates_path: str = "templates/automation"
+    jira_enabled: bool = False
+    github_enabled: bool = False
+    github_api_url: str = "https://api.github.com"
+    github_token: str = ""
+    gitlab_enabled: bool = False
+    gitlab_api_url: str = "https://gitlab.com/api/v4"
+    gitlab_token: str = ""
+    email_enabled: bool = False
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_start_tls: bool = False
+    smtp_username: str = ""
+    smtp_password: str = ""
+    email_from: str = "jenkins-watchdog@localhost"
+    email_fallback_recipients: str = ""
+
     # Agent
     max_tool_rounds: int = 15
     max_investigations_per_scan: int = 12
 
+    @model_validator(mode="after")
+    def assemble_database_url(self) -> "Settings":
+        if not self.database_url:
+            user = quote_plus(self.database_user)
+            password = quote_plus(self.database_password)
+            self.database_url = (
+                f"postgresql+asyncpg://{user}:{password}@{self.database_host}:{self.database_port}/{self.database_name}"
+            )
+        return self
+
     model_config = {"env_prefix": "WATCHDOG_", "env_file": ".env", "env_file_encoding": "utf-8"}
-
-
-settings = Settings()

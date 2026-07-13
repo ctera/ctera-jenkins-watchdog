@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Local dev orchestrator: backend + frontend + an isolated Valkey container.
+# Local dev orchestrator: API + worker + frontend + isolated dependencies.
 #
 # Safe to run from multiple `git worktree` checkouts of this repo at once —
-# each worktree gets its own ports and its own Valkey, tracked in a central
+# each worktree gets its own ports and containers, tracked in a central
 # registry (see scripts/dev_state.py) so instances never collide.
 #
 # Usage:
@@ -10,7 +10,7 @@
 #   scripts/dev.sh stop [--all] [--purge]
 #   scripts/dev.sh restart
 #   scripts/dev.sh status [--all]
-#   scripts/dev.sh logs [backend|frontend|valkey] [-f]
+#   scripts/dev.sh logs [backend|worker|frontend|valkey|postgres|mailpit] [-f]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +20,7 @@ STATE_ROOT="${WATCHDOG_DEV_STATE_DIR:-$HOME/.local/state/jenkins-watchdog-dev}"
 
 # --- instance resolution ----------------------------------------------------
 
-# Populates INSTANCE_ID/BACKEND_PORT/FRONTEND_PORT/VALKEY_PORT/INSTANCE_DIR.
+# Populates all per-worktree ports and INSTANCE_DIR.
 # Creates a registry entry for this worktree if one doesn't exist yet.
 resolve_instance() {
   local json
@@ -45,7 +45,10 @@ _entry_to_shell_vars() {
   printf '%s' "$1" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-for k in ("instance_id", "backend_port", "frontend_port", "valkey_port"):
+for k in (
+    "instance_id", "backend_port", "frontend_port", "valkey_port",
+    "postgres_port", "mailpit_smtp_port", "mailpit_ui_port",
+):
     print(f"{k.upper()}={d[k]}")
 '
 }
@@ -81,6 +84,7 @@ stop_instance() {
   local iid="$1"
   local idir="$STATE_ROOT/instances/$iid"
   stop_pid "$idir/backend.pid"
+  stop_pid "$idir/worker.pid"
   stop_pid "$idir/frontend.pid"
   local project
   project=$(compose_project "$iid")
@@ -131,16 +135,19 @@ write_meta() {
   local status="$1"
   python3 -c "
 import json, sys
-instance_id, worktree, backend_port, frontend_port, valkey_port, status, out_path = sys.argv[1:8]
+instance_id, worktree, backend_port, frontend_port, valkey_port, postgres_port, smtp_port, mailpit_port, status, out_path = sys.argv[1:11]
 json.dump({
     'instance_id': instance_id,
     'worktree': worktree,
     'backend_port': int(backend_port),
     'frontend_port': int(frontend_port),
     'valkey_port': int(valkey_port),
+    'postgres_port': int(postgres_port),
+    'mailpit_smtp_port': int(smtp_port),
+    'mailpit_ui_port': int(mailpit_port),
     'status': status,
 }, open(out_path, 'w'), indent=2)
-" "$INSTANCE_ID" "$REPO_ROOT" "$BACKEND_PORT" "$FRONTEND_PORT" "$VALKEY_PORT" "$status" "$INSTANCE_DIR/meta.json"
+" "$INSTANCE_ID" "$REPO_ROOT" "$BACKEND_PORT" "$FRONTEND_PORT" "$VALKEY_PORT" "$POSTGRES_PORT" "$MAILPIT_SMTP_PORT" "$MAILPIT_UI_PORT" "$status" "$INSTANCE_DIR/meta.json"
 }
 
 # --- subcommands -------------------------------------------------------------
@@ -151,7 +158,7 @@ cmd_start() {
 
   resolve_instance
 
-  if [ "$force" -ne 1 ] && is_alive "$INSTANCE_DIR/backend.pid" && is_alive "$INSTANCE_DIR/frontend.pid"; then
+  if [ "$force" -ne 1 ] && is_alive "$INSTANCE_DIR/backend.pid" && is_alive "$INSTANCE_DIR/worker.pid" && is_alive "$INSTANCE_DIR/frontend.pid"; then
     echo "Already running for this worktree ($INSTANCE_ID):"
     cmd_status
     return 0
@@ -163,8 +170,16 @@ cmd_start() {
 
   local project
   project=$(compose_project "$INSTANCE_ID")
-  echo "==> Starting Valkey ($project) on :$VALKEY_PORT"
-  WATCHDOG_VALKEY_PORT="$VALKEY_PORT" docker compose -p "$project" -f "$REPO_ROOT/docker-compose.dev.yml" up -d --wait
+  echo "==> Starting dependencies ($project)"
+  WATCHDOG_VALKEY_PORT="$VALKEY_PORT" \
+    WATCHDOG_POSTGRES_PORT="$POSTGRES_PORT" \
+    WATCHDOG_MAILPIT_SMTP_PORT="$MAILPIT_SMTP_PORT" \
+    WATCHDOG_MAILPIT_UI_PORT="$MAILPIT_UI_PORT" \
+    docker compose -p "$project" -f "$REPO_ROOT/docker-compose.dev.yml" up -d --wait
+
+  local database_url="postgresql+asyncpg://watchdog:watchdog@localhost:$POSTGRES_PORT/watchdog"
+  echo "==> Migrating PostgreSQL"
+  WATCHDOG_DATABASE_URL="$database_url" "$VENV_PY" -m jenkins_watchdog migrate
 
   echo "==> Starting backend on :$BACKEND_PORT"
   (
@@ -172,9 +187,24 @@ cmd_start() {
     WATCHDOG_PORT="$BACKEND_PORT" \
       WATCHDOG_VALKEY_HOST=localhost \
       WATCHDOG_VALKEY_PORT="$VALKEY_PORT" \
+      WATCHDOG_DATABASE_URL="$database_url" \
+      WATCHDOG_SMTP_HOST=localhost \
+      WATCHDOG_SMTP_PORT="$MAILPIT_SMTP_PORT" \
       WATCHDOG_RELOAD=true \
       nohup "$VENV_PY" -m jenkins_watchdog >"$INSTANCE_DIR/backend.log" 2>&1 &
     echo $! >"$INSTANCE_DIR/backend.pid"
+  )
+
+  echo "==> Starting worker"
+  (
+    cd "$REPO_ROOT"
+    WATCHDOG_VALKEY_HOST=localhost \
+      WATCHDOG_VALKEY_PORT="$VALKEY_PORT" \
+      WATCHDOG_DATABASE_URL="$database_url" \
+      WATCHDOG_SMTP_HOST=localhost \
+      WATCHDOG_SMTP_PORT="$MAILPIT_SMTP_PORT" \
+      nohup "$VENV_PY" -m jenkins_watchdog worker >"$INSTANCE_DIR/worker.log" 2>&1 &
+    echo $! >"$INSTANCE_DIR/worker.pid"
   )
 
   echo "==> Starting frontend on :$FRONTEND_PORT"
@@ -203,7 +233,8 @@ cmd_start() {
 jenkins-watchdog dev instance '$INSTANCE_ID' is up:
   Frontend:  http://localhost:$FRONTEND_PORT
   Backend:   http://localhost:$BACKEND_PORT
-  Logs:      $0 logs [backend|frontend|valkey]
+  Mailpit:   http://localhost:$MAILPIT_UI_PORT
+  Logs:      $0 logs [backend|worker|frontend|valkey|postgres|mailpit]
   Status:    $0 status
 EOF
 }
@@ -285,15 +316,16 @@ if not entries:
     print("No dev instances recorded.")
     sys.exit(0)
 
-fmt = "{:<34} {:<9} {:<12} {:<12} {:<7}  {}"
-print(fmt.format("INSTANCE", "WORKTREE", "BACKEND", "FRONTEND", "VALKEY", "PATH"))
+fmt = "{:<34} {:<9} {:<12} {:<9} {:<12} {:<7}  {}"
+print(fmt.format("INSTANCE", "WORKTREE", "BACKEND", "WORKER", "FRONTEND", "DEPS", "PATH"))
 for e in sorted(entries, key=lambda x: x["offset"]):
     idir = state_root / "instances" / e["instance_id"]
     backend = ("up:" if pid_alive(idir / "backend.pid") else "down:") + str(e["backend_port"])
     frontend = ("up:" if pid_alive(idir / "frontend.pid") else "down:") + str(e["frontend_port"])
+    worker = "up" if pid_alive(idir / "worker.pid") else "down"
     valkey = "up" if valkey_up(e["instance_id"]) else "down"
     exists = "ok" if Path(e["worktree"]).is_dir() else "ORPHANED"
-    print(fmt.format(e["instance_id"], exists, backend, frontend, valkey, e["worktree"]))
+    print(fmt.format(e["instance_id"], exists, backend, worker, frontend, valkey, e["worktree"]))
 PY
     return 0
   fi
@@ -303,8 +335,9 @@ PY
     return 0
   fi
 
-  local backend_state frontend_state valkey_state project
+  local backend_state worker_state frontend_state valkey_state project
   is_alive "$INSTANCE_DIR/backend.pid" && backend_state="up" || backend_state="down"
+  is_alive "$INSTANCE_DIR/worker.pid" && worker_state="up" || worker_state="down"
   is_alive "$INSTANCE_DIR/frontend.pid" && frontend_state="up" || frontend_state="down"
   project=$(compose_project "$INSTANCE_ID")
   if [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$project" 2>/dev/null)" ]; then
@@ -317,8 +350,11 @@ PY
 Instance:  $INSTANCE_ID
 Worktree:  $REPO_ROOT
 Backend:   $backend_state (:$BACKEND_PORT)   log: $INSTANCE_DIR/backend.log
+Worker:    $worker_state                    log: $INSTANCE_DIR/worker.log
 Frontend:  $frontend_state (:$FRONTEND_PORT)  log: $INSTANCE_DIR/frontend.log
 Valkey:    $valkey_state (:$VALKEY_PORT)
+Postgres:  $valkey_state (:$POSTGRES_PORT)
+Mailpit:   $valkey_state (:$MAILPIT_UI_PORT, SMTP :$MAILPIT_SMTP_PORT)
 EOF
 }
 
@@ -332,7 +368,7 @@ cmd_logs() {
   for arg in "$@"; do
     case "$arg" in
     -f) follow=1 ;;
-    backend | frontend | valkey) target="$arg" ;;
+    backend | worker | frontend | valkey | postgres | mailpit) target="$arg" ;;
     esac
   done
 
@@ -343,13 +379,16 @@ cmd_logs() {
   frontend)
     [ "$follow" -eq 1 ] && tail -f "$INSTANCE_DIR/frontend.log" || tail -n 50 "$INSTANCE_DIR/frontend.log"
     ;;
-  valkey)
+  worker)
+    [ "$follow" -eq 1 ] && tail -f "$INSTANCE_DIR/worker.log" || tail -n 50 "$INSTANCE_DIR/worker.log"
+    ;;
+  valkey | postgres | mailpit)
     local project
     project=$(compose_project "$INSTANCE_ID")
     if [ "$follow" -eq 1 ]; then
-      docker compose -p "$project" -f "$REPO_ROOT/docker-compose.dev.yml" logs -f
+      docker compose -p "$project" -f "$REPO_ROOT/docker-compose.dev.yml" logs -f "$target"
     else
-      docker compose -p "$project" -f "$REPO_ROOT/docker-compose.dev.yml" logs --tail 50
+      docker compose -p "$project" -f "$REPO_ROOT/docker-compose.dev.yml" logs --tail 50 "$target"
     fi
     ;;
   *)
@@ -358,6 +397,9 @@ cmd_logs() {
     echo
     echo "== frontend =="
     tail -n 50 "$INSTANCE_DIR/frontend.log" 2>/dev/null || true
+    echo
+    echo "== worker =="
+    tail -n 50 "$INSTANCE_DIR/worker.log" 2>/dev/null || true
     ;;
   esac
 }
@@ -374,7 +416,7 @@ main() {
   status) cmd_status "$@" ;;
   logs) cmd_logs "$@" ;;
   *)
-    echo "Usage: $0 {start|stop [--all] [--purge]|restart|status [--all]|logs [backend|frontend|valkey] [-f]}" >&2
+    echo "Usage: $0 {start|stop [--all] [--purge]|restart|status [--all]|logs [backend|worker|frontend|valkey|postgres|mailpit] [-f]}" >&2
     exit 1
     ;;
   esac

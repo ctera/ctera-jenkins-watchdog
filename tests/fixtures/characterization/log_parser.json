@@ -1,0 +1,17 @@
+[
+  {
+    "console": "[INFO] compiling\nCompilation failure: cannot find symbol Foo\nBUILD FAILED",
+    "classification": "compilation_error",
+    "contains": "Compilation failure"
+  },
+  {
+    "console": "step 1\njava.lang.OutOfMemoryError: Java heap space\nFinished: FAILURE",
+    "classification": "resource_exhaustion",
+    "contains": "OutOfMemoryError"
+  },
+  {
+    "console": "connect failed: connection refused\nretry timeout after 30s",
+    "classification": "infrastructure",
+    "contains": "connection refused"
+  }
+]

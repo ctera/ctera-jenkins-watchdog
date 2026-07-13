@@ -4,8 +4,7 @@ import copy
 import re
 
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
-from jenkins_watchdog.config import settings
+from jenkins_watchdog.clients.k8s import KubernetesClient
 
 _JENKINS_NAME_KEYWORDS = (
     "jenkins-agent",
@@ -149,23 +148,18 @@ def group_agent_findings(findings: list[Finding], min_group_size: int = 2) -> li
     return other_findings + merged_agents
 
 
-async def list_jenkins_agent_pods() -> list:
+async def list_jenkins_agent_pods(kubernetes: KubernetesClient, namespace: str) -> list:
     """List Jenkins agent pods, preferring namespace + label selector."""
-    v1 = get_core_v1()
-    namespace = settings.jenkins_namespace
+    v1 = kubernetes.core_v1()
 
     try:
-        result = await run_sync(
+        result = await kubernetes.run_sync(
             v1.list_namespaced_pod,
             namespace=namespace,
             label_selector="jenkins/label",
-            timeout_seconds=15,
+            timeout=15,
         )
         return list(result.items)
     except Exception:
-        pods = await run_sync(v1.list_pod_for_all_namespaces, timeout_seconds=30)
-        return [
-            pod
-            for pod in pods.items
-            if is_jenkins_agent_pod(pod.metadata.name, pod.metadata.labels or {})
-        ]
+        pods = await kubernetes.run_sync(v1.list_pod_for_all_namespaces, timeout=30)
+        return [pod for pod in pods.items if is_jenkins_agent_pod(pod.metadata.name, pod.metadata.labels or {})]

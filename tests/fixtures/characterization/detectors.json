@@ -1,0 +1,40 @@
+[
+  {
+    "finding": {
+      "severity": "warning",
+      "category": "jenkins_agent",
+      "resource": "jenkins/linux-pool-abc123-defg",
+      "symptom": "Agent offline for 12 minutes",
+      "context": {
+        "built_on": "worker-1",
+        "error_signature": "connection-reset"
+      }
+    },
+    "expected_dimensions": {
+      "agent_pool": "linux-pool",
+      "node": "worker-1",
+      "error_signature": "connection-reset",
+      "symptom_family": "agent_offline"
+    }
+  },
+  {
+    "finding": {
+      "severity": "critical",
+      "category": "jenkins_failed_build",
+      "resource": "jenkins-job/app/MR-42",
+      "symptom": "Compilation failure",
+      "context": {
+        "scm": {
+          "provider": "github",
+          "repository": "ctera/app",
+          "change_number": 42
+        }
+      }
+    },
+    "expected_dimensions": {
+      "scm_provider": "github",
+      "scm_repository": "ctera/app",
+      "change_number": 42
+    }
+  }
+]

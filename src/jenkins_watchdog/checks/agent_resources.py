@@ -4,16 +4,16 @@ import logging
 
 from jenkins_watchdog.checks.agent_utils import is_jenkins_agent_pod, list_jenkins_agent_pods
 from jenkins_watchdog.checks.base import Finding
+from jenkins_watchdog.clients.k8s import KubernetesClient
 from jenkins_watchdog.clients.k8s_metrics import (
+    KubernetesMetricsClient,
     MetricsUnavailableError,
     format_bytes,
     format_cores,
-    list_pod_metrics,
     parse_cpu_quantity,
     parse_memory_quantity,
     usage_pct,
 )
-from jenkins_watchdog.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +34,22 @@ def _severity_for_pct(pct: float, warn: float, critical: float) -> str:
 class AgentResourceCheck:
     name = "jenkins_agent_resources"
 
+    def __init__(
+        self,
+        kubernetes: KubernetesClient,
+        metrics: KubernetesMetricsClient,
+        *,
+        namespace: str,
+    ) -> None:
+        self._kubernetes = kubernetes
+        self._metrics = metrics
+        self._namespace = namespace
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
 
         try:
-            pod_metrics = await list_pod_metrics(settings.jenkins_namespace)
+            pod_metrics = await self._metrics.list_pod_metrics(self._namespace)
         except MetricsUnavailableError:
             logger.warning("Metrics-server unavailable — skipping agent resource checks")
             return []
@@ -47,7 +58,7 @@ class AgentResourceCheck:
             return []
 
         metrics_by_pod = {m.name: m for m in pod_metrics}
-        pods = await list_jenkins_agent_pods()
+        pods = await list_jenkins_agent_pods(self._kubernetes, self._namespace)
 
         for pod in pods:
             ns = pod.metadata.namespace

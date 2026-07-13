@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "jenkins-watchdog.fullname" . }}-worker
+  labels:
+    {{- include "jenkins-watchdog.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.workerReplicas }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "jenkins-watchdog.componentSelectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "jenkins-watchdog.componentSelectorLabels" (dict "root" . "component" "worker") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "jenkins-watchdog.fullname" . }}
+      terminationGracePeriodSeconds: 30
+      initContainers:
+        - name: schema-gate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "jenkins_watchdog", "schema-check", "--wait", "--timeout", "180"]
+          envFrom:
+            {{- include "jenkins-watchdog.envFrom" . | nindent 12 }}
+          env:
+            {{- include "jenkins-watchdog.databasePasswordEnv" . | nindent 12 }}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "jenkins_watchdog", "worker"]
+          envFrom:
+            {{- include "jenkins-watchdog.envFrom" . | nindent 12 }}
+          env:
+            {{- include "jenkins-watchdog.databasePasswordEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.workerResources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "jenkins_watchdog", "worker-health"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "jenkins_watchdog", "worker-health"]
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 10

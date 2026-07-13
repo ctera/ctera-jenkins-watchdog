@@ -1,0 +1,34 @@
+[
+  {
+    "dimensions": {
+      "scm_provider": "github",
+      "scm_repository": "ctera/app",
+      "change_number": "42",
+      "error_signature": "compiler"
+    },
+    "rule_id": "exact_scm_change",
+    "key": "github:ctera/app:42"
+  },
+  {
+    "dimensions": {
+      "error_signature": "compiler"
+    },
+    "rule_id": "jenkins_error_signature",
+    "key": "compiler"
+  },
+  {
+    "dimensions": {
+      "node": "worker-1"
+    },
+    "rule_id": "jenkins_kubernetes_node",
+    "key": "worker-1"
+  },
+  {
+    "dimensions": {
+      "agent_pool": "linux",
+      "symptom_family": "disconnect"
+    },
+    "rule_id": "agent_pool_symptom_family",
+    "key": "linux:disconnect"
+  }
+]

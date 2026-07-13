@@ -1,5 +1,6 @@
 """Tests for Jenkins agent resource checks."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,18 +31,18 @@ def _make_pod(name: str, containers: list[tuple[str, str | None, str | None]]):
 
 @pytest.mark.asyncio
 async def test_agent_resource_check_skips_when_metrics_unavailable():
-    check = AgentResourceCheck()
-    with patch(
-        "jenkins_watchdog.checks.agent_resources.list_pod_metrics",
-        AsyncMock(side_effect=MetricsUnavailableError("404")),
-    ):
-        findings = await check.run()
+    metrics = SimpleNamespace(list_pod_metrics=AsyncMock(side_effect=MetricsUnavailableError("404")))
+    check = AgentResourceCheck(
+        SimpleNamespace(),
+        metrics,
+        namespace="jenkins",
+    )
+    findings = await check.run()
     assert findings == []
 
 
 @pytest.mark.asyncio
 async def test_agent_resource_check_high_memory_usage():
-    check = AgentResourceCheck()
     pod = _make_pod("agent-test-abc123-xk2mq", [("jnlp", "1Gi", "500m")])
     metrics = PodMetrics(
         namespace="jenkins",
@@ -49,10 +50,12 @@ async def test_agent_resource_check_high_memory_usage():
         containers=[ContainerUsage(name="jnlp", cpu_cores=0.1, memory_bytes=int(0.92 * 1024**3))],
     )
 
-    with (
-        patch("jenkins_watchdog.checks.agent_resources.list_pod_metrics", AsyncMock(return_value=[metrics])),
-        patch("jenkins_watchdog.checks.agent_resources.list_jenkins_agent_pods", AsyncMock(return_value=[pod])),
-    ):
+    check = AgentResourceCheck(
+        SimpleNamespace(),
+        SimpleNamespace(list_pod_metrics=AsyncMock(return_value=[metrics])),
+        namespace="jenkins",
+    )
+    with patch("jenkins_watchdog.checks.agent_resources.list_jenkins_agent_pods", AsyncMock(return_value=[pod])):
         findings = await check.run()
 
     assert len(findings) == 1
@@ -62,7 +65,6 @@ async def test_agent_resource_check_high_memory_usage():
 
 @pytest.mark.asyncio
 async def test_agent_resource_check_no_limits():
-    check = AgentResourceCheck()
     pod = _make_pod("agent-test-abc123-xk2mq", [("jnlp", None, None)])
     metrics = PodMetrics(
         namespace="jenkins",
@@ -70,10 +72,12 @@ async def test_agent_resource_check_no_limits():
         containers=[ContainerUsage(name="jnlp", cpu_cores=0.1, memory_bytes=100 * 1024**2)],
     )
 
-    with (
-        patch("jenkins_watchdog.checks.agent_resources.list_pod_metrics", AsyncMock(return_value=[metrics])),
-        patch("jenkins_watchdog.checks.agent_resources.list_jenkins_agent_pods", AsyncMock(return_value=[pod])),
-    ):
+    check = AgentResourceCheck(
+        SimpleNamespace(),
+        SimpleNamespace(list_pod_metrics=AsyncMock(return_value=[metrics])),
+        namespace="jenkins",
+    )
+    with patch("jenkins_watchdog.checks.agent_resources.list_jenkins_agent_pods", AsyncMock(return_value=[pod])):
         findings = await check.run()
 
     assert len(findings) == 1

@@ -4,6 +4,7 @@ import logging
 
 from jenkins_watchdog.checks.agent_utils import list_jenkins_agent_pods
 from jenkins_watchdog.checks.base import Finding
+from jenkins_watchdog.clients.k8s import KubernetesClient
 
 logger = logging.getLogger(__name__)
 
@@ -11,9 +12,13 @@ logger = logging.getLogger(__name__)
 class AgentPodCheck:
     name = "jenkins_agent_pods"
 
+    def __init__(self, kubernetes: KubernetesClient, *, namespace: str) -> None:
+        self._kubernetes = kubernetes
+        self._namespace = namespace
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
-        pods = await list_jenkins_agent_pods()
+        pods = await list_jenkins_agent_pods(self._kubernetes, self._namespace)
 
         for pod in pods:
             ns = pod.metadata.namespace

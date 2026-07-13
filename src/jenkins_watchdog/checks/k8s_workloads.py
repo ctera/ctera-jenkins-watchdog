@@ -3,7 +3,7 @@
 import logging
 
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.k8s import get_apps_v1, run_sync
+from jenkins_watchdog.clients.k8s import KubernetesClient
 
 logger = logging.getLogger(__name__)
 
@@ -11,11 +11,14 @@ logger = logging.getLogger(__name__)
 class WorkloadCheck:
     name = "k8s_workloads"
 
+    def __init__(self, kubernetes: KubernetesClient) -> None:
+        self._kubernetes = kubernetes
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
-        apps = get_apps_v1()
+        apps = self._kubernetes.apps_v1()
 
-        deployments = await run_sync(apps.list_deployment_for_all_namespaces, timeout_seconds=20)
+        deployments = await self._kubernetes.run_sync(apps.list_deployment_for_all_namespaces, timeout=20)
         for dep in deployments.items:
             ns = dep.metadata.namespace
             name = dep.metadata.name
@@ -54,7 +57,7 @@ class WorkloadCheck:
                             )
                         )
 
-        statefulsets = await run_sync(apps.list_stateful_set_for_all_namespaces, timeout_seconds=20)
+        statefulsets = await self._kubernetes.run_sync(apps.list_stateful_set_for_all_namespaces, timeout=20)
         for sts in statefulsets.items:
             ns = sts.metadata.namespace
             name = sts.metadata.name

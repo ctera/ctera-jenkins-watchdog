@@ -3,7 +3,7 @@
 import logging
 
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.jenkins import get_nodes
+from jenkins_watchdog.clients.jenkins import JenkinsClient
 
 logger = logging.getLogger(__name__)
 
@@ -11,11 +11,14 @@ logger = logging.getLogger(__name__)
 class AgentConnectivityCheck:
     name = "jenkins_agent_connectivity"
 
+    def __init__(self, jenkins: JenkinsClient) -> None:
+        self._jenkins = jenkins
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
 
         try:
-            nodes = await get_nodes()
+            nodes = await self._jenkins.get_nodes()
         except Exception as e:
             logger.error("Failed to query Jenkins nodes: %s", e)
             findings.append(

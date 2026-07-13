@@ -3,13 +3,12 @@
 import logging
 
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
+from jenkins_watchdog.clients.k8s import KubernetesClient
 from jenkins_watchdog.clients.k8s_metrics import (
+    KubernetesMetricsClient,
     MetricsUnavailableError,
     format_bytes,
     format_cores,
-    get_node_allocatable,
-    list_node_metrics,
     usage_pct,
 )
 
@@ -32,10 +31,14 @@ def _severity_for_pct(pct: float, warn: float, critical: float) -> str:
 class NodeCheck:
     name = "k8s_nodes"
 
+    def __init__(self, kubernetes: KubernetesClient, metrics: KubernetesMetricsClient) -> None:
+        self._kubernetes = kubernetes
+        self._metrics = metrics
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
-        v1 = get_core_v1()
-        nodes = await run_sync(v1.list_node, timeout_seconds=15)
+        v1 = self._kubernetes.core_v1()
+        nodes = await self._kubernetes.run_sync(v1.list_node, timeout=15)
 
         for node in nodes.items:
             name = node.metadata.name
@@ -77,8 +80,8 @@ class NodeCheck:
         findings: list[Finding] = []
 
         try:
-            node_metrics = await list_node_metrics()
-            allocatable = await get_node_allocatable()
+            node_metrics = await self._metrics.list_node_metrics()
+            allocatable = await self._metrics.get_node_allocatable()
         except MetricsUnavailableError:
             logger.warning("Metrics-server unavailable — skipping node resource usage checks")
             return []

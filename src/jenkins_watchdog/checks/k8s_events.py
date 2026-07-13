@@ -5,8 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
-from jenkins_watchdog.config import settings
+from jenkins_watchdog.clients.k8s import KubernetesClient
 
 logger = logging.getLogger(__name__)
 
@@ -49,21 +48,32 @@ def _group_key(ev) -> tuple[str, str, str, str]:
 class K8sEventsCheck:
     name = "k8s_events"
 
+    def __init__(
+        self,
+        kubernetes: KubernetesClient,
+        *,
+        jenkins_namespace: str,
+        window_minutes: int,
+    ) -> None:
+        self._kubernetes = kubernetes
+        self._jenkins_namespace = jenkins_namespace
+        self._window_minutes = window_minutes
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
-        v1 = get_core_v1()
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.k8s_events_window_minutes)
-        namespaces = {settings.jenkins_namespace, WATCHDOG_NAMESPACE}
+        v1 = self._kubernetes.core_v1()
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=self._window_minutes)
+        namespaces = {self._jenkins_namespace, WATCHDOG_NAMESPACE}
 
         grouped: dict[tuple[str, str, str, str], list] = defaultdict(list)
 
         for ns in sorted(namespaces):
             try:
-                result = await run_sync(
+                result = await self._kubernetes.run_sync(
                     v1.list_namespaced_event,
                     ns,
                     field_selector="type=Warning",
-                    timeout_seconds=15,
+                    timeout=15,
                 )
             except Exception as exc:
                 logger.warning("Failed to list events in namespace %s: %s", ns, exc)

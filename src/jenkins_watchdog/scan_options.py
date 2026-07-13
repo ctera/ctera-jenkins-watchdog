@@ -5,8 +5,6 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
-from jenkins_watchdog.config import settings
-
 
 @dataclass(frozen=True)
 class ScanOptions:
@@ -18,14 +16,6 @@ class ScanOptions:
     full_build_logs: bool = False
     consecutive_failure_threshold: int = 3
     pipeline_history_limit: int = 15
-
-    @classmethod
-    def from_settings(cls) -> ScanOptions:
-        return cls(
-            max_investigations_per_scan=settings.max_investigations_per_scan,
-            max_tool_rounds=settings.max_tool_rounds,
-            jenkins_failed_build_window_hours=settings.jenkins_failed_build_window_hours,
-        )
 
     @classmethod
     def deep_scan(cls) -> ScanOptions:
@@ -43,7 +33,7 @@ class ScanOptions:
 
 _scan_options: ContextVar[ScanOptions] = ContextVar(
     "scan_options",
-    default=ScanOptions.from_settings(),
+    default=ScanOptions(),
 )
 
 

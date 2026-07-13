@@ -8,10 +8,7 @@ from datetime import UTC, datetime
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.clients.jenkins import (
     FailedBuildSummary,
-    get_build_console_output,
-    get_build_parameters,
-    get_job_recent_builds,
-    get_recent_failed_builds,
+    JenkinsClient,
     is_mr_job,
 )
 from jenkins_watchdog.clients.log_analysis import (
@@ -61,7 +58,9 @@ def _analyze_streak(builds: list[dict]) -> dict:
         "regression": regression,
         "had_success_in_window": had_success,
         "last_success_build": last_success.get("number") if last_success else None,
-        "last_success_at": _format_ts(last_success["timestamp"]) if last_success and last_success.get("timestamp") else None,
+        "last_success_at": _format_ts(last_success["timestamp"])
+        if last_success and last_success.get("timestamp")
+        else None,
         "recent_results": results[:8],
     }
 
@@ -80,10 +79,12 @@ def _detect_parameter_anomalies(params: dict[str, str], job_name: str) -> list[s
     return anomalies
 
 
-async def _fetch_log_signature(job_name: str, build_number: int) -> tuple[list[str], str, str]:
+async def _fetch_log_signature(
+    jenkins: JenkinsClient, job_name: str, build_number: int
+) -> tuple[list[str], str, str]:
     """Fetch build log and return error lines, signature, and failure class."""
     try:
-        console = await get_build_console_output(job_name, build_number)
+        console = await jenkins.get_build_console_output(job_name, build_number)
         error_lines = extract_error_lines(console)
         return error_lines, error_signature(error_lines), classify_failure(error_lines)
     except Exception as exc:
@@ -94,13 +95,16 @@ async def _fetch_log_signature(job_name: str, build_number: int) -> tuple[list[s
 class JenkinsPipelinePatternCheck:
     name = "jenkins_pipeline_patterns"
 
+    def __init__(self, jenkins: JenkinsClient) -> None:
+        self._jenkins = jenkins
+
     async def run(self) -> list[Finding]:
         findings: list[Finding] = []
         opts = get_scan_options()
         consecutive_threshold, history_limit = _thresholds()
 
         try:
-            failed_builds = await get_recent_failed_builds(
+            failed_builds = await self._jenkins.get_recent_failed_builds(
                 window_hours=opts.jenkins_failed_build_window_hours,
                 build_limit=opts.jenkins_build_depth,
             )
@@ -121,7 +125,7 @@ class JenkinsPipelinePatternCheck:
         async def _analyze_job(job_name: str, builds: list[FailedBuildSummary]) -> list[Finding]:
             job_findings: list[Finding] = []
             try:
-                history = await get_job_recent_builds(job_name, limit=history_limit)
+                history = await self._jenkins.get_job_recent_builds(job_name, limit=history_limit)
             except Exception as exc:
                 logger.debug("Failed to fetch history for %s: %s", job_name, exc)
                 return job_findings
@@ -137,10 +141,10 @@ class JenkinsPipelinePatternCheck:
 
             async with semaphore:
                 error_lines, sig, failure_class = await _fetch_log_signature(
-                    job_name, latest.build_number
+                    self._jenkins, job_name, latest.build_number
                 )
                 try:
-                    params = await get_build_parameters(job_name, latest.build_number)
+                    params = await self._jenkins.get_build_parameters(job_name, latest.build_number)
                     param_anomalies = _detect_parameter_anomalies(params, job_name)
                 except Exception:
                     pass

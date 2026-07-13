@@ -17,6 +17,12 @@ data:
   WATCHDOG_VALKEY_HOST: {{ .Values.config.valkeyHost | quote }}
   WATCHDOG_VALKEY_PORT: {{ .Values.config.valkeyPort | quote }}
   WATCHDOG_VALKEY_SSL: {{ .Values.config.valkeySsl | quote }}
+  WATCHDOG_DATABASE_HOST: {{ default (printf "%s-postgresql" .Release.Name) .Values.config.databaseHost | quote }}
+  WATCHDOG_DATABASE_PORT: {{ .Values.config.databasePort | quote }}
+  WATCHDOG_DATABASE_USER: {{ .Values.config.databaseUser | quote }}
+  WATCHDOG_DATABASE_NAME: {{ .Values.config.databaseName | quote }}
+  WATCHDOG_ROUTING_CONFIG_PATH: {{ .Values.config.routingConfigPath | quote }}
+  WATCHDOG_AUTOMATION_TEMPLATES_PATH: {{ .Values.config.automationTemplatesPath | quote }}
   WATCHDOG_LLM_MODEL: {{ .Values.config.llmModel | quote }}
   WATCHDOG_LLM_FALLBACK_MODELS: {{ .Values.config.llmFallbackModels | quote }}
   WATCHDOG_LLM_TEMPERATURE: {{ .Values.config.llmTemperature | quote }}
@@ -31,3 +37,14 @@ data:
   WATCHDOG_JIRA_BASE_URL: {{ .Values.config.jiraBaseUrl | quote }}
   WATCHDOG_JIRA_USER_EMAIL: {{ .Values.config.jiraUserEmail | quote }}
   WATCHDOG_JIRA_PROJECTS: {{ .Values.config.jiraProjects | quote }}
+  WATCHDOG_JIRA_ENABLED: {{ .Values.config.jiraEnabled | quote }}
+  WATCHDOG_GITHUB_ENABLED: {{ .Values.config.githubEnabled | quote }}
+  WATCHDOG_GITHUB_API_URL: {{ .Values.config.githubApiUrl | quote }}
+  WATCHDOG_GITLAB_ENABLED: {{ .Values.config.gitlabEnabled | quote }}
+  WATCHDOG_GITLAB_API_URL: {{ .Values.config.gitlabApiUrl | quote }}
+  WATCHDOG_EMAIL_ENABLED: {{ .Values.config.emailEnabled | quote }}
+  WATCHDOG_SMTP_HOST: {{ .Values.config.smtpHost | quote }}
+  WATCHDOG_SMTP_PORT: {{ .Values.config.smtpPort | quote }}
+  WATCHDOG_SMTP_START_TLS: {{ .Values.config.smtpStartTls | quote }}
+  WATCHDOG_SMTP_USERNAME: {{ .Values.config.smtpUsername | quote }}
+  WATCHDOG_EMAIL_FROM: {{ .Values.config.emailFrom | quote }}
