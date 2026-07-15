@@ -52,6 +52,34 @@ function incident(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function jenkinsWorkspace(windowHours: number, failureCount: number) {
+  return {
+    generated_at: now,
+    window_hours: windowHours,
+    summary: {
+      window_start: now,
+      job_count: 12,
+      active_job_count: 8,
+      build_count: failureCount * 4,
+      failure_build_count: failureCount,
+      enriched_failure_count: failureCount,
+      pending_failure_analysis_count: 0,
+      new_failure_count: failureCount,
+      running_build_count: 2,
+      cumulative_wall_hours: failureCount,
+      exact_job_count: 12,
+      retention_limited_job_count: 0,
+      multibranch_parent_count: 1,
+      sync: { status: "succeeded", completed_at: now, updated_at: now, stats: {} },
+    },
+    new_failures: [],
+    active_executions: [],
+    recurring_patterns: [],
+    busy_jobs: [],
+    multibranch: [],
+  };
+}
+
 function action(overrides: Record<string, unknown> = {}) {
   return {
     id: "action-1",
@@ -324,6 +352,52 @@ test("operator can enqueue a regular scan", async ({ page }, testInfo) => {
 
   expect(request.postDataJSON()).toEqual({ mode: "regular", categories: null });
   await expect(page.getByText("Active regular scan")).toBeVisible();
+});
+
+test("latest build-history window wins when responses finish out of order", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  let release24 = () => {};
+  const hold24 = new Promise<void>((resolve) => {
+    release24 = resolve;
+  });
+  await page.route("**/auth/me", (route) => route.fulfill({ json: { authenticated: true, email: "operator@example.com" } }));
+  await page.route("**/api/v2/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/v2/overview") {
+      await route.fulfill({ json: { llm_usage: { total_tokens: 0, estimated_cost_usd: 0 } } });
+      return;
+    }
+    if (url.pathname === "/api/v2/jenkins/failures") {
+      await route.fulfill({ json: { items: [], next_cursor: null } });
+      return;
+    }
+    if (url.pathname === "/api/v2/jenkins") {
+      const windowHours = Number(url.searchParams.get("window_hours"));
+      if (windowHours === 24) await hold24;
+      if (windowHours === 4) await new Promise((resolve) => setTimeout(resolve, 20));
+      await route.fulfill({ json: jenkinsWorkspace(windowHours, windowHours * 10) });
+      return;
+    }
+    await route.fulfill({ status: 404, json: { detail: { code: "not_mocked" } } });
+  });
+  await page.goto("/overview");
+  const failedBuilds = page.getByText("Failed builds", { exact: true }).locator("..");
+  await expect(failedBuilds).toContainText("1,680");
+
+  const request24 = page.waitForRequest((request) => request.url().includes("window_hours=24"));
+  const response24 = page.waitForResponse((response) => response.url().includes("window_hours=24"));
+  await page.getByRole("button", { name: "24h", exact: true }).click();
+  await request24;
+  expect(await page.getByRole("button", { name: "7d", exact: true }).getAttribute("aria-pressed")).toBe("true");
+  expect(await failedBuilds.innerText()).toContain("1,680");
+  await page.getByRole("button", { name: "4h", exact: true }).click();
+
+  await expect(failedBuilds).toContainText("40");
+  release24();
+  await response24;
+  await page.waitForTimeout(50);
+  await expect(page.getByRole("button", { name: "4h", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(failedBuilds).toContainText("40");
 });
 
 test("operator can queue a deep build analysis", async ({ page }, testInfo) => {

@@ -4,6 +4,7 @@ import {
   Button,
   Chip,
   Collapse,
+  CircularProgress,
   Divider,
   IconButton,
   InputAdornment,
@@ -30,7 +31,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SearchIcon from "@mui/icons-material/Search";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
@@ -76,23 +77,29 @@ export default function OverviewPage() {
   const [failureCursor, setFailureCursor] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [expandedFamily, setExpandedFamily] = useState<string | null>(null);
+  const refreshSequence = useRef(0);
 
   const refresh = useCallback(async () => {
+    const sequence = ++refreshSequence.current;
     try {
       const [next, status] = await Promise.all([getJenkinsWorkspace(windowHours, 100), getOverview()]);
+      if (sequence !== refreshSequence.current) return;
       setWorkspace(next);
       setOperational(status);
       setError(null);
     } catch (requestError) {
-      setError(requestError);
+      if (sequence === refreshSequence.current) setError(requestError);
     } finally {
-      setLoading(false);
+      if (sequence === refreshSequence.current) setLoading(false);
     }
   }, [windowHours]);
 
   useEffect(() => {
     setLoading(true);
     void refresh();
+    return () => {
+      refreshSequence.current += 1;
+    };
   }, [refresh]);
 
   useEffect(() => {
@@ -204,12 +211,18 @@ export default function OverviewPage() {
             <ToggleButtonGroup
               exclusive
               size="small"
-              value={windowHours}
-              onChange={(_, next: number | null) => next && setWindowHours(next)}
+              value={loading && workspace ? workspace.window_hours : windowHours}
+              onChange={(_, next: number | null) => {
+                if (!next) return;
+                refreshSequence.current += 1;
+                setLoading(true);
+                setWindowHours(next);
+              }}
               aria-label="Build history window"
             >
               {windows.map((item) => <ToggleButton key={item.value} value={item.value}>{item.label}</ToggleButton>)}
             </ToggleButtonGroup>
+            {loading && <CircularProgress size={18} aria-label="Loading build history" />}
             <Tooltip title="Refresh Jenkins data">
               <span>
                 <IconButton onClick={() => void refresh()} disabled={loading} aria-label="Refresh Jenkins data">
