@@ -935,8 +935,49 @@ export interface components {
             root_build_number: number;
             /** Root Job */
             root_job: string;
+            /**
+             * Source Allow Mr Comments
+             * @default false
+             */
+            source_allow_mr_comments: boolean;
+            /** Source Branch */
+            source_branch?: string | null;
+            /** Source Commit Sha */
+            source_commit_sha?: string | null;
+            /**
+             * Source Kind
+             * @default unresolved
+             */
+            source_kind: string;
+            /** Source Profile Id */
+            source_profile_id?: string | null;
+            /**
+             * Source Profile Registered
+             * @default false
+             */
+            source_profile_registered: boolean;
             /** Source Provider */
             source_provider?: string | null;
+            /** Source Reason */
+            source_reason?: string | null;
+            /**
+             * Source Resolution Method
+             * @default none
+             */
+            source_resolution_method: string;
+            /** Source State */
+            source_state?: string | null;
+            /**
+             * Source Status
+             * @default pending
+             */
+            source_status: string;
+            /** Source Title */
+            source_title?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Source Verified At */
+            source_verified_at?: string | null;
             /**
              * Started At
              * Format: date-time
@@ -1047,8 +1088,49 @@ export interface components {
             root_build_number: number;
             /** Root Job */
             root_job: string;
+            /**
+             * Source Allow Mr Comments
+             * @default false
+             */
+            source_allow_mr_comments: boolean;
+            /** Source Branch */
+            source_branch?: string | null;
+            /** Source Commit Sha */
+            source_commit_sha?: string | null;
+            /**
+             * Source Kind
+             * @default unresolved
+             */
+            source_kind: string;
+            /** Source Profile Id */
+            source_profile_id?: string | null;
+            /**
+             * Source Profile Registered
+             * @default false
+             */
+            source_profile_registered: boolean;
             /** Source Provider */
             source_provider?: string | null;
+            /** Source Reason */
+            source_reason?: string | null;
+            /**
+             * Source Resolution Method
+             * @default none
+             */
+            source_resolution_method: string;
+            /** Source State */
+            source_state?: string | null;
+            /**
+             * Source Status
+             * @default pending
+             */
+            source_status: string;
+            /** Source Title */
+            source_title?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Source Verified At */
+            source_verified_at?: string | null;
             /**
              * Started At
              * Format: date-time
@@ -1095,6 +1177,8 @@ export interface components {
         };
         /** V2JobFamilyResponse */
         V2JobFamilyResponse: {
+            /** Change Number */
+            change_number?: string | null;
             /** Coverage */
             coverage: string;
             /** Failure Rate */
@@ -1128,8 +1212,33 @@ export interface components {
             };
             /** Run Count */
             run_count: number;
+            /** Source Branch */
+            source_branch?: string | null;
+            /** Source Commit Sha */
+            source_commit_sha?: string | null;
+            /**
+             * Source Kind
+             * @default unresolved
+             */
+            source_kind: string;
+            /** Source Profile Id */
+            source_profile_id?: string | null;
+            /**
+             * Source Profile Registered
+             * @default false
+             */
+            source_profile_registered: boolean;
             /** Source Provider */
             source_provider?: string | null;
+            /** Source Reason */
+            source_reason?: string | null;
+            /**
+             * Source Status
+             * @default pending
+             */
+            source_status: string;
+            /** Source Url */
+            source_url?: string | null;
             /** Url */
             url: string;
             /** Wall Hours */
@@ -1203,8 +1312,44 @@ export interface components {
             root_build_number: number;
             /** Root Job */
             root_job: string;
+            /** Source Branch */
+            source_branch?: string | null;
+            /** Source Commit Sha */
+            source_commit_sha?: string | null;
+            /**
+             * Source Kind
+             * @default unresolved
+             */
+            source_kind: string;
+            /** Source Profile Id */
+            source_profile_id?: string | null;
+            /**
+             * Source Profile Registered
+             * @default false
+             */
+            source_profile_registered: boolean;
             /** Source Provider */
             source_provider?: string | null;
+            /** Source Reason */
+            source_reason?: string | null;
+            /**
+             * Source Resolution Method
+             * @default none
+             */
+            source_resolution_method: string;
+            /** Source State */
+            source_state?: string | null;
+            /**
+             * Source Status
+             * @default pending
+             */
+            source_status: string;
+            /** Source Title */
+            source_title?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Source Verified At */
+            source_verified_at?: string | null;
             /** Title */
             title: string;
         };
@@ -1577,7 +1722,7 @@ export interface operations {
                 cursor?: string | null;
                 status?: ("open" | "resolved" | "suppressed") | null;
                 severity?: ("low" | "warning" | "critical") | null;
-                source_type?: ("merge_request" | "infrastructure" | "unknown") | null;
+                source_type?: ("merge_request" | "repository" | "pipeline" | "multiple" | "infrastructure" | "unknown") | null;
             };
             header?: never;
             path?: never;

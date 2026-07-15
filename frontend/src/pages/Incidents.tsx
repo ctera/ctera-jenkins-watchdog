@@ -20,6 +20,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
+import { SourceSummary } from "../components/SourceAttribution";
 import { EmptyPanel, ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
 import { listIncidents, type Incident, type IncidentFilters } from "../services/api";
@@ -79,23 +80,24 @@ export default function Incidents() {
         <TextField size="small" label="Search conditions" value={search} onChange={(event) => setSearch(event.target.value)} sx={{ minWidth: { xs: 0, sm: 240 } }} />
         <Filter label="Status" value={filters.status ?? ""} onChange={(value) => setFilter("status", value as IncidentFilters["status"])} options={["open", "resolved", "suppressed"]} />
         <Filter label="Severity" value={filters.severity ?? ""} onChange={(value) => setFilter("severity", value as IncidentFilters["severity"])} options={["critical", "warning", "low"]} />
-        <Filter label="Source" value={filters.source_type ?? ""} onChange={(value) => setFilter("source_type", value as IncidentFilters["source_type"])} options={["merge_request", "infrastructure", "unknown"]} />
+        <Filter label="Source" value={filters.source_type ?? ""} onChange={(value) => setFilter("source_type", value as IncidentFilters["source_type"])} options={["merge_request", "repository", "pipeline", "multiple", "infrastructure", "unknown"]} />
       </Stack>
 
       {Boolean(error) && <Box sx={{ mb: 2 }}><ErrorPanel error={error} /></Box>}
       {loading ? <LoadingPanel label="Loading incidents" /> : visibleIncidents.length === 0 ? <EmptyPanel label="No matching incidents" /> : (
         <>
           <TableContainer component={Paper} variant="outlined">
-            <Table sx={{ minWidth: 920 }}>
+            <Table sx={{ minWidth: 960, tableLayout: "fixed" }}>
               <TableHead>
                 <TableRow>
-                  <TableCell>Severity</TableCell>
-                  <TableCell>Incident</TableCell>
-                  <TableCell>Affected</TableCell>
-                  <TableCell>Area</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell>First seen</TableCell>
-                  <TableCell>Last seen</TableCell>
+                  <TableCell sx={{ width: 105 }}>Severity</TableCell>
+                  <TableCell sx={{ width: 320 }}>Incident</TableCell>
+                  <TableCell sx={{ width: 75 }}>Affected</TableCell>
+                  <TableCell sx={{ width: 70 }}>Area</TableCell>
+                  <TableCell sx={{ width: 145 }}>Source</TableCell>
+                  <TableCell sx={{ width: 90 }}>Status</TableCell>
+                  <TableCell sx={{ width: 70 }}>First seen</TableCell>
+                  <TableCell sx={{ width: 70 }}>Last seen</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -109,12 +111,13 @@ export default function Incidents() {
                     sx={{ cursor: "pointer" }}
                   >
                     <TableCell><StatusChip value={incident.severity} /></TableCell>
-                    <TableCell sx={{ maxWidth: 420 }}>
+                    <TableCell sx={{ maxWidth: 320 }}>
                       <Typography variant="body2" fontWeight={650} noWrap>{incident.title}</Typography>
                       <Typography variant="caption" color="text.secondary">Occurrence #{incident.occurrence_number}</Typography>
                     </TableCell>
                     <TableCell>{incident.affected_resource_count}</TableCell>
                     <TableCell>{titleCase(incident.domain)}</TableCell>
+                    <TableCell><SourceSummary source={incident.source} /></TableCell>
                     <TableCell><StatusChip value={incident.status} /></TableCell>
                     <TableCell>{formatRelative(incident.first_seen_at ?? incident.created_at)}</TableCell>
                     <TableCell>{formatRelative(incident.last_seen_at ?? incident.updated_at ?? incident.created_at)}</TableCell>

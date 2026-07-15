@@ -34,6 +34,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
+import { SourceSummary } from "../components/SourceAttribution";
 import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
 import {
@@ -385,7 +386,7 @@ function BuildTable({ builds, navigate, empty }: { builds: JenkinsBuild[]; navig
                 <Typography variant="body2" fontWeight={650} sx={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{build.failure_summary || titleCase(build.failure_classification)}</Typography>
                 <Typography variant="caption" color="text.secondary">{build.failed_stage || titleCase(build.failure_classification)}</Typography>
               </TableCell>
-              <TableCell sx={{ width: 140, overflow: "hidden" }}><SourceLabel item={build} /></TableCell>
+              <TableCell sx={{ width: 140, overflow: "hidden" }}><SourceSummary source={build} /></TableCell>
               <TableCell><Typography variant="body2">{formatRelative(build.started_at)}</Typography></TableCell>
               <TableCell>{duration(build.duration_ms)}</TableCell>
             </TableRow>
@@ -411,7 +412,7 @@ function ExecutionTable({ executions, navigate }: { executions: JenkinsExecution
               </TableCell>
               <TableCell><Chip size="small" variant="outlined" label={titleCase(execution.classification)} /></TableCell>
               <TableCell>{execution.affected_build_count}{execution.propagated_build_count > 0 && <Typography component="span" variant="caption" color="text.secondary"> · {execution.propagated_build_count} propagated</Typography>}</TableCell>
-              <TableCell><SourceLabel item={execution} /></TableCell>
+              <TableCell><SourceSummary source={execution} /></TableCell>
               <TableCell>{formatRelative(execution.last_seen_at)}</TableCell>
             </TableRow>
           ))}
@@ -520,11 +521,6 @@ function MultibranchTable({ families, expanded, onToggle }: { families: JenkinsM
 function Priority({ score, reasons }: { score: number; reasons: string[] }) {
   const color = score >= 60 ? "error.main" : score >= 30 ? "warning.main" : "text.primary";
   return <Tooltip title={reasons.length ? reasons.join(" · ") : "Priority based on blockage, recurrence, wall time, fanout, and source impact"}><Typography fontWeight={750} color={color}>{score}</Typography></Tooltip>;
-}
-
-function SourceLabel({ item }: { item: { source_provider?: string | null; repository?: string | null; change_number?: string | null } }) {
-  if (!item.source_provider && !item.repository) return <Typography variant="body2" color="text.secondary">Unknown</Typography>;
-  return <Box><Typography variant="body2" fontWeight={650}>{item.change_number ? `${titleCase(item.source_provider ?? "change")} #${item.change_number}` : titleCase(item.source_provider ?? "scm")}</Typography><Typography variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>{item.repository || "Repository unknown"}</Typography></Box>;
 }
 
 function ResultCounts({ counts }: { counts: Record<string, number> }) {

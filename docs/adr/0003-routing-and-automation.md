@@ -12,9 +12,9 @@ LLM output cannot safely decide incident identity, severity, lifecycle, or wheth
 
 Correlation applies exact SCM change, Jenkins error signature, Jenkins/Kubernetes node, agent-pool symptom family, then stable-finding fallback. Every observation links to exactly one incident.
 
-Versioned YAML routing resolves complete Jenkins SCM metadata before job routes. Partial or conflicting metadata becomes unknown. Recipient precedence is job override, team, triggering user, then global fallback.
+Versioned YAML routing controls ownership and recipients. Normalized source attribution is supplied by the source-attribution subsystem described in ADR 0005. Incomplete later metadata cannot erase a confirmed source, and distinct confirmed sources remain visible as a plural association. Recipient precedence is job override, team, triggering user, then global fallback.
 
-Reasoning is advisory. It can set actionability, classification, and priority, but cannot change deterministic severity or lifecycle. Jira and provider actions require medium or high confidence. Unknown sources receive email only. All integrations are disabled by default.
+Reasoning is advisory. It can set actionability, classification, and priority, but cannot change deterministic severity or lifecycle. Jira and provider actions require medium or high confidence. Provider comments also require provider verification and an explicit write-enabled source profile. Unresolved sources receive email only. All integrations are disabled by default.
 
 Rendered payloads and template versions are immutable. Provider, Jira, and email idempotency keys encode their required incident, occurrence, build, recipient, and cooldown identities. Manual retry starts a new attempt cycle without changing the external identity.
 

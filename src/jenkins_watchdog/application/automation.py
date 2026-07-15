@@ -100,7 +100,12 @@ class AutomationService:
         now = self._now()
         planned: list[Action] = []
         source_kind = decision.source.get("kind")
-        if source_kind == "merge_request" and confident:
+        if (
+            source_kind == "merge_request"
+            and confident
+            and bool(decision.source.get("verified"))
+            and bool(decision.source.get("allow_mr_comments"))
+        ):
             provider = str(decision.source.get("provider", ""))
             enabled = {
                 "github": self._policy.github_enabled,

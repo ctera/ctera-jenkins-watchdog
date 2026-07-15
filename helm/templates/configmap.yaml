@@ -18,6 +18,8 @@ data:
   WATCHDOG_JENKINS_SYNC_CONCURRENCY: {{ .Values.config.jenkinsSyncConcurrency | quote }}
   WATCHDOG_JENKINS_SYNC_ENRICHMENT_LIMIT: {{ .Values.config.jenkinsSyncEnrichmentLimit | quote }}
   WATCHDOG_JENKINS_SYNC_LOG_LIMIT: {{ .Values.config.jenkinsSyncLogLimit | quote }}
+  WATCHDOG_JENKINS_SOURCE_ATTRIBUTION_LIMIT: {{ .Values.config.jenkinsSourceAttributionLimit | quote }}
+  WATCHDOG_JENKINS_SOURCE_PROFILES_PATH: {{ .Values.config.jenkinsSourceProfilesPath | quote }}
   WATCHDOG_AUTOMATIC_INVESTIGATIONS_ENABLED: {{ .Values.config.automaticInvestigationsEnabled | quote }}
   WATCHDOG_AUTOMATIC_INVESTIGATION_MIN_PRIORITY: {{ .Values.config.automaticInvestigationMinPriority | quote }}
   WATCHDOG_AUTOMATIC_INVESTIGATION_BATCH_SIZE: {{ .Values.config.automaticInvestigationBatchSize | quote }}

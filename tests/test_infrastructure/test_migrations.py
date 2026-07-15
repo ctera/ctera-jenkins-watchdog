@@ -42,4 +42,4 @@ def test_migration_from_empty_database_reaches_single_head_without_drift() -> No
     tables, revision = asyncio.run(reset_and_inspect(database_url, reset=False))
 
     assert tables == set(Base.metadata.tables) | {"alembic_version"}
-    assert revision == "0005_analysis_costs"
+    assert revision == "0006_source_attribution"

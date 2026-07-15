@@ -9,7 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from jenkins_watchdog.application.investigations import InvestigationQueueService, InvestigationWorker
 from jenkins_watchdog.application.reasoning import ReasoningService, evidence_digest
 from jenkins_watchdog.application.types import EnqueueScan, ReasoningReply, TriageBatchResult
-from jenkins_watchdog.domain.jenkins import JenkinsBuildEnrichment, JenkinsBuildSnapshot, JenkinsJobSnapshot
+from jenkins_watchdog.domain.jenkins import (
+    JenkinsBuildAttribution,
+    JenkinsBuildEnrichment,
+    JenkinsBuildSnapshot,
+    JenkinsJobSnapshot,
+)
 from jenkins_watchdog.domain.model import (
     CheckResult,
     CheckStatus,
@@ -247,6 +252,7 @@ async def test_same_jenkins_signature_correlates_builds_to_one_incident(
                 JenkinsBuildEnrichment(
                     job_full_name=job.full_name,
                     number=build.number,
+                    attribution=JenkinsBuildAttribution(job.full_name, build.number),
                     failure_classification="compilation_error",
                     failure_signature="same-compiler-error",
                     failure_summary="TypeScript compilation failed",

@@ -32,7 +32,7 @@ function incident(overrides: Record<string, unknown> = {}) {
     title: "Compiler failure across MR builds",
     correlation_rule_id: "jenkins_error_signature",
     correlation_key: "compiler-error",
-    source: { kind: "merge_request", confirmed: true, provider: "github", repository: "ctera/app", change_number: "42" },
+    source: { kind: "merge_request", confirmed: true, verified: true, profile_id: "portal-backend", provider: "gitlab", repository: "Portal/Backend", change_number: "6836", url: "http://git.ctera.local/Portal/Backend/-/merge_requests/6836" },
     actionability: "actionable",
     classification: "merge_request",
     priority: "critical",
@@ -287,10 +287,23 @@ function jenkinsBuildDetail(overrides: Record<string, unknown> = {}) {
     parent: null,
     head_type: "change_request",
     head_name: "MR-42",
-    source_provider: "github",
-    repository: "ctera/app",
-    change_number: "42",
-    change_url: "https://github.com/ctera/app/pull/42",
+    source_provider: "gitlab",
+    repository: "Portal/Backend",
+    change_number: "6836",
+    change_url: "http://git.ctera.local/Portal/Backend/-/merge_requests/6836",
+    source_kind: "change_request",
+    source_status: "verified",
+    source_profile_id: "portal-backend",
+    source_profile_registered: true,
+    source_branch: "fix/portal-build",
+    source_commit_sha: "1234567890abcdef1234567890abcdef12345678",
+    source_url: "http://git.ctera.local/Portal/Backend/-/merge_requests/6836",
+    source_title: "Fix portal build",
+    source_state: "opened",
+    source_resolution_method: "root_cause_url+provider_api",
+    source_reason: null,
+    source_allow_mr_comments: false,
+    source_verified_at: now,
     trigger_kind: "scm",
     root_job: "Portal_Build_DAILY_MR_PATCH",
     root_build_number: 12358,
@@ -406,6 +419,10 @@ test("operator can queue a deep build analysis", async ({ page }, testInfo) => {
   await page.goto("/jenkins/builds/build-1");
 
   await expect(page.getByText("Deterministic evidence: Log Pending")).toBeVisible();
+  const source = page.getByRole("heading", { name: "Source attribution" }).locator("..");
+  await expect(source.getByText("GitLab !6836")).toBeVisible();
+  await expect(source.getByText("Verified", { exact: true }).first()).toBeVisible();
+  await expect(source.getByText("Unknown", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Not analyzed")).toBeVisible();
   await page.getByRole("button", { name: "Deep" }).click();
   const requestPromise = page.waitForRequest((request) => request.url().endsWith("/api/v2/jenkins/builds/build-1/analyze"));

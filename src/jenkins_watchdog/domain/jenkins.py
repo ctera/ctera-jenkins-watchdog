@@ -7,6 +7,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Mapping
 
+from jenkins_watchdog.domain.source import SourceAttribution, SourceKind, SourceStatus
+
 
 class JenkinsHeadType(StrEnum):
     BRANCH = "branch"
@@ -79,6 +81,8 @@ class JenkinsBuildSnapshot:
     duration_ms: int
     building: bool = False
     enrichment_status: str = "pending"
+    source_status: str = "pending"
+    logical_run_key: str | None = None
 
     @property
     def failure_like(self) -> bool:
@@ -89,16 +93,7 @@ class JenkinsBuildSnapshot:
 class JenkinsBuildEnrichment:
     job_full_name: str
     number: int
-    upstream_job_full_name: str | None = None
-    upstream_build_number: int | None = None
-    root_job_full_name: str | None = None
-    root_build_number: int | None = None
-    trigger_kind: str = "unknown"
-    source_provider: str | None = None
-    repository: str | None = None
-    change_number: str | None = None
-    change_url: str | None = None
-    head_name: str | None = None
+    attribution: "JenkinsBuildAttribution"
     failed_stage: str | None = None
     failure_classification: str = "unknown"
     failure_signature: str = ""
@@ -106,8 +101,71 @@ class JenkinsBuildEnrichment:
     propagated_failure: bool = False
     error_lines: tuple[str, ...] = ()
     stage_evidence: tuple[Mapping[str, Any], ...] = ()
-    cause_evidence: tuple[Mapping[str, Any], ...] = ()
     log_enriched: bool = False
+
+    @property
+    def logical_run_key(self) -> str:
+        return self.attribution.logical_run_key
+
+    @property
+    def upstream_job_full_name(self) -> str | None:
+        return self.attribution.upstream_job_full_name
+
+    @property
+    def upstream_build_number(self) -> int | None:
+        return self.attribution.upstream_build_number
+
+    @property
+    def root_job_full_name(self) -> str | None:
+        return self.attribution.root_job_full_name
+
+    @property
+    def root_build_number(self) -> int | None:
+        return self.attribution.root_build_number
+
+    @property
+    def trigger_kind(self) -> str:
+        return self.attribution.trigger_kind
+
+    @property
+    def source_provider(self) -> str | None:
+        return self.attribution.source.provider
+
+    @property
+    def repository(self) -> str | None:
+        return self.attribution.source.repository
+
+    @property
+    def change_number(self) -> str | None:
+        return self.attribution.source.change_number
+
+    @property
+    def change_url(self) -> str | None:
+        return self.attribution.source.url
+
+    @property
+    def head_name(self) -> str | None:
+        return self.attribution.head_name
+
+    @property
+    def cause_evidence(self) -> tuple[Mapping[str, Any], ...]:
+        return self.attribution.cause_evidence
+
+
+@dataclass(frozen=True, slots=True)
+class JenkinsBuildAttribution:
+    job_full_name: str
+    number: int
+    upstream_job_full_name: str | None = None
+    upstream_build_number: int | None = None
+    root_job_full_name: str | None = None
+    root_build_number: int | None = None
+    trigger_kind: str = "unknown"
+    source: SourceAttribution = field(
+        default_factory=lambda: SourceAttribution(SourceKind.UNRESOLVED, SourceStatus.PENDING)
+    )
+    head_name: str | None = None
+    cause_evidence: tuple[Mapping[str, Any], ...] = ()
 
     @property
     def logical_run_key(self) -> str:

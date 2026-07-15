@@ -306,6 +306,19 @@ class V2JenkinsBuildResponse(BaseModel):
     repository: str | None = None
     change_number: str | None = None
     change_url: str | None = None
+    source_kind: str = "unresolved"
+    source_status: str = "pending"
+    source_profile_id: str | None = None
+    source_profile_registered: bool = False
+    source_branch: str | None = None
+    source_commit_sha: str | None = None
+    source_url: str | None = None
+    source_title: str | None = None
+    source_state: str | None = None
+    source_resolution_method: str = "none"
+    source_reason: str | None = None
+    source_allow_mr_comments: bool = False
+    source_verified_at: datetime | None = None
     trigger_kind: str = "unknown"
     root_job: str
     root_build_number: int
@@ -338,6 +351,18 @@ class V2LogicalExecutionResponse(BaseModel):
     repository: str | None = None
     change_number: str | None = None
     change_url: str | None = None
+    source_kind: str = "unresolved"
+    source_status: str = "pending"
+    source_profile_id: str | None = None
+    source_profile_registered: bool = False
+    source_branch: str | None = None
+    source_commit_sha: str | None = None
+    source_url: str | None = None
+    source_title: str | None = None
+    source_state: str | None = None
+    source_resolution_method: str = "none"
+    source_reason: str | None = None
+    source_verified_at: datetime | None = None
     affected_build_count: int
     propagated_build_count: int
     builds: list[dict[str, Any]]
@@ -365,6 +390,15 @@ class V2JobFamilyResponse(BaseModel):
     head_name: str | None = None
     source_provider: str | None = None
     repository: str | None = None
+    change_number: str | None = None
+    source_kind: str = "unresolved"
+    source_status: str = "pending"
+    source_profile_id: str | None = None
+    source_profile_registered: bool = False
+    source_branch: str | None = None
+    source_commit_sha: str | None = None
+    source_url: str | None = None
+    source_reason: str | None = None
     url: str
     coverage: str
     run_count: int
@@ -820,7 +854,14 @@ async def list_incidents(
     cursor: str | None = None,
     status: Literal["open", "resolved", "suppressed"] | None = None,
     severity: Literal["low", "warning", "critical"] | None = None,
-    source_type: Literal["merge_request", "infrastructure", "unknown"] | None = None,
+    source_type: Literal[
+        "merge_request",
+        "repository",
+        "pipeline",
+        "multiple",
+        "infrastructure",
+        "unknown",
+    ] | None = None,
 ) -> V2IncidentPage:
     try:
         async with _container(request).uow_factory() as uow:

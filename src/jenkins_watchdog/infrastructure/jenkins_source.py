@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -15,6 +16,7 @@ import httpx
 from jenkins_watchdog.clients.jenkins import JenkinsClient, job_to_api_path
 from jenkins_watchdog.clients.log_analysis import classify_failure, error_signature, extract_error_lines
 from jenkins_watchdog.domain.jenkins import (
+    JenkinsBuildAttribution,
     JenkinsBuildEnrichment,
     JenkinsBuildHistoryPage,
     JenkinsBuildSnapshot,
@@ -22,6 +24,8 @@ from jenkins_watchdog.domain.jenkins import (
     JenkinsHeadType,
     JenkinsJobSnapshot,
 )
+from jenkins_watchdog.domain.source import SourceProfileRegistry
+from jenkins_watchdog.infrastructure.source_attribution import JenkinsSourceAttributor
 
 _PAGE_SIZE = 100
 _FAILURE_RESULTS = frozenset({"FAILURE", "UNSTABLE", "ABORTED"})
@@ -34,9 +38,16 @@ _STACK_FRAME = re.compile(r"^at\s+[\w.$]+\([^)]*\)$")
 
 
 class JenkinsSourceAdapter:
-    def __init__(self, client: JenkinsClient, *, hierarchy_depth: int = 8) -> None:
+    def __init__(
+        self,
+        client: JenkinsClient,
+        *,
+        hierarchy_depth: int = 8,
+        attributor: JenkinsSourceAttributor | None = None,
+    ) -> None:
         self._client = client
         self._hierarchy_depth = hierarchy_depth
+        self._attributor = attributor or JenkinsSourceAttributor(SourceProfileRegistry(1, ()))
         self._job_sources: dict[str, JenkinsJobSnapshot] = {}
         self._job_source_tasks: dict[str, asyncio.Task[JenkinsJobSnapshot]] = {}
         self._build_detail_tasks: dict[tuple[str, int], asyncio.Task[dict[str, Any]]] = {}
@@ -205,84 +216,13 @@ class JenkinsSourceAdapter:
         builds.sort(key=lambda item: item.number)
         return JenkinsBuildHistoryPage(tuple(builds), coverage)
 
+    async def attribute_build(self, build: JenkinsBuildSnapshot) -> JenkinsBuildAttribution:
+        trace = await self._trace_build(build)
+        return await self._attribution_from_trace(build, trace)
+
     async def enrich_build(self, build: JenkinsBuildSnapshot, *, include_log: bool) -> JenkinsBuildEnrichment:
-        current_job = build.job_full_name
-        current_number = build.number
-        direct_upstream_job: str | None = None
-        direct_upstream_number: int | None = None
-        root_job = current_job
-        root_number = current_number
-        all_causes: list[dict[str, Any]] = []
-        root_causes: list[dict[str, Any]] = []
-        seen: set[tuple[str, int]] = set()
-        detail_unavailable = False
-        for depth in range(10):
-            if (current_job, current_number) in seen:
-                break
-            seen.add((current_job, current_number))
-            try:
-                payload = await self._build_detail(current_job, current_number)
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 404 and depth == 0:
-                    detail_unavailable = True
-                    payload = {}
-                elif depth > 0:
-                    root_job, root_number = current_job, current_number
-                    break
-                else:
-                    raise
-            except Exception:
-                if depth == 0:
-                    raise
-                root_job, root_number = current_job, current_number
-                break
-            causes = _causes(payload)
-            all_causes.extend(causes)
-            upstream = next(
-                (
-                    cause
-                    for cause in causes
-                    if cause.get("upstreamProject") and _integer(cause.get("upstreamBuild")) is not None
-                ),
-                None,
-            )
-            if upstream is None:
-                root_job, root_number, root_causes = current_job, current_number, causes
-                break
-            upstream_job = str(upstream["upstreamProject"])
-            upstream_number = int(upstream["upstreamBuild"])
-            if depth == 0:
-                direct_upstream_job = upstream_job
-                direct_upstream_number = upstream_number
-            current_job, current_number = upstream_job, upstream_number
-
-        source_job = JenkinsJobSnapshot(
-            full_name=build.job_full_name,
-            display_name=build.job_full_name.rsplit("/", 1)[-1],
-            url=build.url.rsplit(f"/{build.number}", 1)[0] + "/",
-            job_class="",
-            color=None,
-            parent_full_name=build.job_full_name.rsplit("/", 1)[0] if "/" in build.job_full_name else None,
-        )
-        source_job = await self.enrich_job_source(source_job)
-        provider = source_job.source_provider
-        repository = source_job.repository
-        change_url = source_job.source_url if source_job.head_type is JenkinsHeadType.CHANGE_REQUEST else None
-        change_number = _change_number_from_url(change_url)
-        head_name = source_job.head_name
-
-        webhook = next((item for item in root_causes if "GitLabWebHookCause" in _cause_class(item)), None)
-        if webhook is not None:
-            provider = "gitlab"
-            change_number = _first_scalar(webhook, ("mergeRequestIid", "mergeRequestIID", "iid"))
-            repository = _first_scalar(
-                webhook,
-                ("sourceProjectPathWithNamespace", "projectPathWithNamespace", "sourceProjectName"),
-            )
-            source_project_id = _first_scalar(webhook, ("sourceProjectId", "projectId"))
-            if repository is None and source_project_id:
-                repository = f"project:{source_project_id}"
-            head_name = _first_scalar(webhook, ("sourceBranch", "branch")) or head_name
+        trace = await self._trace_build(build)
+        attribution = await self._attribution_from_trace(build, trace)
 
         stages = await self._workflow_stages(build.job_full_name, build.number)
         failed_stage = next(
@@ -302,7 +242,7 @@ class JenkinsSourceAdapter:
             except Exception:
                 error_lines = []
 
-        cause_classes = {_cause_class(item) for item in all_causes}
+        cause_classes = {_cause_class(item) for item in trace.all_causes}
         propagated = any("DownstreamFailureCause" in item for item in cause_classes)
         propagated = propagated or any(_PROPAGATED.search(line) for line in error_lines)
         classification = classify_failure(error_lines)
@@ -316,29 +256,20 @@ class JenkinsSourceAdapter:
                 classification = "test_failure"
 
         summary = _failure_summary(error_lines, failed_stage, build.result, propagated)
-        if detail_unavailable and not error_lines:
+        if not trace.details_available and not error_lines:
             summary = "Build details are no longer retained by Jenkins"
         generic_summary = summary in {
             f"Build finished with {build.result}",
             f"{failed_stage} finished with {build.result}",
         }
-        signature = error_signature([summary]) if error_lines and not detail_unavailable and not generic_summary else ""
+        signature = error_signature([summary]) if error_lines and trace.details_available and not generic_summary else ""
         if not signature:
             signature_input = f"{classification}|{failed_stage or '-'}|{build.result}|{build.job_full_name}"
             signature = hashlib.sha256(signature_input.encode()).hexdigest()[:12]
         return JenkinsBuildEnrichment(
             job_full_name=build.job_full_name,
             number=build.number,
-            upstream_job_full_name=direct_upstream_job,
-            upstream_build_number=direct_upstream_number,
-            root_job_full_name=root_job,
-            root_build_number=root_number,
-            trigger_kind=_trigger_kind(root_causes),
-            source_provider=provider,
-            repository=repository,
-            change_number=change_number,
-            change_url=change_url,
-            head_name=head_name,
+            attribution=attribution,
             failed_stage=failed_stage,
             failure_classification=classification,
             failure_signature=signature,
@@ -346,8 +277,110 @@ class JenkinsSourceAdapter:
             propagated_failure=propagated,
             error_lines=tuple(error_lines[-12:]),
             stage_evidence=tuple(_stage_evidence(stage) for stage in stages),
-            cause_evidence=tuple(_cause_evidence(cause) for cause in all_causes),
             log_enriched=log_enriched,
+        )
+
+    async def _trace_build(self, build: JenkinsBuildSnapshot) -> "_BuildTrace":
+        current_job = build.job_full_name
+        current_number = build.number
+        direct_upstream_job: str | None = None
+        direct_upstream_number: int | None = None
+        root_job = current_job
+        root_number = current_number
+        all_causes: list[dict[str, Any]] = []
+        root_causes: list[dict[str, Any]] = []
+        root_payload: dict[str, Any] = {}
+        seen: set[tuple[str, int]] = set()
+        details_available = True
+        for depth in range(10):
+            if (current_job, current_number) in seen:
+                break
+            seen.add((current_job, current_number))
+            try:
+                payload = await self._build_detail(current_job, current_number)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404 and depth == 0:
+                    details_available = False
+                    payload = {}
+                elif depth > 0:
+                    root_job, root_number = current_job, current_number
+                    details_available = False
+                    break
+                else:
+                    raise
+            except Exception:
+                if depth == 0:
+                    raise
+                root_job, root_number = current_job, current_number
+                details_available = False
+                break
+            causes = _causes(payload)
+            all_causes.extend(causes)
+            upstream = next(
+                (
+                    cause
+                    for cause in causes
+                    if cause.get("upstreamProject") and _integer(cause.get("upstreamBuild")) is not None
+                ),
+                None,
+            )
+            if upstream is None:
+                root_job, root_number, root_causes, root_payload = current_job, current_number, causes, payload
+                break
+            upstream_job = str(upstream["upstreamProject"])
+            upstream_number = int(upstream["upstreamBuild"])
+            if depth == 0:
+                direct_upstream_job = upstream_job
+                direct_upstream_number = upstream_number
+            current_job, current_number = upstream_job, upstream_number
+
+        return _BuildTrace(
+            direct_upstream_job=direct_upstream_job,
+            direct_upstream_number=direct_upstream_number,
+            root_job=root_job,
+            root_number=root_number,
+            root_payload=root_payload,
+            root_causes=tuple(root_causes),
+            all_causes=tuple(all_causes),
+            details_available=details_available,
+        )
+
+    async def _attribution_from_trace(
+        self,
+        build: JenkinsBuildSnapshot,
+        trace: "_BuildTrace",
+    ) -> JenkinsBuildAttribution:
+
+        source_job = JenkinsJobSnapshot(
+            full_name=build.job_full_name,
+            display_name=build.job_full_name.rsplit("/", 1)[-1],
+            url=build.url.rsplit(f"/{build.number}", 1)[0] + "/",
+            job_class="",
+            color=None,
+            parent_full_name=build.job_full_name.rsplit("/", 1)[0] if "/" in build.job_full_name else None,
+        )
+        source_job = await self.enrich_job_source(source_job)
+        trigger_kind = _trigger_kind(list(trace.root_causes))
+        source = await self._attributor.resolve(
+            root_job=trace.root_job,
+            root_build_number=trace.root_number,
+            trigger_kind=trigger_kind,
+            root_payload=trace.root_payload,
+            job_source=source_job,
+            root_url=_root_build_url(build.url, trace.root_job, trace.root_number),
+            details_available=trace.details_available,
+        )
+        return JenkinsBuildAttribution(
+            job_full_name=build.job_full_name,
+            number=build.number,
+            upstream_job_full_name=trace.direct_upstream_job,
+            upstream_build_number=trace.direct_upstream_number,
+            root_job_full_name=trace.root_job,
+            root_build_number=trace.root_number,
+            trigger_kind=trigger_kind,
+            source=source,
+            head_name=source.branch or source_job.head_name,
+            cause_evidence=tuple(_cause_evidence(cause) for cause in trace.all_causes),
         )
 
     async def _workflow_stages(self, job_name: str, number: int) -> list[dict[str, Any]]:
@@ -364,7 +397,12 @@ class JenkinsSourceAdapter:
             task = asyncio.create_task(
                 self._client.get_json(
                     f"{job_to_api_path(job_name)}/{number}/api/json",
-                    params={"tree": "actions[_class,causes[*]]"},
+                    params={
+                        "tree": (
+                            "actions[_class,causes[*],remoteUrls[*],"
+                            "lastBuiltRevision[SHA1,branch[name,SHA1]],parameters[name,value]]"
+                        )
+                    },
                 )
             )
             self._build_detail_tasks[key] = task
@@ -377,6 +415,18 @@ class JenkinsSourceAdapter:
         except Exception:
             self._build_detail_tasks.pop(key, None)
             raise
+
+
+@dataclass(frozen=True, slots=True)
+class _BuildTrace:
+    direct_upstream_job: str | None
+    direct_upstream_number: int | None
+    root_job: str
+    root_number: int
+    root_payload: Mapping[str, Any]
+    root_causes: tuple[dict[str, Any], ...]
+    all_causes: tuple[dict[str, Any], ...]
+    details_available: bool
 
 
 def _head_type(class_name: str) -> JenkinsHeadType:
@@ -405,6 +455,13 @@ def _change_number_from_url(raw: str | None) -> str | None:
         return None
     match = re.search(r"/(?:pull|merge_requests)/(\d+)(?:/|$)", raw)
     return match.group(1) if match else None
+
+
+def _root_build_url(build_url: str, root_job: str, root_number: int) -> str:
+    parsed = urlparse(build_url)
+    if not parsed.scheme or not parsed.netloc:
+        return build_url
+    return f"{parsed.scheme}://{parsed.netloc}{job_to_api_path(root_job)}/{root_number}/"
 
 
 def _timestamp(value: Any) -> datetime | None:

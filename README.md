@@ -21,6 +21,8 @@ React SPA -> FastAPI /api/v2 -> PostgreSQL
 
 The Jenkins monitor indexes every discoverable job and its retained build history. Completed non-propagated failures are deterministically enriched, correlated by stable failure signature or logical execution, and linked to an incident. Every material unique incident is queued for eventual agent investigation; an active request is deduplicated instead of dropping work above a per-scan cap. Deep scans also enqueue the active incident backlog.
 
+Source attribution is a separate deterministic pipeline. Version-controlled root-job profiles declare the expected SCM provider and repository boundary; Jenkins causes, parameters, and checkout metadata identify the concrete change request or revision; GitHub/GitLab verify and enrich that identity when credentials are available. Attribution is inherited across the whole logical execution and backfilled independently from console-log enrichment. Non-SCM runs are identified as pipeline sources, and conflicting confirmed sources remain visible instead of collapsing to `unknown`.
+
 The agent can read Jenkins build logs, parameters, stages, tests, job history, queue and agents; Kubernetes resources, events, pod logs and metrics; Prometheus; and GitHub/GitLab change metadata and diffs. Tool calls are read-only and persisted in the investigation result. Per-mode output limits, compacted prior tool results, round limits, and token budgets bound each investigation. Only the final assessment and explicit tool trace are retained. Build evidence status and agent-analysis status are separate API/UI fields.
 
 Finding identity is a full SHA-256 over canonical compact JSON containing `[rule_id, resource_id, identity_dimensions]`. Correlation is deterministic and never discards an observation.
@@ -42,6 +44,8 @@ Each worktree receives isolated API, frontend, PostgreSQL, Valkey, SMTP, and Mai
 ```
 
 Without Jenkins, Kubernetes, LLM, or delivery credentials, the local services still start. Detector failures are persisted as check results and cannot resolve existing incidents.
+
+GitHub/GitLab tokens are also used for read-only source verification when provider delivery is disabled. Provider comments additionally require a verified source and `allow_mr_comments: true` on the matching profile; every checked-in profile defaults to false.
 
 ## Runtime Commands
 

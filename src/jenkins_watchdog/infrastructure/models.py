@@ -419,6 +419,7 @@ class JenkinsBuildRecord(Base):
         Index("ix_jenkins_builds_signature", "failure_signature", "started_at"),
         Index("ix_jenkins_builds_enrichment", "enrichment_status", "started_at"),
         Index("ix_jenkins_builds_incident", "incident_id", "started_at"),
+        Index("ix_jenkins_builds_source_status", "source_status", "started_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -443,6 +444,20 @@ class JenkinsBuildRecord(Base):
     repository: Mapped[str | None] = mapped_column(String(768))
     change_number: Mapped[str | None] = mapped_column(String(128))
     change_url: Mapped[str | None] = mapped_column(String(2048))
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="unresolved")
+    source_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    source_profile_id: Mapped[str | None] = mapped_column(String(128))
+    source_branch: Mapped[str | None] = mapped_column(String(768))
+    source_commit_sha: Mapped[str | None] = mapped_column(String(128))
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    source_title: Mapped[str | None] = mapped_column(String(1024))
+    source_state: Mapped[str | None] = mapped_column(String(64))
+    source_resolution_method: Mapped[str] = mapped_column(String(64), nullable=False, default="none")
+    source_reason: Mapped[str | None] = mapped_column(String(512))
+    source_allow_mr_comments: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_provenance: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    source_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_attributed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     head_name: Mapped[str | None] = mapped_column(String(768))
     failed_stage: Mapped[str | None] = mapped_column(String(768))
     failure_classification: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")

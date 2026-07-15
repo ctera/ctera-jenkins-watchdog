@@ -1382,6 +1382,54 @@
             "title": "Root Job",
             "type": "string"
           },
+          "source_allow_mr_comments": {
+            "default": false,
+            "title": "Source Allow Mr Comments",
+            "type": "boolean"
+          },
+          "source_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Branch"
+          },
+          "source_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit Sha"
+          },
+          "source_kind": {
+            "default": "unresolved",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Profile Id"
+          },
+          "source_profile_registered": {
+            "default": false,
+            "title": "Source Profile Registered",
+            "type": "boolean"
+          },
           "source_provider": {
             "anyOf": [
               {
@@ -1392,6 +1440,72 @@
               }
             ],
             "title": "Source Provider"
+          },
+          "source_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Reason"
+          },
+          "source_resolution_method": {
+            "default": "none",
+            "title": "Source Resolution Method",
+            "type": "string"
+          },
+          "source_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source State"
+          },
+          "source_status": {
+            "default": "pending",
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Verified At"
           },
           "started_at": {
             "format": "date-time",
@@ -1630,6 +1744,54 @@
             "title": "Root Job",
             "type": "string"
           },
+          "source_allow_mr_comments": {
+            "default": false,
+            "title": "Source Allow Mr Comments",
+            "type": "boolean"
+          },
+          "source_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Branch"
+          },
+          "source_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit Sha"
+          },
+          "source_kind": {
+            "default": "unresolved",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Profile Id"
+          },
+          "source_profile_registered": {
+            "default": false,
+            "title": "Source Profile Registered",
+            "type": "boolean"
+          },
           "source_provider": {
             "anyOf": [
               {
@@ -1640,6 +1802,72 @@
               }
             ],
             "title": "Source Provider"
+          },
+          "source_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Reason"
+          },
+          "source_resolution_method": {
+            "default": "none",
+            "title": "Source Resolution Method",
+            "type": "string"
+          },
+          "source_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source State"
+          },
+          "source_status": {
+            "default": "pending",
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Verified At"
           },
           "started_at": {
             "format": "date-time",
@@ -1766,6 +1994,17 @@
       },
       "V2JobFamilyResponse": {
         "properties": {
+          "change_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Number"
+          },
           "coverage": {
             "title": "Coverage",
             "type": "string"
@@ -1847,6 +2086,49 @@
             "title": "Run Count",
             "type": "integer"
           },
+          "source_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Branch"
+          },
+          "source_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit Sha"
+          },
+          "source_kind": {
+            "default": "unresolved",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Profile Id"
+          },
+          "source_profile_registered": {
+            "default": false,
+            "title": "Source Profile Registered",
+            "type": "boolean"
+          },
           "source_provider": {
             "anyOf": [
               {
@@ -1857,6 +2139,33 @@
               }
             ],
             "title": "Source Provider"
+          },
+          "source_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Reason"
+          },
+          "source_status": {
+            "default": "pending",
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
           },
           "url": {
             "title": "Url",
@@ -2048,6 +2357,49 @@
             "title": "Root Job",
             "type": "string"
           },
+          "source_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Branch"
+          },
+          "source_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit Sha"
+          },
+          "source_kind": {
+            "default": "unresolved",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Profile Id"
+          },
+          "source_profile_registered": {
+            "default": false,
+            "title": "Source Profile Registered",
+            "type": "boolean"
+          },
           "source_provider": {
             "anyOf": [
               {
@@ -2058,6 +2410,72 @@
               }
             ],
             "title": "Source Provider"
+          },
+          "source_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Reason"
+          },
+          "source_resolution_method": {
+            "default": "none",
+            "title": "Source Resolution Method",
+            "type": "string"
+          },
+          "source_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source State"
+          },
+          "source_status": {
+            "default": "pending",
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Verified At"
           },
           "title": {
             "title": "Title",
@@ -2961,6 +3379,9 @@
                 {
                   "enum": [
                     "merge_request",
+                    "repository",
+                    "pipeline",
+                    "multiple",
                     "infrastructure",
                     "unknown"
                   ],

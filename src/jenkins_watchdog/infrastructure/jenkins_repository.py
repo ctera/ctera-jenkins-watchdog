@@ -15,12 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from jenkins_watchdog.application.pagination import decode_cursor, encode_cursor
 from jenkins_watchdog.application.types import CursorPage
 from jenkins_watchdog.domain.jenkins import (
+    JenkinsBuildAttribution,
     JenkinsBuildEnrichment,
     JenkinsBuildSnapshot,
     JenkinsJobSnapshot,
     JenkinsNovelty,
     JenkinsSyncStats,
 )
+from jenkins_watchdog.domain.source import SourceAttribution, SourceKind
 from jenkins_watchdog.infrastructure.models import (
     IncidentRecord,
     JenkinsBuildEdgeRecord,
@@ -226,6 +228,11 @@ class SqlAlchemyJenkinsRepository:
                         duration_ms=build.duration_ms,
                         logical_run_key=f"{build.job_full_name}#{build.number}",
                         trigger_kind="unknown",
+                        source_kind="unresolved",
+                        source_status="pending" if failure_like else "not_needed",
+                        source_resolution_method="none",
+                        source_allow_mr_comments=False,
+                        source_provenance=[],
                         failure_classification="unknown",
                         failure_signature="",
                         propagated_failure=False,
@@ -251,6 +258,7 @@ class SqlAlchemyJenkinsRepository:
                     record.updated_at = now
                     if became_failure:
                         record.enrichment_status = "pending"
+                        record.source_status = "pending"
             job = await self._session.get(JenkinsJobRecord, job_name)
             if job is not None:
                 newest = max(numbers)
@@ -302,7 +310,71 @@ class SqlAlchemyJenkinsRepository:
         ).all()
         return tuple(_snapshot(record) for record in records)
 
-    async def save_enrichment(self, enrichment: JenkinsBuildEnrichment, *, now: datetime) -> None:
+    async def pending_attribution(self, *, limit: int) -> tuple[JenkinsBuildSnapshot, ...]:
+        records = (
+            await self._session.scalars(
+                select(JenkinsBuildRecord)
+                .where(
+                    JenkinsBuildRecord.source_status == "pending",
+                    JenkinsBuildRecord.result.in_(_FAILURE_RESULTS),
+                )
+                .order_by(JenkinsBuildRecord.started_at.desc(), JenkinsBuildRecord.id.desc())
+                .limit(max(limit * 4, limit))
+            )
+        ).all()
+        selected: list[JenkinsBuildRecord] = []
+        logical_runs: set[str] = set()
+        for record in records:
+            if record.logical_run_key in logical_runs:
+                continue
+            logical_runs.add(record.logical_run_key)
+            selected.append(record)
+            if len(selected) >= limit:
+                break
+        return tuple(_snapshot(record) for record in selected)
+
+    async def save_attribution(
+        self,
+        attribution: JenkinsBuildAttribution,
+        *,
+        now: datetime,
+    ) -> tuple[str, ...]:
+        return await self._persist_attribution(attribution, now=now)
+
+    async def mark_attribution_failed(
+        self,
+        job_name: str,
+        number: int,
+        *,
+        now: datetime,
+        summary: str,
+    ) -> None:
+        record = await self._session.scalar(
+            select(JenkinsBuildRecord).where(
+                JenkinsBuildRecord.job_full_name == job_name,
+                JenkinsBuildRecord.build_number == number,
+            )
+        )
+        if record is None:
+            return
+        attempt_count = int(record.evidence.get("source_attribution_attempt_count") or 0) + 1
+        record.source_status = "pending" if attempt_count < 3 else "unavailable"
+        record.source_reason = summary[:512]
+        record.evidence = {
+            **record.evidence,
+            "source_attribution_attempt_count": attempt_count,
+            "source_attribution_error": summary[:500],
+        }
+        record.updated_at = now
+        await self._session.flush()
+
+    async def save_enrichment(
+        self,
+        enrichment: JenkinsBuildEnrichment,
+        *,
+        now: datetime,
+    ) -> tuple[str, ...]:
+        incident_ids = await self._persist_attribution(enrichment.attribution, now=now)
         record = await self._session.scalar(
             select(JenkinsBuildRecord).where(
                 JenkinsBuildRecord.job_full_name == enrichment.job_full_name,
@@ -311,31 +383,66 @@ class SqlAlchemyJenkinsRepository:
         )
         if record is None:
             raise LookupError(f"Jenkins build {enrichment.job_full_name} #{enrichment.number} is not indexed")
-        record.upstream_job_full_name = enrichment.upstream_job_full_name
-        record.upstream_build_number = enrichment.upstream_build_number
-        record.root_job_full_name = enrichment.root_job_full_name
-        record.root_build_number = enrichment.root_build_number
         record.logical_run_key = enrichment.logical_run_key
-        record.trigger_kind = enrichment.trigger_kind
-        record.source_provider = enrichment.source_provider
-        record.repository = enrichment.repository
-        record.change_number = enrichment.change_number
-        record.change_url = enrichment.change_url
-        record.head_name = enrichment.head_name
         record.failed_stage = enrichment.failed_stage
         record.failure_classification = enrichment.failure_classification
         record.failure_signature = enrichment.failure_signature
         record.failure_summary = enrichment.failure_summary
         record.propagated_failure = enrichment.propagated_failure
         record.evidence = {
+            **record.evidence,
             "error_lines": list(enrichment.error_lines),
             "stages": [dict(item) for item in enrichment.stage_evidence],
-            "causes": [dict(item) for item in enrichment.cause_evidence],
+            "causes": [dict(item) for item in enrichment.attribution.cause_evidence],
         }
         record.enrichment_status = "enriched" if enrichment.log_enriched else "log_pending"
         record.updated_at = now
         await self._create_edge(record, now=now)
         await self._session.flush()
+        return incident_ids
+
+    async def _persist_attribution(
+        self,
+        attribution: JenkinsBuildAttribution,
+        *,
+        now: datetime,
+    ) -> tuple[str, ...]:
+        record = await self._session.scalar(
+            select(JenkinsBuildRecord).where(
+                JenkinsBuildRecord.job_full_name == attribution.job_full_name,
+                JenkinsBuildRecord.build_number == attribution.number,
+            )
+        )
+        if record is None:
+            raise LookupError(f"Jenkins build {attribution.job_full_name} #{attribution.number} is not indexed")
+        previous_logical_run = record.logical_run_key
+        record.upstream_job_full_name = attribution.upstream_job_full_name
+        record.upstream_build_number = attribution.upstream_build_number
+        record.root_job_full_name = attribution.root_job_full_name
+        record.root_build_number = attribution.root_build_number
+        record.logical_run_key = attribution.logical_run_key
+        record.trigger_kind = attribution.trigger_kind
+        record.head_name = attribution.head_name
+        logical_keys = {previous_logical_run, attribution.logical_run_key}
+        targets = list(
+            (
+                await self._session.scalars(
+                    select(JenkinsBuildRecord).where(
+                        or_(
+                            JenkinsBuildRecord.id == record.id,
+                            JenkinsBuildRecord.logical_run_key.in_(logical_keys),
+                        )
+                    )
+                )
+            ).all()
+        )
+        incident_ids: set[str] = set()
+        for target in targets:
+            _apply_source(target, attribution.source, now=now)
+            if target.incident_id is not None:
+                incident_ids.add(str(target.incident_id))
+        await self._session.flush()
+        return tuple(sorted(incident_ids))
 
     async def mark_enrichment_failed(self, job_name: str, number: int, *, now: datetime, summary: str) -> None:
         record = await self._session.scalar(
@@ -473,6 +580,12 @@ class SqlAlchemyJenkinsRepository:
                 item.novelty in {JenkinsNovelty.NEW_FAILURE.value, JenkinsNovelty.NEW_REGRESSION.value}
                 for item in failures
             ),
+            "source_kind_counts": dict(Counter(item.source_kind for item in failures)),
+            "verified_source_count": sum(item.source_status == "verified" for item in failures),
+            "unresolved_source_count": sum(
+                item.source_status in {"pending", "conflict", "unavailable", "unresolved"}
+                for item in failures
+            ),
             "running_build_count": sum(item.building for item in builds),
             "cumulative_wall_hours": round(sum(item.duration_ms for item in builds if not item.building) / 3_600_000, 1),
             "exact_job_count": sum(item.history_coverage in {"exact", "job_started_in_window"} for item in jobs),
@@ -574,6 +687,18 @@ class SqlAlchemyJenkinsRepository:
                     "repository": primary.repository,
                     "change_number": primary.change_number,
                     "change_url": primary.change_url,
+                    "source_kind": primary.source_kind,
+                    "source_status": primary.source_status,
+                    "source_profile_id": primary.source_profile_id,
+                    "source_profile_registered": primary.source_profile_id is not None,
+                    "source_branch": primary.source_branch,
+                    "source_commit_sha": primary.source_commit_sha,
+                    "source_url": primary.source_url,
+                    "source_title": primary.source_title,
+                    "source_state": primary.source_state,
+                    "source_resolution_method": primary.source_resolution_method,
+                    "source_reason": primary.source_reason,
+                    "source_verified_at": primary.source_verified_at,
                     "affected_build_count": len(group),
                     "propagated_build_count": sum(item.propagated_failure for item in group),
                     "builds": [_build_brief(item) for item in sorted(group, key=lambda value: value.started_at)],
@@ -648,8 +773,17 @@ class SqlAlchemyJenkinsRepository:
                     "parent": job.parent_full_name,
                     "head_type": job.head_type,
                     "head_name": job.head_name,
-                    "source_provider": job.source_provider,
-                    "repository": job.repository,
+                    "source_provider": latest.source_provider or job.source_provider,
+                    "repository": latest.repository or job.repository,
+                    "source_kind": latest.source_kind,
+                    "source_status": latest.source_status,
+                    "source_profile_id": latest.source_profile_id,
+                    "source_profile_registered": latest.source_profile_id is not None,
+                    "change_number": latest.change_number,
+                    "source_branch": latest.source_branch,
+                    "source_commit_sha": latest.source_commit_sha,
+                    "source_url": latest.source_url,
+                    "source_reason": latest.source_reason,
                     "url": job.url,
                     "coverage": job.history_coverage,
                     "run_count": len(builds),
@@ -865,7 +999,32 @@ def _snapshot(record: JenkinsBuildRecord) -> JenkinsBuildSnapshot:
         duration_ms=record.duration_ms,
         building=record.building,
         enrichment_status=record.enrichment_status,
+        source_status=record.source_status,
+        logical_run_key=record.logical_run_key,
     )
+
+
+def _apply_source(record: JenkinsBuildRecord, source: SourceAttribution, *, now: datetime) -> None:
+    record.source_kind = source.kind.value
+    record.source_status = source.status.value
+    record.source_provider = source.provider
+    record.repository = source.repository
+    record.change_number = source.change_number if source.kind is SourceKind.CHANGE_REQUEST else None
+    record.change_url = source.url if source.kind is SourceKind.CHANGE_REQUEST else None
+    record.source_profile_id = source.profile_id
+    record.source_branch = source.branch
+    record.source_commit_sha = source.commit_sha
+    record.source_url = source.url
+    record.source_title = source.title
+    record.source_state = source.state
+    record.source_resolution_method = source.resolution_method
+    record.source_reason = source.reason
+    record.source_allow_mr_comments = source.allow_mr_comments
+    record.source_provenance = [dict(item) for item in source.provenance]
+    record.source_verified_at = source.verified_at
+    record.source_attributed_at = now
+    record.evidence = {**record.evidence, "source_attribution": source.evidence()}
+    record.updated_at = now
 
 
 def _build_brief(record: JenkinsBuildRecord) -> dict[str, Any]:
@@ -898,6 +1057,19 @@ def _build_dict(record: JenkinsBuildRecord, job: JenkinsJobRecord) -> dict[str, 
         "repository": record.repository or job.repository,
         "change_number": record.change_number,
         "change_url": record.change_url,
+        "source_kind": record.source_kind,
+        "source_status": record.source_status,
+        "source_profile_id": record.source_profile_id,
+        "source_profile_registered": record.source_profile_id is not None,
+        "source_branch": record.source_branch,
+        "source_commit_sha": record.source_commit_sha,
+        "source_url": record.source_url,
+        "source_title": record.source_title,
+        "source_state": record.source_state,
+        "source_resolution_method": record.source_resolution_method,
+        "source_reason": record.source_reason,
+        "source_allow_mr_comments": record.source_allow_mr_comments,
+        "source_verified_at": record.source_verified_at,
         "trigger_kind": record.trigger_kind,
         "root_job": record.root_job_full_name or record.job_full_name,
         "root_build_number": record.root_build_number or record.build_number,

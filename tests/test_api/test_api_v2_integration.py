@@ -17,7 +17,12 @@ from jenkins_watchdog.application.investigations import InvestigationQueueServic
 from jenkins_watchdog.application.scan_service import ScanService
 from jenkins_watchdog.application.selection import AnalysisSelectionService
 from jenkins_watchdog.application.types import EnqueueScan
-from jenkins_watchdog.domain.jenkins import JenkinsBuildEnrichment, JenkinsBuildSnapshot, JenkinsJobSnapshot
+from jenkins_watchdog.domain.jenkins import (
+    JenkinsBuildAttribution,
+    JenkinsBuildEnrichment,
+    JenkinsBuildSnapshot,
+    JenkinsJobSnapshot,
+)
 from jenkins_watchdog.domain.model import (
     Action,
     ActionStatus,
@@ -34,6 +39,7 @@ from jenkins_watchdog.domain.model import (
     ScanMode,
     Severity,
 )
+from jenkins_watchdog.domain.source import SourceAttribution, SourceKind, SourceStatus
 from jenkins_watchdog.entrypoints.api_v2 import router
 from jenkins_watchdog.infrastructure.uow import SqlAlchemyUnitOfWork
 
@@ -377,6 +383,28 @@ async def test_analyze_build_creates_incident_and_durable_request(
             JenkinsBuildEnrichment(
                 job_full_name=job.full_name,
                 number=12358,
+                attribution=JenkinsBuildAttribution(
+                    job_full_name=job.full_name,
+                    number=12358,
+                    root_job_full_name="MR_Trigger",
+                    root_build_number=18156,
+                    trigger_kind="gitlab_webhook",
+                    source=SourceAttribution(
+                        kind=SourceKind.CHANGE_REQUEST,
+                        status=SourceStatus.VERIFIED,
+                        provider="gitlab",
+                        repository="Portal/Backend",
+                        change_number="6836",
+                        url="http://git.ctera.local/Portal/Backend/-/merge_requests/6836",
+                        branch="PIM-7623-av",
+                        commit_sha="444e7bd",
+                        title="PIM-7623 - infected files are missing device_id",
+                        state="opened",
+                        profile_id="portal-backend",
+                        resolution_method="root_cause_url",
+                        verified_at=NOW,
+                    ),
+                ),
                 failure_classification="compilation_error",
                 failure_signature="typescript-error",
                 failure_summary="TypeScript compilation failed",
@@ -405,6 +433,14 @@ async def test_analyze_build_creates_incident_and_durable_request(
     assert queued.json()["requested_by"] == "operator@example.com"
     assert detail.json()["incident_id"] == queued.json()["incident_id"]
     assert detail.json()["investigation_request"]["id"] == queued.json()["id"]
+    assert detail.json()["source_kind"] == "change_request"
+    assert detail.json()["source_status"] == "verified"
+    assert detail.json()["source_profile_id"] == "portal-backend"
+    assert detail.json()["repository"] == "Portal/Backend"
+    assert detail.json()["change_number"] == "6836"
+    assert detail.json()["source_verified_at"] == NOW.isoformat().replace("+00:00", "Z")
+    assert detail.json()["incident"]["source"]["kind"] == "merge_request"
+    assert detail.json()["incident"]["source"]["verified"] is True
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ from jenkins_watchdog.application.ports import UnitOfWorkFactory
 from jenkins_watchdog.application.reasoning import jenkins_build_observations
 from jenkins_watchdog.domain.model import FindingObservation, Incident
 from jenkins_watchdog.domain.policies import correlate_observation, correlation_title
+from jenkins_watchdog.domain.source import SourceAttribution, SourceKind, SourceStatus
 
 
 class IncidentService:
@@ -66,8 +67,12 @@ class IncidentService:
         if linked_id:
             async with self._uow_factory() as uow:
                 linked = await uow.incidents.get(str(linked_id))
-            if linked is not None:
-                return linked
+                if linked is not None:
+                    source = _merge_source(linked.source, _source_association(jenkins_build_observations((build,))[0]))
+                    linked = linked.associate_source(source, now=now)
+                    await uow.incidents.save(linked)
+                    await uow.commit()
+                    return linked
 
         observation = jenkins_build_observations((build,))[0]
         signature = str(build.get("failure_signature") or "")
@@ -98,9 +103,29 @@ class IncidentService:
             await uow.commit()
         return incident
 
+    async def associate_jenkins_source(
+        self,
+        incident_id: str,
+        source: SourceAttribution,
+        *,
+        now: datetime,
+    ) -> Incident | None:
+        async with self._uow_factory() as uow:
+            incident = await uow.incidents.get(incident_id)
+            if incident is None:
+                return None
+            merged = _merge_source(incident.source, _source_from_attribution(source))
+            incident = incident.associate_source(merged, now=now)
+            await uow.incidents.save(incident)
+            await uow.commit()
+            return incident
+
 
 def _source_association(observation: FindingObservation) -> dict[str, Any]:
     evidence = observation.evidence
+    attribution = evidence.get("source_attribution")
+    if isinstance(attribution, Mapping):
+        return _source_from_evidence(attribution, evidence)
     scm = evidence.get("scm")
     metadata: Mapping[str, Any] = scm if isinstance(scm, Mapping) else evidence
     provider = metadata.get("provider") or metadata.get("scm_provider")
@@ -132,28 +157,128 @@ def _source_association(observation: FindingObservation) -> dict[str, Any]:
     return {"kind": "unknown", "confirmed": False, "reason": "no_complete_source_metadata"}
 
 
+def _source_from_attribution(source: SourceAttribution) -> dict[str, Any]:
+    return _source_from_evidence(source.evidence(), {})
+
+
+def _source_from_evidence(metadata: Mapping[str, Any], evidence: Mapping[str, Any]) -> dict[str, Any]:
+    kind = str(metadata.get("kind") or "unresolved")
+    status = str(metadata.get("status") or "unresolved")
+    common = {
+        "confirmed": status in {SourceStatus.RESOLVED.value, SourceStatus.VERIFIED.value},
+        "verified": status == SourceStatus.VERIFIED.value,
+        "status": status,
+        "profile_id": metadata.get("profile_id"),
+        "profile_registered": bool(metadata.get("profile_registered")),
+        "resolution_method": metadata.get("resolution_method"),
+        "reason": metadata.get("reason"),
+    }
+    if kind == SourceKind.CHANGE_REQUEST.value:
+        provider = metadata.get("provider")
+        repository = metadata.get("repository")
+        change_number = metadata.get("change_number")
+        if provider and repository and change_number:
+            return {
+                "kind": "merge_request",
+                **common,
+                "provider": str(provider),
+                "repository": str(repository),
+                "change_number": str(change_number),
+                "url": metadata.get("url"),
+                "branch": metadata.get("branch"),
+                "commit_sha": metadata.get("commit_sha"),
+                "title": metadata.get("title"),
+                "state": metadata.get("state"),
+                "allow_mr_comments": bool(metadata.get("allow_mr_comments")) and common["verified"],
+                "job_name": evidence.get("job_name"),
+                "build_number": evidence.get("build_number") or evidence.get("latest_build"),
+            }
+    if kind == SourceKind.REPOSITORY_REVISION.value and metadata.get("provider") and metadata.get("repository"):
+        return {
+            "kind": "repository",
+            **common,
+            "provider": str(metadata["provider"]),
+            "repository": str(metadata["repository"]),
+            "url": metadata.get("url"),
+            "branch": metadata.get("branch"),
+            "commit_sha": metadata.get("commit_sha"),
+            "title": metadata.get("title"),
+        }
+    if kind == SourceKind.PIPELINE.value:
+        return {
+            "kind": "pipeline",
+            **common,
+            "provider": "jenkins",
+            "job_name": _pipeline_job_name(metadata, evidence),
+            "trigger_kind": evidence.get("trigger_kind") or metadata.get("state"),
+            "url": metadata.get("url"),
+        }
+    return {
+        "kind": "unknown",
+        "confirmed": False,
+        "provider": metadata.get("provider"),
+        "repository": metadata.get("repository"),
+        "reason": metadata.get("reason") or f"source_attribution_{status}",
+    }
+
+
+def _pipeline_job_name(metadata: Mapping[str, Any], evidence: Mapping[str, Any]) -> Any:
+    value = evidence.get("root_job") or evidence.get("job_name") or metadata.get("title")
+    if not isinstance(value, str):
+        return value
+    job_name, marker, build_number = value.rpartition(" #")
+    return job_name if marker and build_number.isdigit() else value
+
+
 def _merge_source(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
-    if incoming.get("reason") in {
-        "partial_scm_metadata",
-        "conflicting_source_metadata",
-        "unsupported_scm_provider",
-    }:
-        return dict(incoming)
     if not existing:
         return dict(incoming)
+    existing_kind = str(existing.get("kind") or "unknown")
+    incoming_kind = str(incoming.get("kind") or "unknown")
+    concrete_kinds = {"merge_request", "repository", "pipeline"}
+    if existing_kind == "infrastructure" and incoming_kind in concrete_kinds:
+        return dict(incoming)
+    if incoming_kind == "infrastructure" and existing_kind in concrete_kinds:
+        return dict(existing)
     existing_confirmed = bool(existing.get("confirmed"))
     incoming_confirmed = bool(incoming.get("confirmed"))
     if not incoming_confirmed:
-        return dict(existing)
+        return dict(existing) if existing_confirmed else dict(incoming)
     if not existing_confirmed:
         return dict(incoming)
-    identity_fields = ("kind", "provider", "repository", "change_number")
-    conflicts = any(
-        existing.get(field) not in (None, "")
-        and incoming.get(field) not in (None, "")
-        and existing.get(field) != incoming.get(field)
-        for field in identity_fields
-    )
-    if conflicts:
-        return {"kind": "unknown", "confirmed": False, "reason": "conflicting_source_metadata"}
-    return {**dict(existing), **dict(incoming)}
+    sources = _individual_sources(existing)
+    incoming_sources = _individual_sources(incoming)
+    by_identity = {_source_identity(source): source for source in sources}
+    for source in incoming_sources:
+        identity = _source_identity(source)
+        by_identity[identity] = {**by_identity.get(identity, {}), **source}
+    values = list(by_identity.values())
+    if any(source.get("kind") not in {"infrastructure", "unknown"} for source in values):
+        values = [source for source in values if source.get("kind") != "infrastructure"]
+    if len(values) == 1:
+        return values[0]
+    values.sort(key=lambda item: _source_identity(item))
+    return {
+        "kind": "multiple",
+        "confirmed": True,
+        "verified": all(bool(item.get("verified")) for item in values),
+        "source_count": len(values),
+        "sources": values[:50],
+    }
+
+
+def _individual_sources(source: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if source.get("kind") == "multiple":
+        return [dict(item) for item in source.get("sources") or [] if isinstance(item, Mapping)]
+    return [dict(source)]
+
+
+def _source_identity(source: Mapping[str, Any]) -> str:
+    kind = str(source.get("kind") or "unknown")
+    fields = {
+        "merge_request": (source.get("provider"), source.get("repository"), source.get("change_number")),
+        "repository": (source.get("provider"), source.get("repository"), source.get("commit_sha") or source.get("branch")),
+        "pipeline": (source.get("provider"), source.get("job_name"), source.get("trigger_kind")),
+        "infrastructure": (source.get("provider"), source.get("resource"), source.get("job_name")),
+    }.get(kind, (source.get("provider"), source.get("repository"), source.get("reason")))
+    return "|".join((kind, *(str(item or "") for item in fields)))

@@ -12,6 +12,7 @@ from jenkins_watchdog.application.incidents import IncidentService
 from jenkins_watchdog.application.ports import JenkinsSourcePort, UnitOfWorkFactory
 from jenkins_watchdog.application.selection import AnalysisSelectionService
 from jenkins_watchdog.domain.jenkins import (
+    JenkinsBuildAttribution,
     JenkinsBuildEnrichment,
     JenkinsBuildHistoryPage,
     JenkinsBuildSnapshot,
@@ -37,6 +38,7 @@ class JenkinsMonitorService:
         fetch_concurrency: int = 10,
         enrichment_limit: int = 250,
         log_enrichment_limit: int = 30,
+        source_attribution_limit: int = 500,
         lease_seconds: int = 900,
         heartbeat_seconds: int = 60,
         incident_service: IncidentService | None = None,
@@ -53,6 +55,7 @@ class JenkinsMonitorService:
         self._fetch_concurrency = max(1, fetch_concurrency)
         self._enrichment_limit = max(1, enrichment_limit)
         self._log_enrichment_limit = max(0, log_enrichment_limit)
+        self._source_attribution_limit = max(1, source_attribution_limit)
         self._lease_seconds = max(60, lease_seconds)
         self._heartbeat_seconds = max(15, heartbeat_seconds)
         self._incident_service = incident_service
@@ -208,6 +211,7 @@ class JenkinsMonitorService:
             return_exceptions=True,
         )
         enriched_count = 0
+        source_updates: list[tuple[tuple[str, ...], JenkinsBuildAttribution]] = []
         async with self._uow_factory() as uow:
             for build, enrichment_result in zip(pending, enrichment_results, strict=True):
                 if isinstance(enrichment_result, BaseException):
@@ -221,10 +225,40 @@ class JenkinsMonitorService:
                         summary=f"{type(enrichment_result).__name__}: {enrichment_result}",
                     )
                     continue
-                await uow.jenkins.save_enrichment(enrichment_result, now=self._now())
+                incident_ids = await uow.jenkins.save_enrichment(enrichment_result, now=self._now())
+                source_updates.append((incident_ids, enrichment_result.attribution))
                 enriched_count += 1
             await uow.jenkins.refresh_classifications(now=self._now())
             await uow.commit()
+
+        async with self._uow_factory() as uow:
+            pending_attribution = await uow.jenkins.pending_attribution(limit=self._source_attribution_limit)
+        attribution_results = await asyncio.gather(
+            *(self._attribute_bounded(build, semaphore) for build in pending_attribution),
+            return_exceptions=True,
+        )
+        attributed_count = 0
+        async with self._uow_factory() as uow:
+            for build, attribution_result in zip(pending_attribution, attribution_results, strict=True):
+                if isinstance(attribution_result, BaseException):
+                    errors.append(
+                        f"source attribution {build.job_full_name} #{build.number}: "
+                        f"{type(attribution_result).__name__}"
+                    )
+                    await uow.jenkins.mark_attribution_failed(
+                        build.job_full_name,
+                        build.number,
+                        now=self._now(),
+                        summary=f"{type(attribution_result).__name__}: {attribution_result}",
+                    )
+                    continue
+                incident_ids = await uow.jenkins.save_attribution(attribution_result, now=self._now())
+                source_updates.append((incident_ids, attribution_result))
+                attributed_count += 1
+            await uow.jenkins.refresh_classifications(now=self._now())
+            await uow.commit()
+
+        await self._reconcile_incident_sources(source_updates)
 
         analyzed_candidates, queued_investigations = await self._correlate_and_queue_builds()
 
@@ -246,6 +280,11 @@ class JenkinsMonitorService:
             errors=tuple(errors[:100]),
             details={
                 "source_metadata_jobs": len(enriched_jobs),
+                "source_attributions_resolved": attributed_count,
+                "source_attribution_backlog_remaining_is_bounded": (
+                    bool(pending_attribution)
+                    and len(pending_attribution) == self._source_attribution_limit
+                ),
                 "pending_enrichment_remaining_is_bounded": bool(pending) and len(pending) == batch_limit,
                 "owner": owner,
                 "analysis_candidates_processed": analyzed_candidates,
@@ -253,6 +292,34 @@ class JenkinsMonitorService:
                 "analysis_backlog_remaining_is_bounded": analyzed_candidates == self._analysis_candidate_limit,
             },
         )
+
+    async def _attribute_bounded(
+        self,
+        build: JenkinsBuildSnapshot,
+        semaphore: asyncio.Semaphore,
+    ) -> JenkinsBuildAttribution:
+        async with semaphore:
+            return await self._source.attribute_build(build)
+
+    async def _reconcile_incident_sources(
+        self,
+        updates: list[tuple[tuple[str, ...], JenkinsBuildAttribution]],
+    ) -> None:
+        if self._incident_service is None:
+            return
+        seen: set[tuple[str, str]] = set()
+        for incident_ids, attribution in updates:
+            identity = attribution.logical_run_key
+            for incident_id in incident_ids:
+                key = (incident_id, identity)
+                if key in seen:
+                    continue
+                seen.add(key)
+                await self._incident_service.associate_jenkins_source(
+                    incident_id,
+                    attribution.source,
+                    now=self._now(),
+                )
 
     async def _correlate_and_queue_builds(self) -> tuple[int, int]:
         if self._incident_service is None:
@@ -354,6 +421,8 @@ class JenkinsMonitorWorker:
                     if stats.details.get("pending_enrichment_remaining_is_bounded"):
                         delay = min(15.0, self._interval_seconds)
                     if stats.details.get("analysis_backlog_remaining_is_bounded"):
+                        delay = min(15.0, self._interval_seconds)
+                    if stats.details.get("source_attribution_backlog_remaining_is_bounded"):
                         delay = min(15.0, self._interval_seconds)
             except asyncio.CancelledError:
                 raise

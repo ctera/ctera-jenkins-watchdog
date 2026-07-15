@@ -43,7 +43,7 @@ export interface ChatStreamEvent {
 export interface IncidentFilters {
   status?: "open" | "resolved" | "suppressed";
   severity?: "low" | "warning" | "critical";
-  source_type?: "merge_request" | "infrastructure" | "unknown";
+  source_type?: "merge_request" | "repository" | "pipeline" | "multiple" | "infrastructure" | "unknown";
 }
 
 export interface ActionFilters {

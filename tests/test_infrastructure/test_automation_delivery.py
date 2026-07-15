@@ -186,6 +186,8 @@ async def test_confirmed_mr_plans_per_build_comment_and_email_idempotently(
             "provider": "github",
             "repository": "ctera/app",
             "change_number": "42",
+            "verified": True,
+            "allow_mr_comments": True,
         },
     )
     service = AutomationService(
@@ -203,6 +205,42 @@ async def test_confirmed_mr_plans_per_build_comment_and_email_idempotently(
     comment = next(item for item in first if item.action_type is ActionType.GITHUB_COMMENT)
     assert ":123:v1" in comment.idempotency_key
     assert {item.id for item in second} == {item.id for item in first}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("verified", "allow_mr_comments"),
+    ((False, False), (True, False), (False, True)),
+)
+async def test_provider_comment_requires_verified_and_write_enabled_source_profile(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+    verified: bool,
+    allow_mr_comments: bool,
+) -> None:
+    incident, _ = await seed_incident(
+        postgres_session_factory,
+        source={
+            "kind": "merge_request",
+            "confirmed": True,
+            "provider": "gitlab",
+            "repository": "Portal/Backend",
+            "change_number": "6836",
+            "verified": verified,
+            "allow_mr_comments": allow_mr_comments,
+        },
+        confidence=Confidence.HIGH,
+    )
+    service = AutomationService(
+        uow_factory=lambda: SqlAlchemyUnitOfWork(postgres_session_factory),
+        routing=routing(),
+        renderer=FilePayloadRenderer("templates/automation"),
+        policy=IntegrationPolicy(email_enabled=True, gitlab_enabled=True),
+        now=lambda: NOW,
+    )
+
+    actions = await service.plan(incident.id)
+
+    assert [item.action_type for item in actions] == [ActionType.EMAIL]
 
 
 @pytest.mark.asyncio
@@ -314,6 +352,8 @@ async def test_gitlab_source_routes_to_gitlab_comment_and_low_severity_or_suppre
             "provider": "gitlab",
             "repository": "ctera/app",
             "change_number": "42",
+            "verified": True,
+            "allow_mr_comments": True,
         },
         confidence=Confidence.HIGH,
     )

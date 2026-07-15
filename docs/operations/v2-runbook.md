@@ -22,6 +22,7 @@ kubectl -n jenkins-watchdog get cronjob jenkins-watchdog-regular jenkins-watchdo
 - `python -m jenkins_watchdog worker-health` verifies worker dependencies.
 - Scan detail and SSE events expose stage, attempt, cancellation, and recovery state.
 - Jenkins build detail separates deterministic enrichment (`pending`, `log_pending`, `enriched`, `failed`) from agent work (`queued`, `running`, `succeeded`, `failed`).
+- Jenkins source attribution has its own state (`pending`, `resolved`, `verified`, `conflict`, `unavailable`, `unresolved`) and is not blocked by console-log enrichment.
 - Investigation results contain `tools_used` and `tool_trace`; pipeline conclusions without a console-log read are forced to low confidence.
 - Investigation `usage` records cumulative provider token counts across every round. `WATCHDOG_LLM_SCAN_TOKEN_BUDGET` and `WATCHDOG_LLM_DEEP_SCAN_TOKEN_BUDGET` are soft tool-loop thresholds: once reached, no additional tools are opened and a final synthesis is still required, so reported cumulative usage can exceed the threshold. Tool-output and round limits are the hard safeguards.
 - Regular tool results are capped at 12,000 characters and deep results at 24,000 characters. Older tool messages are compacted during the loop; persisted traces retain each bounded result.
@@ -49,6 +50,28 @@ LIMIT 20;
 ```
 
 A request with an expired `running` lease is claimable by another worker. A terminal `failed` request retains its error; use Analyze Build or Reinvestigate to create a new request after correcting credentials or connectivity.
+
+## Source Attribution
+
+Root-job contracts live in `config/source-profiles.yaml`. Add or change a profile only after checking the root execution's Jenkins causes, parameters, and checkout metadata. Repository names are provider paths, not display labels. Keep `allow_mr_comments` false until the mapping and provider verification have been exercised in read-only mode.
+
+Inspect attribution coverage and unresolved reasons in PostgreSQL:
+
+```sql
+SELECT source_status, source_kind, count(*)
+FROM jenkins_builds
+WHERE result IN ('FAILURE', 'UNSTABLE', 'ABORTED')
+GROUP BY source_status, source_kind
+ORDER BY source_status, source_kind;
+
+SELECT root_job, source_reason, count(*)
+FROM jenkins_builds
+WHERE source_status IN ('conflict', 'unavailable', 'unresolved')
+GROUP BY root_job, source_reason
+ORDER BY count(*) DESC;
+```
+
+The worker processes `WATCHDOG_JENKINS_SOURCE_ATTRIBUTION_LIMIT` logical executions per pass and loops quickly while a backlog remains. A missing provider token leaves usable Jenkins evidence in `resolved` state; it does not discard the source. A provider 404 or profile/repository disagreement is a visible `conflict` and never authorizes an MR comment.
 
 ## Rollback
 

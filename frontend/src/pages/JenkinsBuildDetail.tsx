@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import MarkdownContent from "../components/MarkdownContent";
+import { SourceDetails } from "../components/SourceAttribution";
 import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
 import { analyzeJenkinsBuild, getJenkinsBuild, type JenkinsBuildDetail } from "../services/api";
@@ -136,17 +137,13 @@ export default function JenkinsBuildDetailPage() {
           <Fact label="Trigger" value={titleCase(build.trigger_kind)} />
           <Fact label="Root execution" value={`${build.root_job} #${build.root_build_number}`} />
           <Fact label="History coverage" value={titleCase(build.coverage)} />
-          <Fact label="Head" value={build.head_name || "Unknown"} />
+          <Fact label="Head" value={build.head_name || "Not reported"} />
           <Fact label="Head type" value={titleCase(build.head_type)} />
-          <Fact label="Provider" value={build.source_provider ? titleCase(build.source_provider) : "Unknown"} />
-          <Fact label="Repository" value={build.repository || "Unknown"} />
         </Box>
-        {build.change_number && (
-          <Box sx={{ px: 2, py: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
-            <Typography variant="caption" color="text.secondary">Change request</Typography>
-            <Typography variant="body2" fontWeight={650}>{build.change_url ? <Link href={build.change_url} target="_blank" rel="noreferrer">#{build.change_number}</Link> : `#${build.change_number}`}</Typography>
-          </Box>
-        )}
+      </Section>
+
+      <Section title="Source attribution">
+        <Box sx={{ p: 2 }}><SourceDetails source={build} /></Box>
       </Section>
 
       <Section title="Logical execution">

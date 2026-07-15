@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     jenkins_sync_concurrency: int = 10
     jenkins_sync_enrichment_limit: int = 250
     jenkins_sync_log_limit: int = 30
+    jenkins_source_attribution_limit: int = 500
+    jenkins_source_profiles_path: str = "config/source-profiles.yaml"
     automatic_investigations_enabled: bool = True
     automatic_investigation_min_priority: int = 1
     automatic_investigation_batch_size: int = 250

@@ -181,6 +181,8 @@ def build_container(settings: Settings) -> Container:
     from jenkins_watchdog.infrastructure.jenkins_source import JenkinsSourceAdapter
     from jenkins_watchdog.infrastructure.reasoning import LiteLLMReasoningAdapter
     from jenkins_watchdog.infrastructure.routing import load_routing_config
+    from jenkins_watchdog.infrastructure.source_attribution import JenkinsSourceAttributor, ScmSourceVerifier
+    from jenkins_watchdog.infrastructure.source_profiles import load_source_profiles
     from jenkins_watchdog.infrastructure.templates import FilePayloadRenderer
     from jenkins_watchdog.infrastructure.tools import ReadOnlyToolRegistry
     from jenkins_watchdog.infrastructure.uow import SqlAlchemyUnitOfWorkFactory
@@ -265,14 +267,27 @@ def build_container(settings: Settings) -> Container:
         triage_token_reservation=settings.llm_max_tokens,
         automatic_enabled=settings.automatic_investigations_enabled,
     )
+    source_profiles = load_source_profiles(settings.jenkins_source_profiles_path)
+    source_verifier = ScmSourceVerifier(
+        http_client,
+        now=_utcnow,
+        github_api_url=settings.github_api_url,
+        github_token=settings.github_token,
+        gitlab_api_url=settings.gitlab_api_url,
+        gitlab_token=settings.gitlab_token,
+    )
     jenkins_monitor = JenkinsMonitorService(
-        source=JenkinsSourceAdapter(jenkins_client),
+        source=JenkinsSourceAdapter(
+            jenkins_client,
+            attributor=JenkinsSourceAttributor(source_profiles, source_verifier),
+        ),
         uow_factory=uow_factory,
         now=_utcnow,
         window_hours=settings.jenkins_sync_window_hours,
         fetch_concurrency=settings.jenkins_sync_concurrency,
         enrichment_limit=settings.jenkins_sync_enrichment_limit,
         log_enrichment_limit=settings.jenkins_sync_log_limit,
+        source_attribution_limit=settings.jenkins_source_attribution_limit,
         lease_seconds=max(settings.worker_lease_seconds * 10, 900),
         heartbeat_seconds=settings.worker_heartbeat_seconds,
         incident_service=incident_service,

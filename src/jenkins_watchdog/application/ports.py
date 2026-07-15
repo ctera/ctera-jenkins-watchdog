@@ -15,6 +15,7 @@ from jenkins_watchdog.application.types import (
     TriageCandidate,
 )
 from jenkins_watchdog.domain.jenkins import (
+    JenkinsBuildAttribution,
     JenkinsBuildEnrichment,
     JenkinsBuildHistoryPage,
     JenkinsBuildSnapshot,
@@ -201,6 +202,8 @@ class JenkinsSourcePort(Protocol):
 
     async def enrich_build(self, build: JenkinsBuildSnapshot, *, include_log: bool) -> JenkinsBuildEnrichment: ...
 
+    async def attribute_build(self, build: JenkinsBuildSnapshot) -> JenkinsBuildAttribution: ...
+
 
 class JenkinsRepository(Protocol):
     async def claim_sync(self, *, owner: str, now: datetime, lease_seconds: int) -> bool: ...
@@ -233,7 +236,30 @@ class JenkinsRepository(Protocol):
         log_limit: int,
     ) -> tuple[JenkinsBuildSnapshot, ...]: ...
 
-    async def save_enrichment(self, enrichment: JenkinsBuildEnrichment, *, now: datetime) -> None: ...
+    async def pending_attribution(self, *, limit: int) -> tuple[JenkinsBuildSnapshot, ...]: ...
+
+    async def save_attribution(
+        self,
+        attribution: JenkinsBuildAttribution,
+        *,
+        now: datetime,
+    ) -> tuple[str, ...]: ...
+
+    async def mark_attribution_failed(
+        self,
+        job_name: str,
+        number: int,
+        *,
+        now: datetime,
+        summary: str,
+    ) -> None: ...
+
+    async def save_enrichment(
+        self,
+        enrichment: JenkinsBuildEnrichment,
+        *,
+        now: datetime,
+    ) -> tuple[str, ...]: ...
 
     async def mark_enrichment_failed(self, job_name: str, number: int, *, now: datetime, summary: str) -> None: ...
 

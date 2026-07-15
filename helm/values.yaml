@@ -38,6 +38,8 @@ config:
   jenkinsSyncConcurrency: "10"
   jenkinsSyncEnrichmentLimit: "250"
   jenkinsSyncLogLimit: "30"
+  jenkinsSourceAttributionLimit: "500"
+  jenkinsSourceProfilesPath: /app/config/source-profiles.yaml
   automaticInvestigationsEnabled: "true"
   automaticInvestigationMinPriority: "1"
   automaticInvestigationBatchSize: "250"

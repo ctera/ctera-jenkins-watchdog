@@ -31,6 +31,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ChatPanel from "../components/ChatPanel";
 import MarkdownContent from "../components/MarkdownContent";
+import { SourceDetails } from "../components/SourceAttribution";
 import PageHeader from "../components/PageHeader";
 import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
@@ -288,7 +289,7 @@ function Overview({ detail }: { detail: IncidentDetail }) {
           <Divider />
           <Box>
             <Typography variant="h6" sx={{ mb: 1.25 }}>Source association</Typography>
-            <KeyValues value={incident.source} />
+            <SourceDetails source={incident.source} />
           </Box>
         </>
       )}
@@ -545,23 +546,6 @@ function ActionsView({ detail, onOpen }: { detail: IncidentDetail; onOpen: (id: 
         </TableBody>
       </Table>
     </TableContainer>
-  );
-}
-
-function KeyValues({ value }: { value: Record<string, unknown> }) {
-  const entries = Object.entries(value);
-  if (!entries.length) return <Typography color="text.secondary">Unknown</Typography>;
-  return (
-    <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "repeat(2, minmax(0, 1fr))" }, gap: 1.5 }}>
-      {entries.map(([key, item]) => (
-        <Box key={key} sx={{ minWidth: 0 }}>
-          <Typography variant="caption" color="text.secondary">{titleCase(key)}</Typography>
-          <Typography variant="body2" sx={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
-            {typeof item === "string" || typeof item === "number" || typeof item === "boolean" ? String(item) : JSON.stringify(item)}
-          </Typography>
-        </Box>
-      ))}
-    </Box>
   );
 }
 

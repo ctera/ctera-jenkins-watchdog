@@ -15,6 +15,7 @@ from jenkins_watchdog.application.jenkins_monitor import JenkinsMonitorService, 
 from jenkins_watchdog.application.selection import AnalysisSelectionService
 from jenkins_watchdog.application.types import TriageBatchResult, TriageRoute
 from jenkins_watchdog.domain.jenkins import (
+    JenkinsBuildAttribution,
     JenkinsBuildEnrichment,
     JenkinsBuildHistoryPage,
     JenkinsBuildSnapshot,
@@ -22,6 +23,7 @@ from jenkins_watchdog.domain.jenkins import (
     JenkinsHeadType,
     JenkinsJobSnapshot,
 )
+from jenkins_watchdog.domain.source import SourceAttribution, SourceKind, SourceStatus
 from jenkins_watchdog.infrastructure.uow import SqlAlchemyUnitOfWork, SqlAlchemyUnitOfWorkFactory
 
 NOW = datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc)
@@ -140,12 +142,7 @@ class MonitorSource:
         return JenkinsBuildEnrichment(
             job_full_name=build.job_full_name,
             number=build.number,
-            trigger_kind="gitlab_webhook",
-            source_provider="gitlab",
-            repository="ctera/portal",
-            change_number="42",
-            change_url="https://gitlab.example/ctera/portal/merge_requests/42",
-            head_name="MR-42",
+            attribution=self._attribution(build),
             failed_stage="Compile",
             failure_classification="compilation_error",
             failure_signature="compiler-signature",
@@ -153,6 +150,26 @@ class MonitorSource:
             error_lines=("error TS2322",),
             stage_evidence=({"name": "Compile", "status": "FAILED", "duration_ms": 10},),
             log_enriched=True,
+        )
+
+    async def attribute_build(self, build: JenkinsBuildSnapshot) -> JenkinsBuildAttribution:
+        return self._attribution(build)
+
+    def _attribution(self, build: JenkinsBuildSnapshot) -> JenkinsBuildAttribution:
+        return JenkinsBuildAttribution(
+            job_full_name=build.job_full_name,
+            number=build.number,
+            trigger_kind="gitlab_webhook",
+            source=SourceAttribution(
+                kind=SourceKind.CHANGE_REQUEST,
+                status=SourceStatus.VERIFIED,
+                provider="gitlab",
+                repository="ctera/portal",
+                change_number="42",
+                url="https://gitlab.example/ctera/portal/merge_requests/42",
+                branch="MR-42",
+            ),
+            head_name="MR-42",
         )
 
 

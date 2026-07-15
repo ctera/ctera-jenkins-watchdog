@@ -1,0 +1,121 @@
+version: 1
+
+profiles:
+  - id: portal-backend
+    root_job_regexes:
+      - ^MR_Trigger$
+      - ^PortalSCMPoll$
+    provider: gitlab
+    primary_repository: Portal/Backend
+    allowed_repositories:
+      - Portal/Backend
+    allow_mr_comments: false
+
+  - id: appliance-app
+    root_job_regexes:
+      - ^ApplianceAgent_GatedMergeRequest/Appliance_TrigerGitLabMergeReqPipe$
+      - ^Genesis9_Build_NAS_RPMs$
+    provider: gitlab
+    primary_repository: Appliance/App
+    allowed_repositories:
+      - Appliance/App
+    allow_mr_comments: false
+
+  - id: appliance-migration
+    root_job_regexes:
+      - ^Genesis9_Build_MigrationTool_RPM$
+    provider: gitlab
+    primary_repository: Appliance/migration
+    allowed_repositories:
+      - Appliance/migration
+    allow_mr_comments: false
+
+  - id: automation
+    root_job_regexes:
+      - ^Automation_GatedMergeRequest$
+    provider: gitlab
+    primary_repository: Automation/Automation
+    allowed_repositories:
+      - Automation/Automation
+    allow_mr_comments: false
+
+  - id: genesis-cicd
+    root_job_regexes:
+      - ^Centos9_RPMS_Portal_Image_CI$
+    provider: gitlab
+    primary_repository: genesis/cicd
+    allowed_repositories:
+      - genesis/cicd
+    allow_mr_comments: false
+
+  - id: pim-image
+    root_job_regexes:
+      - ^Centos9_RPMS_Portal_Image_CI_IMAGE$
+    provider: gitlab
+    primary_repository: PIM/Image
+    allowed_repositories:
+      - PIM/Image
+    allow_mr_comments: false
+
+  - id: pim-portal-env-conf
+    root_job_regexes:
+      - ^Portal_Build_portal-env-conf_RPM$
+    provider: gitlab
+    primary_repository: PIM/portal-env-conf
+    allowed_repositories:
+      - PIM/portal-env-conf
+    allow_mr_comments: false
+
+  - id: pim-portal-firewall-conf
+    root_job_regexes:
+      - ^Portal_Build_portal-firewall-conf_RPM$
+    provider: gitlab
+    primary_repository: PIM/portal-firewall-conf
+    allowed_repositories:
+      - PIM/portal-firewall-conf
+    allow_mr_comments: false
+
+  - id: pim-portal-nginx
+    root_job_regexes:
+      - ^Portal_Build_portal-nginx_RPM$
+    provider: gitlab
+    primary_repository: PIM/portal-nginx
+    allowed_repositories:
+      - PIM/portal-nginx
+    allow_mr_comments: false
+
+  - id: pim-portal-preview-docker
+    root_job_regexes:
+      - ^Portal_Build_portal-preview-docker_RPM$
+    provider: gitlab
+    primary_repository: PIM/portal-preview-docker
+    allowed_repositories:
+      - PIM/portal-preview-docker
+    allow_mr_comments: false
+
+  - id: pim-portal-services-conf
+    root_job_regexes:
+      - ^Portal_Build_portal-services-conf_RPM$
+    provider: gitlab
+    primary_repository: PIM/portal-services-conf
+    allowed_repositories:
+      - PIM/portal-services-conf
+    allow_mr_comments: false
+
+  - id: pim-portal-syslog
+    root_job_regexes:
+      - ^Portal_Build_portal-syslog_RPM$
+    provider: gitlab
+    primary_repository: PIM/portal-syslog
+    allowed_repositories:
+      - PIM/portal-syslog
+    allow_mr_comments: false
+
+  - id: pim-portal-syslog-bundle
+    root_job_regexes:
+      - ^Portal_Build_portal-syslog-bundle_RPM$
+    provider: gitlab
+    primary_repository: PIM/portal-syslog-bundle
+    allowed_repositories:
+      - PIM/portal-syslog-bundle
+    allow_mr_comments: false
