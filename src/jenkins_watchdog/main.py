@@ -46,6 +46,8 @@ async def auth_middleware(request: Request, call_next):
     if any(path.startswith(p) for p in PUBLIC_PATHS):
         return await call_next(request)
     if not authentication.enabled:
+        if settings.local_actor_email:
+            request.state.user = {"email": settings.local_actor_email, "name": "Local operator"}
         return await call_next(request)
     user = authentication.require_auth(request)
     if not user:

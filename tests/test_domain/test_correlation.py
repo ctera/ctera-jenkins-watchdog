@@ -53,10 +53,12 @@ def test_correlation_requires_complete_scm_metadata_before_error_signature():
 
 
 def test_correlation_order_reaches_node_agent_pool_then_stable_finding():
-    assert correlate_observation(observation(kubernetes_node="worker-a")).rule_id == "jenkins_kubernetes_node"
+    node_decision = correlate_observation(observation(kubernetes_node="worker-a"))
+    assert node_decision.rule_id == "jenkins_kubernetes_node_symptom_v2"
+    assert node_decision.key == "worker-a:unknown"
 
     pool_decision = correlate_observation(observation(agent_pool="linux", symptom_family="disconnect"))
-    assert pool_decision.rule_id == "agent_pool_symptom_family"
+    assert pool_decision.rule_id == "agent_pool_symptom_family_v2"
     assert pool_decision.key == "linux:disconnect"
 
     fallback = correlate_observation(observation())

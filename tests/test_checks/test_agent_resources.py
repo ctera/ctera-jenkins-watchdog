@@ -30,15 +30,15 @@ def _make_pod(name: str, containers: list[tuple[str, str | None, str | None]]):
 
 
 @pytest.mark.asyncio
-async def test_agent_resource_check_skips_when_metrics_unavailable():
+async def test_agent_resource_check_reports_metrics_unavailable():
     metrics = SimpleNamespace(list_pod_metrics=AsyncMock(side_effect=MetricsUnavailableError("404")))
     check = AgentResourceCheck(
         SimpleNamespace(),
         metrics,
         namespace="jenkins",
     )
-    findings = await check.run()
-    assert findings == []
+    with pytest.raises(MetricsUnavailableError):
+        await check.run()
 
 
 @pytest.mark.asyncio

@@ -13,20 +13,46 @@ _ERROR_INDICATORS = re.compile(
     r")",
     re.IGNORECASE,
 )
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 _NOISE_PATTERNS = re.compile(
     r"(?:"
-    r"^\s*\[Pipeline\]\s*$|"
+    r"^\s*\[Pipeline\](?:\s|$)|"
     r"^\s*---\s*$|"
-    r"^\s*\+\s|"
+    r"^(?:\[\d{4}-\d{2}-\d{2}T[^\]]+\]\s*)?\+\s|"
     r"Downloading|Progress \(|"
     r"^\[INFO\].*Downloading|"
-    r"Finished:|SUCCESS \["
+    r"Finished:|SUCCESS \[|"
+    r"^> git |# timeout=\d+|"
+    r"ErrorAction\$ErrorId|"
+    r"Timeout set to expire in|"
+    r"skipped due to earlier failure|"
+    r"Email was triggered for:|Sending (?:an )?email|"
+    r"Build returned error, collecting|"
+    r"Build step ['\"]?.*['\"]? marked build as failure|"
+    r"No test report files were found\. Configuration error\?|"
+    r"Seen branch in repository|"
+    r"^\*\s+\[new branch\].*\s+->\s+|"
+    r"^(?:\[[^\]]+\]\s*)?-rw[rwx.-]+\s+|"
+    r"^(?:\[[^\]]+\]\s*)?<div\b|"
+    r"Test Passed:|"
+    r"^goto error$|^echo Error|"
+    r"YOU FURTHER ACKNOWLEDGE THAT THE APPLE SOFTWARE|"
+    r"IN NO EVENT WILL APPLE BE LIABLE|"
+    r"court of competent jurisdiction finds any clause|"
+    r"litigation or other dispute resolution between You and Apple"
     r")",
     re.IGNORECASE,
 )
 
-_DYNAMIC = re.compile(r"\b\d+\b|\b[0-9a-f]{8,}\b|\b\d+\.\d+\.\d+\b", re.IGNORECASE)
+_DYNAMIC = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f-]{27,}\b|"
+    r"\b[0-9a-f]{8,}\b|"
+    r"\b\d+\.\d+\.\d+\b|"
+    r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?|"
+    r"\b\d+\b",
+    re.IGNORECASE,
+)
 
 
 def extract_error_lines(console: str, *, max_lines: int = 25, tail_chars: int = 50000) -> list[str]:
@@ -39,23 +65,13 @@ def extract_error_lines(console: str, *, max_lines: int = 25, tail_chars: int = 
     candidates: list[tuple[int, str]] = []
 
     for i, line in enumerate(lines):
-        stripped = line.strip()
+        stripped = _ANSI_ESCAPE.sub("", line).strip()
         if not stripped or len(stripped) < 5:
             continue
         if _NOISE_PATTERNS.search(stripped):
             continue
         if _ERROR_INDICATORS.search(stripped):
             candidates.append((i, stripped))
-
-    if not candidates and lines:
-        # Fall back to last non-empty lines
-        for line in reversed(lines):
-            stripped = line.strip()
-            if stripped and not _NOISE_PATTERNS.search(stripped):
-                candidates.append((len(lines), stripped))
-                if len(candidates) >= max_lines:
-                    break
-        candidates.reverse()
 
     # Prefer lines near the end; dedupe while preserving order
     seen: set[str] = set()
@@ -78,13 +94,68 @@ def classify_failure(error_lines: list[str]) -> str:
     text = " ".join(error_lines).lower()
     if any(k in text for k in ("oomkilled", "outofmemory", "cannot allocate memory", "heap space")):
         return "resource_exhaustion"
-    if any(k in text for k in ("compilation failure", "compile error", "syntax error", "cannot find symbol")):
+    if any(
+        k in text
+        for k in (
+            "compilation failure",
+            "compile error",
+            "syntax error",
+            "cannot find symbol",
+            "fatal error",
+            "make: ***",
+            "rpmbuild returned error",
+            "bad exit status",
+            "multiplecompilationerrorsexception",
+        )
+    ):
         return "compilation_error"
-    if any(k in text for k in ("tests failed", "test failure", "assertion", "pytest", "junit")):
-        return "test_failure"
-    if any(k in text for k in ("connection refused", "timeout", "no route", "unreachable", "503", "502")):
+    if any(k in text for k in ("does not merge cleanly", "automatic merge failed", "merge conflict")):
+        return "scm_conflict"
+    if any(
+        k in text
+        for k in (
+            "connection refused",
+            "connection reset",
+            "broken pipe",
+            "unknownhost",
+            "eofexception",
+            "timeout",
+            "no route",
+            "unreachable",
+            "503",
+            "502",
+        )
+    ):
         return "infrastructure"
-    if any(k in text for k in ("permission denied", "not found", "invalid parameter", "missing required")):
+    if any(
+        k in text
+        for k in (
+            "tests failed",
+            "test failure",
+            "assertion",
+            "pytest",
+            "junit",
+            "total tests run",
+            "configuration failures",
+            "suite ",
+            "failures:",
+            "no test report files",
+        )
+    ):
+        return "test_failure"
+    if any(
+        k in text
+        for k in (
+            "permission denied",
+            "not found",
+            "invalid parameter",
+            "missing required",
+            "requires ",
+            "no such property",
+            "couldn't find any revision",
+            "no open merge requests",
+        )
+    ):
         return "configuration"
     if any(k in text for k in ("docker", "container", "imagepull", "registry")):
         return "container_runtime"
@@ -98,7 +169,11 @@ def error_signature(error_lines: list[str]) -> str:
 
     normalized: list[str] = []
     for line in error_lines[-5:]:
-        n = _DYNAMIC.sub("N", line.lower().strip())
+        n = re.sub(r"https?://\S+", "URL", line.lower().strip())
+        n = _DYNAMIC.sub("N", n)
+        n = re.sub(r"^\[N\]\s*", "", n)
+        n = re.sub(r"quiet period for \S+ is N seconds", "quiet period for JOB is N seconds", n)
+        n = re.sub(r"\s*#N\b", " #N", n)
         n = re.sub(r"\s+", " ", n)[:200]
         normalized.append(n)
 

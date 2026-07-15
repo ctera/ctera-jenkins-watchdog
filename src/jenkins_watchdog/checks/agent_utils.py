@@ -20,6 +20,7 @@ _JENKINS_LABEL_MATCHES = (
     ("jenkins-agent", "true"),
 )
 
+_JENKINS_DYNAMIC_SUFFIX = re.compile(r"-\d+-[a-z0-9]{4,10}(?:-[a-z0-9]{4,10}){2}$")
 _K8S_POD_SUFFIX = re.compile(r"-[a-z0-9]{5,10}-[a-z0-9]{4,5}$")
 _STATEFULSET_SUFFIX = re.compile(r"-\d+$")
 _DYNAMIC_VALUES = re.compile(r"\b\d+(\.\d+)?(%|s|h|ms|gb|mb|kb)?\b", re.IGNORECASE)
@@ -53,6 +54,7 @@ def extract_agent_prefix(name: str, labels: dict | None = None) -> str:
         return label.lower()
 
     base = (name or "").lower()
+    base = _JENKINS_DYNAMIC_SUFFIX.sub("", base)
     base = _K8S_POD_SUFFIX.sub("", base)
     base = _STATEFULSET_SUFFIX.sub("", base)
     return base

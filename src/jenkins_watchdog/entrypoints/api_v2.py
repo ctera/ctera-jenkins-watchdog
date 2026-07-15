@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -11,13 +12,23 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from jenkins_watchdog.application.pagination import InvalidCursorError
+from jenkins_watchdog.application.reasoning import jenkins_build_observations
 from jenkins_watchdog.application.scan_service import (
     EnqueueScanCommand,
     ScanAlreadyActiveError,
     UnknownScanCategoryError,
 )
 from jenkins_watchdog.application.types import ScanEvent
-from jenkins_watchdog.domain.model import Action, Incident, Investigation, Scan, ScanMode
+from jenkins_watchdog.domain.model import (
+    Action,
+    CheckResult,
+    FindingObservation,
+    Incident,
+    Investigation,
+    InvestigationRequest,
+    Scan,
+    ScanMode,
+)
 from jenkins_watchdog.domain.serialization import to_primitive
 
 router = APIRouter()
@@ -41,6 +52,19 @@ class V2ScanResponse(BaseModel):
     attempt_count: int
     failure_summary: str | None
     urls: dict[str, str]
+    coverage_status: str | None = None
+    checks: list["V2CheckExecutionResponse"] = Field(default_factory=list)
+
+
+class V2CheckExecutionResponse(BaseModel):
+    name: str
+    status: str
+    categories: list[str]
+    finding_count: int
+    summary: dict[str, Any]
+    failure_summary: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
 
 
 class V2ScanPage(BaseModel):
@@ -72,6 +96,11 @@ class V2IncidentResponse(BaseModel):
     suppressed_by: str | None
     suppressed_at: datetime | None
     occurrence_number: int
+    affected_resource_count: int = 0
+    current_observation_count: int = 0
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    domain: str = "unknown"
 
 
 class V2IncidentPage(BaseModel):
@@ -118,6 +147,27 @@ class V2InvestigationResponse(BaseModel):
     completed_at: datetime | None
 
 
+class V2InvestigationRequestResponse(BaseModel):
+    id: str
+    incident_id: str
+    occurrence_id: str
+    mode: str
+    source: str
+    priority: int
+    evidence_hash: str
+    status: str
+    scan_id: str | None
+    build_id: str | None
+    requested_by: str | None
+    attempt_count: int
+    next_attempt_at: datetime | None
+    investigation_id: str | None
+    error_summary: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
 class V2ActionResponse(BaseModel):
     id: str
     incident_id: str
@@ -161,8 +211,11 @@ class V2ActionDetailResponse(BaseModel):
 class V2IncidentDetailResponse(BaseModel):
     incident: V2IncidentResponse
     observations: list[V2ObservationResponse]
+    current_observations: list[V2ObservationResponse] = Field(default_factory=list)
     occurrences: list[V2OccurrenceResponse]
     latest_investigation: V2InvestigationResponse | None
+    investigation_request: V2InvestigationRequestResponse | None = None
+    jenkins_builds: list[dict[str, Any]] = Field(default_factory=list)
     actions: list[V2ActionResponse]
 
 
@@ -173,24 +226,429 @@ class V2SuppressionRequest(BaseModel):
 class V2ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=10000)
     incident_id: str | None = None
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
 
 
 class V2ChatResponse(BaseModel):
     content: str
+    references: list[dict[str, str]] = Field(default_factory=list)
+    as_of: datetime | None = None
+    coverage_status: str = "unknown"
+
+
+class V2OverviewResponse(BaseModel):
+    environment: str
+    status: str
+    generated_at: datetime
+    latest_scan: V2ScanResponse | None
+    coverage_status: str
+    active_incident_count: int
+    critical_incident_count: int
+    warning_incident_count: int
+    affected_resource_count: int
+    jenkins: dict[str, Any]
+    kubernetes: dict[str, Any]
+    top_incidents: list[V2IncidentResponse]
+
+
+class V2JenkinsBuildResponse(BaseModel):
+    id: str
+    job_name: str
+    build_number: int
+    result: str
+    url: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    duration_ms: int
+    building: bool = False
+    job_type: str = "other"
+    parent: str | None = None
+    head_type: str = "unknown"
+    head_name: str | None = None
+    source_provider: str | None = None
+    repository: str | None = None
+    change_number: str | None = None
+    change_url: str | None = None
+    trigger_kind: str = "unknown"
+    root_job: str
+    root_build_number: int
+    logical_run_key: str
+    propagated_failure: bool = False
+    failed_stage: str | None = None
+    failure_summary: str | None = None
+    failure_classification: str = "unknown"
+    failure_signature: str = ""
+    novelty: str = "unclassified"
+    priority_score: int = 0
+    priority_reasons: list[str] = Field(default_factory=list)
+    coverage: str = "unknown"
+    enrichment_status: str = "pending"
+    incident_id: str | None = None
+
+
+class V2LogicalExecutionResponse(BaseModel):
+    logical_run_key: str
+    title: str
+    classification: str
+    priority_score: int
+    priority_reasons: list[str]
+    first_seen_at: datetime
+    last_seen_at: datetime
+    root_job: str
+    root_build_number: int
+    source_provider: str | None = None
+    repository: str | None = None
+    change_number: str | None = None
+    change_url: str | None = None
+    affected_build_count: int
+    propagated_build_count: int
+    builds: list[dict[str, Any]]
+    primary_build_id: str
+
+
+class V2FailurePatternResponse(BaseModel):
+    signature: str
+    title: str
+    classification: str
+    occurrence_count: int
+    affected_jobs: list[str]
+    first_seen_at: datetime
+    last_seen_at: datetime
+    failed_wall_hours: float
+    priority_score: int
+    latest_build_id: str
+
+
+class V2JobFamilyResponse(BaseModel):
+    job_name: str
+    job_type: str
+    parent: str | None = None
+    head_type: str
+    head_name: str | None = None
+    source_provider: str | None = None
+    repository: str | None = None
+    url: str
+    coverage: str
+    run_count: int
+    result_counts: dict[str, int]
+    failure_rate: float
+    wall_hours: float
+    median_duration_minutes: float
+    p95_duration_minutes: float
+    latest_result: str
+    last_build_at: datetime
+
+
+class V2MultibranchFamilyResponse(BaseModel):
+    parent: str
+    url: str
+    child_count: int
+    active_child_count: int
+    run_count: int
+    result_counts: dict[str, int]
+    head_counts: dict[str, int]
+    children: list[dict[str, Any]]
+
+
+class V2JenkinsWorkspaceResponse(BaseModel):
+    generated_at: datetime
+    window_hours: int
+    summary: dict[str, Any]
+    new_failures: list[V2JenkinsBuildResponse]
+    active_executions: list[V2LogicalExecutionResponse]
+    recurring_patterns: list[V2FailurePatternResponse]
+    busy_jobs: list[V2JobFamilyResponse]
+    multibranch: list[V2MultibranchFamilyResponse]
+
+
+class V2JenkinsFailurePage(BaseModel):
+    items: list[V2JenkinsBuildResponse]
+    next_cursor: str | None
+
+
+class V2JenkinsBuildDetailResponse(V2JenkinsBuildResponse):
+    evidence: dict[str, Any]
+    upstream_builds: list[dict[str, Any]]
+    downstream_builds: list[dict[str, Any]]
+    incident: V2IncidentResponse | None = None
+    investigation_request: V2InvestigationRequestResponse | None = None
+    latest_investigation: V2InvestigationResponse | None = None
+
+
+class V2AnalyzeBuildRequest(BaseModel):
+    mode: Literal["regular", "deep"] = "regular"
 
 
 @router.post("/chat", response_model=V2ChatResponse)
 async def chat(request: Request, body: V2ChatRequest) -> V2ChatResponse:
     try:
-        content = await _container(request).reasoning_service.chat(
+        result = await _container(request).reasoning_service.chat(
             message=body.message,
             incident_id=body.incident_id,
+            history=tuple(body.history),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail={"code": "incident_not_found"}) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail={"code": "reasoning_unavailable"}) from exc
-    return V2ChatResponse(content=content)
+    return _chat_response(result)
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: Request, body: V2ChatRequest) -> EventSourceResponse:
+    async def stream():
+        progress: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def publish(event: dict[str, Any]) -> None:
+            await progress.put(event)
+
+        task = asyncio.create_task(
+            _container(request).reasoning_service.chat(
+                message=body.message,
+                incident_id=body.incident_id,
+                history=tuple(body.history),
+                on_progress=publish,
+            )
+        )
+        try:
+            while not task.done() or not progress.empty():
+                if await request.is_disconnected():
+                    task.cancel()
+                    return
+                try:
+                    event = await asyncio.wait_for(progress.get(), timeout=0.5)
+                except TimeoutError:
+                    continue
+                event_type = str(event.get("type") or "progress")
+                yield {"event": event_type, "data": json.dumps(event, default=str, separators=(",", ":"))}
+            result = await task
+            payload = _chat_response(result).model_dump(mode="json")
+            yield {"event": "message", "data": json.dumps(payload, separators=(",", ":"))}
+        except LookupError:
+            yield {"event": "error", "data": json.dumps({"code": "incident_not_found"})}
+        except Exception as exc:
+            yield {
+                "event": "error",
+                "data": json.dumps({"code": "reasoning_unavailable", "detail": type(exc).__name__}),
+            }
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    return EventSourceResponse(stream(), ping=15)
+
+
+@router.get("/overview", response_model=V2OverviewResponse)
+async def overview(request: Request) -> V2OverviewResponse:
+    container = _container(request)
+    async with container.uow_factory() as uow:
+        latest_scan = await uow.scans.latest_completed()
+        checks = await uow.checks.for_scan(latest_scan.id) if latest_scan else ()
+        incident_page = await uow.incidents.list(limit=100, status="open")
+        incident_rows: list[tuple[Incident, tuple[FindingObservation, ...]]] = []
+        for incident in incident_page.items:
+            observations = await uow.incidents.current_observations(incident.id)
+            builds = await uow.jenkins.builds_for_incident(incident.id)
+            incident_rows.append((incident, observations + jenkins_build_observations(builds)))
+
+    check_summaries = {check.check_name: to_primitive(check.summary) for check in checks}
+    coverage_status = _coverage_status(checks, latest_scan)
+    incident_rows.sort(
+        key=lambda row: (
+            _severity_rank(row[0].severity.value),
+            len({item.resource_id for item in row[1]}),
+            row[0].updated_at or row[0].created_at,
+        ),
+        reverse=True,
+    )
+    critical_count = sum(1 for incident, _ in incident_rows if incident.severity.value == "critical")
+    warning_count = sum(1 for incident, _ in incident_rows if incident.severity.value == "warning")
+    status = "unknown"
+    if latest_scan:
+        status = (
+            "critical"
+            if critical_count
+            else "degraded"
+            if warning_count or coverage_status != "complete"
+            else "healthy"
+        )
+
+    jobs = check_summaries.get("jenkins_jobs", {})
+    failed_builds = check_summaries.get("jenkins_failed_builds", {})
+    connectivity = check_summaries.get("jenkins_agent_connectivity", {})
+    agent_pods = check_summaries.get("jenkins_agent_pods", {})
+    agent_resources = check_summaries.get("jenkins_agent_resources", {})
+    nodes = check_summaries.get("k8s_nodes", {})
+    workloads = check_summaries.get("k8s_workloads", {})
+    events = check_summaries.get("k8s_events", {})
+    return V2OverviewResponse(
+        environment=container.settings.kubernetes_environment,
+        status=status,
+        generated_at=datetime.now(timezone.utc),
+        latest_scan=_scan_response(latest_scan, checks=checks) if latest_scan else None,
+        coverage_status=coverage_status,
+        active_incident_count=len(incident_rows),
+        critical_incident_count=critical_count,
+        warning_incident_count=warning_count,
+        affected_resource_count=sum(_affected_resource_count(current) for _, current in incident_rows),
+        jenkins={
+            "queue_size": jobs.get("queue_size"),
+            "stuck_queue_count": jobs.get("stuck_queue_count"),
+            "oldest_queue_wait_minutes": jobs.get("oldest_queue_wait_minutes"),
+            "running_build_count": jobs.get("running_build_count"),
+            "long_running_build_count": jobs.get("long_running_build_count"),
+            "oldest_running_build_hours": jobs.get("oldest_running_build_hours"),
+            "long_running_builds": jobs.get("long_running_builds", []),
+            "failed_build_count": failed_builds.get("failed_build_count"),
+            "failed_job_count": failed_builds.get("failed_job_count"),
+            "failed_build_window_hours": failed_builds.get(
+                "window_hours", container.settings.jenkins_failed_build_window_hours
+            ),
+            "recent_failed_builds": failed_builds.get("recent_failed_builds", []),
+            "agent_count": connectivity.get("agent_count"),
+            "online_agent_count": connectivity.get("online_agent_count"),
+            "offline_agent_count": connectivity.get("offline_agent_count"),
+            "executor_count": connectivity.get("executor_count"),
+            "agent_pod_count": agent_pods.get("agent_pod_count"),
+            "pod_phases": agent_pods.get("pod_phases", {}),
+            "containers_missing_limits": agent_resources.get("containers_missing_limits"),
+        },
+        kubernetes={
+            "node_count": nodes.get("node_count"),
+            "ready_node_count": nodes.get("ready_node_count"),
+            "not_ready_node_count": nodes.get("not_ready_node_count"),
+            "metrics_node_count": nodes.get("metrics_node_count"),
+            "jenkins_deployment_count": workloads.get("jenkins_deployment_count"),
+            "jenkins_statefulset_count": workloads.get("jenkins_statefulset_count"),
+            "meaningful_event_group_count": events.get("meaningful_event_group_count"),
+        },
+        top_incidents=[_incident_response(incident, current) for incident, current in incident_rows[:12]],
+    )
+
+
+@router.get("/jenkins", response_model=V2JenkinsWorkspaceResponse)
+async def jenkins_workspace(
+    request: Request,
+    window_hours: Annotated[int, Query(ge=1, le=720)] = 168,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> V2JenkinsWorkspaceResponse:
+    generated_at = datetime.now(timezone.utc)
+    since = generated_at - timedelta(hours=window_hours)
+    async with _container(request).uow_factory() as uow:
+        summary = await uow.jenkins.jenkins_summary(since=since)
+        new_failure_page = await uow.jenkins.failure_builds(
+            since=since,
+            limit=limit,
+            novelty=frozenset({"new_failure", "new_regression"}),
+        )
+        executions = await uow.jenkins.logical_executions(since=since, limit=limit)
+        patterns = await uow.jenkins.recurring_patterns(since=since, limit=limit)
+        families = await uow.jenkins.job_families(since=since, limit=limit)
+        multibranch = await uow.jenkins.multibranch_families(since=since, limit=100)
+    return V2JenkinsWorkspaceResponse(
+        generated_at=generated_at,
+        window_hours=window_hours,
+        summary=summary,
+        new_failures=[V2JenkinsBuildResponse.model_validate(item) for item in new_failure_page.items],
+        active_executions=[V2LogicalExecutionResponse.model_validate(item) for item in executions],
+        recurring_patterns=[V2FailurePatternResponse.model_validate(item) for item in patterns],
+        busy_jobs=[V2JobFamilyResponse.model_validate(item) for item in families],
+        multibranch=[V2MultibranchFamilyResponse.model_validate(item) for item in multibranch],
+    )
+
+
+@router.get("/jenkins/failures", response_model=V2JenkinsFailurePage)
+async def jenkins_failures(
+    request: Request,
+    window_hours: Annotated[int, Query(ge=1, le=720)] = 168,
+    view: Literal["all", "new"] = "all",
+    result: Literal["FAILURE", "UNSTABLE", "ABORTED"] | None = None,
+    job: Annotated[str | None, Query(max_length=300)] = None,
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+) -> V2JenkinsFailurePage:
+    since = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+    novelty = frozenset({"new_failure", "new_regression"}) if view == "new" else None
+    try:
+        async with _container(request).uow_factory() as uow:
+            page = await uow.jenkins.failure_builds(
+                since=since,
+                limit=limit,
+                cursor=cursor,
+                novelty=novelty,
+                job=job,
+                result=result,
+            )
+    except (InvalidCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_cursor"}) from exc
+    return V2JenkinsFailurePage(
+        items=[V2JenkinsBuildResponse.model_validate(item) for item in page.items],
+        next_cursor=page.next_cursor,
+    )
+
+
+@router.get("/jenkins/builds/{build_id}", response_model=V2JenkinsBuildDetailResponse)
+async def jenkins_build_detail(request: Request, build_id: str) -> V2JenkinsBuildDetailResponse:
+    async with _container(request).uow_factory() as uow:
+        detail = await uow.jenkins.build_detail(build_id)
+        incident = await uow.incidents.get(str(detail["incident_id"])) if detail and detail.get("incident_id") else None
+        investigation_request = (
+            await uow.investigation_requests.latest_for_incident(incident.id) if incident else None
+        )
+        investigation = await uow.investigations.latest_for_incident(incident.id) if incident else None
+    if detail is None:
+        raise HTTPException(status_code=404, detail={"code": "jenkins_build_not_found"})
+    if incident:
+        builds = await _build_observations_for_response(request, incident.id)
+        detail["incident"] = _incident_response(incident, builds).model_dump(mode="python")
+    detail["investigation_request"] = (
+        _investigation_request_response(investigation_request).model_dump(mode="python")
+        if investigation_request
+        else None
+    )
+    detail["latest_investigation"] = (
+        _investigation_response(investigation).model_dump(mode="python") if investigation else None
+    )
+    return V2JenkinsBuildDetailResponse.model_validate(detail)
+
+
+@router.post(
+    "/jenkins/builds/{build_id}/analyze",
+    response_model=V2InvestigationRequestResponse,
+    status_code=202,
+)
+async def analyze_jenkins_build(
+    request: Request,
+    build_id: str,
+    body: V2AnalyzeBuildRequest,
+) -> V2InvestigationRequestResponse:
+    container = _container(request)
+    async with container.uow_factory() as uow:
+        build = await uow.jenkins.build_detail(build_id)
+    if build is None:
+        raise HTTPException(status_code=404, detail={"code": "jenkins_build_not_found"})
+    if build.get("result") not in {"FAILURE", "UNSTABLE", "ABORTED"}:
+        raise HTTPException(status_code=409, detail={"code": "jenkins_build_not_failed"})
+    try:
+        incident = await container.incident_service.correlate_jenkins_build(
+            build,
+            now=datetime.now(timezone.utc),
+        )
+        queued = await container.investigation_queue.enqueue_incident(
+            incident.id,
+            source="manual_build",
+            mode=ScanMode(body.mode),
+            priority=100,
+            build_id=build_id,
+            requested_by=_actor_email(request),
+            force=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": "build_incident_conflict"}) from exc
+    if queued is None:
+        raise HTTPException(status_code=503, detail={"code": "investigation_unavailable"})
+    return _investigation_request_response(queued)
 
 
 @router.post("/scans", response_model=V2ScanResponse, status_code=202)
@@ -239,9 +697,10 @@ async def list_scans(
 async def get_scan(request: Request, scan_id: str) -> V2ScanResponse:
     async with _container(request).uow_factory() as uow:
         scan = await uow.scans.get(scan_id)
+        checks = await uow.checks.for_scan(scan_id) if scan else ()
     if scan is None:
         raise HTTPException(status_code=404, detail={"code": "scan_not_found"})
-    return _scan_response(scan)
+    return _scan_response(scan, checks=checks)
 
 
 @router.post("/scans/{scan_id}/cancel", response_model=V2CancelResponse)
@@ -324,10 +783,13 @@ async def list_incidents(
             )
     except InvalidCursorError as exc:
         raise HTTPException(status_code=422, detail={"code": "invalid_cursor"}) from exc
-    return V2IncidentPage(
-        items=[_incident_response(item) for item in page.items],
-        next_cursor=page.next_cursor,
-    )
+    items = []
+    async with _container(request).uow_factory() as uow:
+        for incident in page.items:
+            observations = await uow.incidents.current_observations(incident.id)
+            builds = await uow.jenkins.builds_for_incident(incident.id)
+            items.append(_incident_response(incident, observations + jenkins_build_observations(builds)))
+    return V2IncidentPage(items=items, next_cursor=page.next_cursor)
 
 
 @router.get("/incidents/{incident_id}", response_model=V2IncidentDetailResponse)
@@ -338,13 +800,18 @@ async def get_incident(request: Request, incident_id: str) -> V2IncidentDetailRe
             if incident is None:
                 raise HTTPException(status_code=404, detail={"code": "incident_not_found"})
             observations = await uow.incidents.observations(incident_id)
+            current_observations = await uow.incidents.current_observations(incident_id)
+            builds = await uow.jenkins.builds_for_incident(incident_id)
+            build_observations = jenkins_build_observations(builds)
             investigation = await uow.investigations.latest_for_incident(incident_id)
+            investigation_request = await uow.investigation_requests.latest_for_incident(incident_id)
             actions = await uow.actions.for_incident(incident_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail={"code": "incident_not_found"}) from exc
     return V2IncidentDetailResponse(
-        incident=_incident_response(incident),
-        observations=[_observation_response(item) for item in observations],
+        incident=_incident_response(incident, current_observations + build_observations),
+        observations=[_observation_response(item) for item in observations + build_observations],
+        current_observations=[_observation_response(item) for item in current_observations + build_observations],
         occurrences=[
             V2OccurrenceResponse(
                 id=item.id,
@@ -358,6 +825,10 @@ async def get_incident(request: Request, incident_id: str) -> V2IncidentDetailRe
             for item in incident.occurrence_history
         ],
         latest_investigation=_investigation_response(investigation) if investigation else None,
+        investigation_request=(
+            _investigation_request_response(investigation_request) if investigation_request else None
+        ),
+        jenkins_builds=[to_primitive(item) for item in builds],
         actions=[_action_response(item) for item in actions],
     )
 
@@ -398,26 +869,37 @@ async def unsuppress_incident(request: Request, incident_id: str) -> V2IncidentR
     return _incident_response(incident)
 
 
-@router.post("/incidents/{incident_id}/reinvestigate", response_model=V2InvestigationResponse)
-async def reinvestigate_incident(request: Request, incident_id: str) -> V2InvestigationResponse:
+@router.post(
+    "/incidents/{incident_id}/reinvestigate",
+    response_model=V2InvestigationRequestResponse,
+    status_code=202,
+)
+async def reinvestigate_incident(request: Request, incident_id: str) -> V2InvestigationRequestResponse:
     try:
-        investigation = await _container(request).reasoning_service.investigate_if_needed(incident_id, force=True)
+        investigation = await _container(request).investigation_queue.enqueue_incident(
+            incident_id,
+            source="manual_incident",
+            mode=ScanMode.DEEP,
+            priority=100,
+            requested_by=_actor_email(request),
+            force=True,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail={"code": "incident_not_found"}) from exc
     if investigation is None:
         raise HTTPException(status_code=503, detail={"code": "investigation_unavailable"})
-    return _investigation_response(investigation)
+    return _investigation_request_response(investigation)
 
 
 @router.post("/incidents/{incident_id}/chat", response_model=V2ChatResponse)
 async def incident_chat(request: Request, incident_id: str, body: V2ChatRequest) -> V2ChatResponse:
     try:
-        content = await _container(request).reasoning_service.chat(message=body.message, incident_id=incident_id)
+        result = await _container(request).reasoning_service.chat(message=body.message, incident_id=incident_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail={"code": "incident_not_found"}) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail={"code": "reasoning_unavailable"}) from exc
-    return V2ChatResponse(content=content)
+    return _chat_response(result)
 
 
 @router.get("/actions", response_model=V2ActionPage)
@@ -497,7 +979,7 @@ def _actor_email(request: Request) -> str | None:
     return user.get("email") if isinstance(user, dict) else None
 
 
-def _scan_response(scan: Scan) -> V2ScanResponse:
+def _scan_response(scan: Scan, *, checks: tuple[CheckResult, ...] = ()) -> V2ScanResponse:
     return V2ScanResponse(
         id=scan.id,
         status=scan.status.value,
@@ -510,6 +992,8 @@ def _scan_response(scan: Scan) -> V2ScanResponse:
         cancel_requested_at=scan.cancel_requested_at,
         attempt_count=scan.attempt_count,
         failure_summary=scan.failure_summary,
+        coverage_status=_coverage_status(checks, scan),
+        checks=[_check_response(check) for check in checks],
         urls={
             "detail": f"/api/v2/scans/{scan.id}",
             "events": f"/api/v2/scans/{scan.id}/events",
@@ -518,12 +1002,42 @@ def _scan_response(scan: Scan) -> V2ScanResponse:
     )
 
 
-def _incident_response(incident: Incident) -> V2IncidentResponse:
+def _check_response(check: CheckResult) -> V2CheckExecutionResponse:
+    return V2CheckExecutionResponse(
+        name=check.check_name,
+        status=check.status.value,
+        categories=sorted(check.categories),
+        finding_count=len(check.findings),
+        summary=to_primitive(check.summary),
+        failure_summary=check.failure_summary,
+        started_at=check.started_at,
+        completed_at=check.completed_at,
+    )
+
+
+def _coverage_status(checks: tuple[CheckResult, ...], scan: Scan | None) -> str:
+    if scan is None:
+        return "unknown"
+    if not checks:
+        return "running" if not scan.terminal else "unavailable"
+    succeeded = sum(check.status.value == "succeeded" for check in checks)
+    if succeeded == len(checks):
+        return "complete"
+    if succeeded == 0:
+        return "unavailable"
+    return "partial"
+
+
+def _incident_response(
+    incident: Incident,
+    current_observations: tuple[FindingObservation, ...] = (),
+) -> V2IncidentResponse:
+    affected_resource_count = _affected_resource_count(current_observations)
     return V2IncidentResponse(
         id=incident.id,
         status=incident.status.value,
         severity=incident.severity.value,
-        title=incident.title,
+        title=_display_incident_title(incident, current_observations),
         correlation_rule_id=incident.correlation_rule_id,
         correlation_key=incident.correlation_key,
         source=to_primitive(incident.source),
@@ -537,6 +1051,72 @@ def _incident_response(incident: Incident) -> V2IncidentResponse:
         suppressed_by=incident.suppressed_by,
         suppressed_at=incident.suppressed_at,
         occurrence_number=incident.current_occurrence.number,
+        affected_resource_count=affected_resource_count,
+        current_observation_count=len(current_observations),
+        first_seen_at=incident.current_occurrence.opened_at,
+        last_seen_at=max(
+            (item.observed_at for item in current_observations),
+            default=incident.current_occurrence.last_observed_at,
+        ),
+        domain=_incident_domain(incident, current_observations),
+    )
+
+
+def _display_incident_title(
+    incident: Incident,
+    observations: tuple[FindingObservation, ...],
+) -> str:
+    count = _affected_resource_count(observations)
+    if incident.correlation_rule_id == "jenkins_runtime_condition_v2":
+        return f"{count} Jenkins build{'s' if count != 1 else ''} running longer than 2 hours"
+    if incident.correlation_rule_id == "jenkins_agent_configuration_v2":
+        return f"{count} Jenkins agent container{'s' if count != 1 else ''} missing resource limits"
+    if incident.correlation_rule_id == "jenkins_queue_condition_v2" and observations:
+        return f"{count} Jenkins job{'s' if count != 1 else ''} stuck in queue"
+    return incident.title
+
+
+def _incident_domain(
+    incident: Incident,
+    observations: tuple[FindingObservation, ...],
+) -> str:
+    categories = {item.category for item in observations}
+    if incident.correlation_rule_id.startswith("jenkins_runtime") or "jenkins_build" in categories:
+        return "builds"
+    if "jenkins_queue" in categories:
+        return "queue"
+    if "jenkins_agent" in categories:
+        return "agents"
+    if any(category.startswith("k8s_") for category in categories):
+        return "kubernetes"
+    if incident.source.get("kind") == "merge_request":
+        return "merge_request"
+    return "unknown"
+
+
+def _affected_resource_count(observations: tuple[FindingObservation, ...]) -> int:
+    queue_tasks = {
+        str(item.evidence["queue_task"])
+        for item in observations
+        if item.category == "jenkins_queue" and item.evidence.get("queue_task")
+    }
+    if queue_tasks:
+        return len(queue_tasks)
+    return len({item.resource_id for item in observations})
+
+
+def _severity_rank(value: str) -> int:
+    return {"critical": 2, "warning": 1, "low": 0}.get(value, 0)
+
+
+def _chat_response(result: Any) -> V2ChatResponse:
+    if isinstance(result, str):
+        return V2ChatResponse(content=result)
+    return V2ChatResponse(
+        content=result.content,
+        references=list(result.references),
+        as_of=result.as_of,
+        coverage_status=result.coverage_status,
     )
 
 
@@ -571,6 +1151,38 @@ def _investigation_response(investigation: Investigation) -> V2InvestigationResp
         created_at=investigation.created_at,
         completed_at=investigation.completed_at,
     )
+
+
+def _investigation_request_response(request: InvestigationRequest) -> V2InvestigationRequestResponse:
+    return V2InvestigationRequestResponse(
+        id=request.id,
+        incident_id=request.incident_id,
+        occurrence_id=request.occurrence_id,
+        mode=request.mode.value,
+        source=request.source,
+        priority=request.priority,
+        evidence_hash=request.evidence_hash,
+        status=request.status.value,
+        scan_id=request.scan_id,
+        build_id=request.build_id,
+        requested_by=request.requested_by,
+        attempt_count=request.attempt_count,
+        next_attempt_at=request.next_attempt_at,
+        investigation_id=request.investigation_id,
+        error_summary=request.error_summary,
+        created_at=request.created_at,
+        updated_at=request.updated_at,
+        completed_at=request.completed_at,
+    )
+
+
+async def _build_observations_for_response(
+    request: Request, incident_id: str
+) -> tuple[FindingObservation, ...]:
+    async with _container(request).uow_factory() as uow:
+        observations = await uow.incidents.current_observations(incident_id)
+        builds = await uow.jenkins.builds_for_incident(incident_id)
+    return observations + jenkins_build_observations(builds)
 
 
 def _action_response(action: Action) -> V2ActionResponse:

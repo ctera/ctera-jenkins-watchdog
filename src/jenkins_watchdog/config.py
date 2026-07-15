@@ -18,7 +18,18 @@ class Settings(BaseSettings):
     jenkins_agent_label: str = ""
     jenkins_namespace: str = "jenkins"
     jenkins_failed_build_window_hours: int = 4
+    jenkins_monitor_enabled: bool = True
+    jenkins_sync_interval_s: float = 300.0
+    jenkins_sync_window_hours: int = 168
+    jenkins_sync_concurrency: int = 10
+    jenkins_sync_enrichment_limit: int = 250
+    jenkins_sync_log_limit: int = 30
+    automatic_investigations_enabled: bool = True
+    automatic_investigation_min_priority: int = 1
+    automatic_investigation_batch_size: int = 250
     k8s_events_window_minutes: int = 30
+    kubeconfig_path: str = ""
+    kubernetes_environment: str = "kubernetes"
 
     # Prometheus
     prometheus_endpoint: str = "http://prometheus.monitoring.svc.cluster.local:9090"
@@ -49,14 +60,18 @@ class Settings(BaseSettings):
     worker_poll_interval_s: float = 1.0
     worker_lease_seconds: int = 60
     worker_heartbeat_seconds: int = 15
+    investigation_worker_lease_seconds: int = 600
+    investigation_max_attempts: int = 3
 
     # LLM (via LiteLLM)
     anthropic_api_key: str = ""
     llm_model: str = "anthropic/claude-sonnet-4-6"
     llm_fallback_models: str = "anthropic/claude-opus-4-6"
     llm_temperature: float = 0.1
-    llm_max_tokens: int = 8192
+    llm_max_tokens: int = 2048
     llm_max_retries: int = 2
+    llm_scan_token_budget: int = 24000
+    llm_deep_scan_token_budget: int = 40000
 
     # OIDC (DEX)
     oidc_issuer: str = ""
@@ -64,6 +79,7 @@ class Settings(BaseSettings):
     oidc_client_secret: str = ""
     oidc_redirect_uri: str = ""
     oidc_allowed_groups: str = "DevOps Team"
+    local_actor_email: str = ""
 
     # Jira
     jira_base_url: str = "https://cteranet.atlassian.net"
@@ -92,7 +108,9 @@ class Settings(BaseSettings):
 
     # Agent
     max_tool_rounds: int = 15
+    max_deep_tool_rounds: int = 25
     max_investigations_per_scan: int = 12
+    max_deep_investigations_per_scan: int = 20
 
     @model_validator(mode="after")
     def assemble_database_url(self) -> "Settings":

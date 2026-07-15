@@ -16,6 +16,21 @@ const colors: Record<string, { color: string; background: string }> = {
   queued: { color: "#344054", background: "#eaecf0" },
   pending: { color: "#344054", background: "#eaecf0" },
   retry_scheduled: { color: "#93370d", background: "#fef0c7" },
+  failure: { color: "#912018", background: "#fee4e2" },
+  unstable: { color: "#93370d", background: "#fef0c7" },
+  aborted: { color: "#344054", background: "#eaecf0" },
+  success: { color: "#05603a", background: "#d1fadf" },
+  new_failure: { color: "#912018", background: "#fee4e2" },
+  new_regression: { color: "#9c2a10", background: "#ffead5" },
+  recurring: { color: "#1849a9", background: "#d1e9ff" },
+  flaky: { color: "#854a0e", background: "#fef0c7" },
+  propagated: { color: "#475467", background: "#eaecf0" },
+  enriched: { color: "#05603a", background: "#d1fadf" },
+  log_pending: { color: "#344054", background: "#eaecf0" },
+  partial: { color: "#93370d", background: "#fef0c7" },
+  change_request: { color: "#175cd3", background: "#d1e9ff" },
+  branch: { color: "#05603a", background: "#d1fadf" },
+  tag: { color: "#475467", background: "#eaecf0" },
 };
 
 export default function StatusChip({ value, size = "small" }: { value: string; size?: "small" | "medium" }) {

@@ -19,6 +19,8 @@ from jenkins_watchdog.domain.model import (
     IncidentOccurrence,
     IncidentStatus,
     Investigation,
+    InvestigationRequest,
+    InvestigationRequestStatus,
     InvestigationStatus,
     Scan,
     ScanMode,
@@ -33,6 +35,7 @@ from jenkins_watchdog.infrastructure.models import (
     FindingRecord,
     IncidentRecord,
     InvestigationRecord,
+    InvestigationRequestRecord,
     ScanRecord,
 )
 
@@ -89,6 +92,7 @@ def check_result_from_record(
         findings=findings,
         failure_summary=record.failure_summary,
         categories=frozenset(record.categories),
+        summary=record.summary,
         started_at=record.started_at,
         completed_at=record.completed_at,
     )
@@ -181,6 +185,46 @@ def investigation_from_record(record: InvestigationRecord) -> Investigation:
     )
 
 
+def investigation_request_from_record(record: InvestigationRequestRecord) -> InvestigationRequest:
+    return InvestigationRequest(
+        id=str(record.id),
+        incident_id=str(record.incident_id),
+        occurrence_id=str(record.occurrence_id),
+        mode=ScanMode(record.mode),
+        source=record.source,
+        priority=record.priority,
+        evidence_hash=record.evidence_hash,
+        status=InvestigationRequestStatus(record.status),
+        scan_id=str(record.scan_id) if record.scan_id else None,
+        build_id=str(record.build_id) if record.build_id else None,
+        requested_by=record.requested_by,
+        lease_owner=record.lease_owner,
+        lease_expires_at=record.lease_expires_at,
+        attempt_count=record.attempt_count,
+        next_attempt_at=record.next_attempt_at,
+        investigation_id=str(record.investigation_id) if record.investigation_id else None,
+        error_summary=record.error_summary,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        completed_at=record.completed_at,
+    )
+
+
+def update_investigation_request_record(
+    record: InvestigationRequestRecord, request: InvestigationRequest
+) -> None:
+    record.status = request.status.value
+    record.priority = request.priority
+    record.lease_owner = request.lease_owner
+    record.lease_expires_at = request.lease_expires_at
+    record.attempt_count = request.attempt_count
+    record.next_attempt_at = request.next_attempt_at
+    record.investigation_id = _optional_uuid(request.investigation_id)
+    record.error_summary = request.error_summary
+    record.updated_at = request.updated_at
+    record.completed_at = request.completed_at
+
+
 def action_from_record(record: ActionRecord) -> Action:
     return Action(
         id=str(record.id),
@@ -240,3 +284,11 @@ def jsonable(value: Any) -> Any:
     if isinstance(value, (tuple, list, set, frozenset)):
         return [jsonable(item) for item in value]
     return value
+
+
+def _optional_uuid(value: str | None) -> Any:
+    if value is None:
+        return None
+    from uuid import UUID
+
+    return UUID(value)

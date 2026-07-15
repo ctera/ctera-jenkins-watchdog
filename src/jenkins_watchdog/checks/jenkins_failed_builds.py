@@ -5,7 +5,7 @@ import logging
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from jenkins_watchdog.checks.base import Finding
+from jenkins_watchdog.checks.base import CheckReport, Finding
 from jenkins_watchdog.clients.jenkins import FailedBuildSummary, JenkinsClient
 from jenkins_watchdog.clients.log_analysis import classify_failure, error_signature, extract_error_lines
 from jenkins_watchdog.scan_options import get_scan_options
@@ -64,21 +64,24 @@ class JenkinsFailedBuildCheck:
     def __init__(self, jenkins: JenkinsClient) -> None:
         self._jenkins = jenkins
 
-    async def run(self) -> list[Finding]:
+    async def run(self) -> CheckReport:
         findings: list[Finding] = []
         opts = get_scan_options()
 
-        try:
-            failed_builds = await self._jenkins.get_recent_failed_builds(
-                window_hours=opts.jenkins_failed_build_window_hours,
-                build_limit=opts.jenkins_build_depth,
-            )
-        except Exception as exc:
-            logger.warning("Failed to check recent Jenkins builds: %s", exc)
-            return findings
+        failed_builds = await self._jenkins.get_recent_failed_builds(
+            window_hours=opts.jenkins_failed_build_window_hours,
+            build_limit=opts.jenkins_build_depth,
+        )
 
         if not failed_builds:
-            return findings
+            return CheckReport(
+                findings=findings,
+                summary={
+                    "failed_build_count": 0,
+                    "failed_job_count": 0,
+                    "window_hours": opts.jenkins_failed_build_window_hours,
+                },
+            )
 
         grouped = _group_by_job(failed_builds)
         semaphore = asyncio.Semaphore(LOG_FETCH_CONCURRENCY)
@@ -129,4 +132,16 @@ class JenkinsFailedBuildCheck:
             elif isinstance(result, Exception):
                 logger.warning("Failed build enrichment error: %s", result)
 
-        return findings
+        return CheckReport(
+            findings=findings,
+            summary={
+                "failed_build_count": len(failed_builds),
+                "failed_job_count": len(grouped),
+                "failed_mr_build_count": sum(build.is_mr for build in failed_builds),
+                "window_hours": opts.jenkins_failed_build_window_hours,
+                "recent_failed_builds": [
+                    build.to_dict()
+                    for build in sorted(failed_builds, key=lambda item: item.timestamp_ms, reverse=True)[:25]
+                ],
+            },
+        )

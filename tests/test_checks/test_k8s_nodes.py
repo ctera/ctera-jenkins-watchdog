@@ -22,7 +22,7 @@ def _make_node(name: str, ready: bool = True):
 
 
 @pytest.mark.asyncio
-async def test_node_check_usage_skips_when_metrics_unavailable():
+async def test_node_check_reports_metrics_unavailable():
     node = _make_node("k3s-agent-01")
     v1 = SimpleNamespace(list_node=lambda: SimpleNamespace(items=[node]))
 
@@ -32,9 +32,8 @@ async def test_node_check_usage_skips_when_metrics_unavailable():
 
     kubernetes = SimpleNamespace(core_v1=lambda: v1, run_sync=run_sync)
     metrics = SimpleNamespace(list_node_metrics=AsyncMock(side_effect=MetricsUnavailableError("404")))
-    findings = await NodeCheck(kubernetes, metrics).run()
-
-    assert not any("CPU at" in f.symptom for f in findings)
+    with pytest.raises(MetricsUnavailableError):
+        await NodeCheck(kubernetes, metrics).run()
 
 
 @pytest.mark.asyncio
@@ -53,9 +52,7 @@ async def test_node_check_high_memory_usage():
     kubernetes = SimpleNamespace(core_v1=lambda: v1, run_sync=run_sync)
     metrics_client = SimpleNamespace(
         list_node_metrics=AsyncMock(return_value=metrics),
-        get_node_allocatable=AsyncMock(
-            return_value={"k3s-agent-01": {"cpu_cores": 10.0, "memory_bytes": alloc_bytes}}
-        ),
+        get_node_allocatable=AsyncMock(return_value={"k3s-agent-01": {"cpu_cores": 10.0, "memory_bytes": alloc_bytes}}),
     )
     findings = await NodeCheck(kubernetes, metrics_client).run()
 

@@ -18,6 +18,7 @@ def settings(**overrides):
         "log_level": "info",
         "reload": False,
         "port": 8000,
+        "jenkins_monitor_enabled": True,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -85,6 +86,8 @@ class Container:
         self.ready_calls = 0
         self.worker = SimpleNamespace(healthy=self.healthy, run_forever=self.run_forever)
         self.delivery_worker = SimpleNamespace(run_forever=self.run_forever)
+        self.jenkins_worker = SimpleNamespace(run_forever=self.run_forever)
+        self.investigation_worker = SimpleNamespace(run_forever=self.run_forever)
 
     async def close(self):
         self.closed += 1
@@ -104,6 +107,12 @@ class Container:
 
     def make_delivery_worker(self):
         return self.delivery_worker
+
+    def make_jenkins_worker(self):
+        return self.jenkins_worker
+
+    def make_investigation_worker(self):
+        return self.investigation_worker
 
 
 @pytest.mark.asyncio

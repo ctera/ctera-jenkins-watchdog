@@ -8,16 +8,20 @@ Jenkins Watchdog runs durable Jenkins and Kubernetes scans, correlates every obs
 React SPA -> FastAPI /api/v2 -> PostgreSQL
                  |                 ^
                  v                 |
-              Valkey SSE       scan/action worker
+              Valkey SSE       scan/action/investigation worker
                                    |
                   Jenkins + Kubernetes + LiteLLM + Jira/GitHub/GitLab/SMTP
 ```
 
-- PostgreSQL is the source of truth for scans, checks, findings, incidents, occurrences, investigations, actions, delivery attempts, and event replay.
+- PostgreSQL is the source of truth for scans, checks, findings, incidents, Jenkins job/build history, investigation requests/results, actions, delivery attempts, and event replay.
 - Valkey carries bounded per-scan event streams for low-latency SSE only. It is not business-state storage.
-- The API validates and enqueues work. A separate worker claims scans and actions with 60-second leases and 15-second heartbeats.
+- The API validates and enqueues work. A separate worker claims scans, investigations, and actions with leases and heartbeats.
 - `domain` and `application` contain the dependency-free core and ports. `infrastructure` contains adapters, `entrypoints` contains HTTP/CLI adapters, and `bootstrap.py` is the composition root.
 - External automation is disabled by default.
+
+The Jenkins monitor indexes every discoverable job and its retained build history. Completed non-propagated failures are deterministically enriched, correlated by stable failure signature or logical execution, and linked to an incident. Every material unique incident is queued for eventual agent investigation; an active request is deduplicated instead of dropping work above a per-scan cap. Deep scans also enqueue the active incident backlog.
+
+The agent can read Jenkins build logs, parameters, stages, tests, job history, queue and agents; Kubernetes resources, events, pod logs and metrics; Prometheus; and GitHub/GitLab change metadata and diffs. Tool calls are read-only and persisted in the investigation result. Per-mode output limits, compacted prior tool results, round limits, and token budgets bound each investigation. Only the final assessment and explicit tool trace are retained. Build evidence status and agent-analysis status are separate API/UI fields.
 
 Finding identity is a full SHA-256 over canonical compact JSON containing `[rule_id, resource_id, identity_dimensions]`. Correlation is deterministic and never discards an observation.
 
@@ -58,9 +62,10 @@ Scheduled overlap is a successful no-op. Interactive overlap returns `409 scan_a
 All business routes are under `/api/v2`.
 
 - `POST /api/v2/scans`, scan collection/detail, cancellation, and resumable SSE events.
-- Incident collection/detail, suppression with actor and reason, reinvestigation, and incident chat.
+- Jenkins workspace, failure/build detail, and durable regular/deep `Analyze Build` requests.
+- Incident collection/detail, suppression with actor and reason, durable reinvestigation, and incident chat.
 - Action collection/detail and manual retry for permanently failed actions.
-- Global operational chat through the consolidated reasoning port.
+- Global operational chat with streamed read-only tool activity through `POST /api/v2/chat/stream`.
 
 Collections use opaque `(created_at,id)` cursors with a default limit of 25 and maximum of 100. The checked-in contract is [frontend/openapi.json](frontend/openapi.json), and frontend API types are generated from it.
 

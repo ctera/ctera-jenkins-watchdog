@@ -65,6 +65,13 @@ class InvestigationStatus(StrEnum):
     FAILED = "failed"
 
 
+class InvestigationRequestStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class Confidence(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
@@ -141,8 +148,12 @@ class CheckResult:
     findings: tuple[FindingObservation, ...] = ()
     failure_summary: str | None = None
     categories: frozenset[str] = frozenset()
+    summary: Mapping[str, Any] = field(default_factory=dict)
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "summary", _freeze_mapping(self.summary))
 
     @classmethod
     def succeeded(
@@ -319,6 +330,7 @@ class Incident:
         correlation_key: str,
         observation: FindingObservation,
         opened_at: datetime,
+        title: str | None = None,
     ) -> "Incident":
         occurrence = IncidentOccurrence(
             id=str(uuid4()),
@@ -336,7 +348,7 @@ class Incident:
             current_occurrence=occurrence,
             occurrence_history=(occurrence,),
             severity=observation.severity,
-            title=observation.summary,
+            title=title or observation.summary,
             updated_at=opened_at,
         )
 
@@ -465,6 +477,87 @@ class Investigation:
     def __post_init__(self) -> None:
         object.__setattr__(self, "usage", _freeze_mapping(self.usage))
         object.__setattr__(self, "result", _freeze_mapping(self.result))
+
+
+@dataclass(frozen=True, slots=True)
+class InvestigationRequest:
+    """Durable request to investigate one incident occurrence."""
+
+    id: str
+    incident_id: str
+    occurrence_id: str
+    mode: ScanMode
+    source: str
+    priority: int
+    evidence_hash: str
+    status: InvestigationRequestStatus
+    created_at: datetime
+    updated_at: datetime
+    scan_id: str | None = None
+    build_id: str | None = None
+    requested_by: str | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    attempt_count: int = 0
+    next_attempt_at: datetime | None = None
+    investigation_id: str | None = None
+    error_summary: str | None = None
+    completed_at: datetime | None = None
+
+    def claim(self, *, owner: str, now: datetime, lease_seconds: int) -> "InvestigationRequest":
+        reclaiming = (
+            self.status is InvestigationRequestStatus.RUNNING
+            and self.lease_expires_at is not None
+            and self.lease_expires_at <= now
+        )
+        ready = self.status is InvestigationRequestStatus.QUEUED and (
+            self.next_attempt_at is None or self.next_attempt_at <= now
+        )
+        if not ready and not reclaiming:
+            raise ValueError("investigation request is not claimable")
+        return replace(
+            self,
+            status=InvestigationRequestStatus.RUNNING,
+            lease_owner=owner,
+            lease_expires_at=now + timedelta(seconds=lease_seconds),
+            attempt_count=self.attempt_count + 1,
+            updated_at=now,
+            next_attempt_at=None,
+            error_summary=None,
+        )
+
+    def heartbeat(self, *, owner: str, now: datetime, lease_seconds: int) -> "InvestigationRequest":
+        if self.status is not InvestigationRequestStatus.RUNNING or self.lease_owner != owner:
+            raise ValueError("investigation request lease is not owned by worker")
+        return replace(self, lease_expires_at=now + timedelta(seconds=lease_seconds), updated_at=now)
+
+    def succeed(self, investigation_id: str, *, now: datetime) -> "InvestigationRequest":
+        return replace(
+            self,
+            status=InvestigationRequestStatus.SUCCEEDED,
+            investigation_id=investigation_id,
+            lease_owner=None,
+            lease_expires_at=None,
+            updated_at=now,
+            completed_at=now,
+            error_summary=None,
+        )
+
+    def fail(self, summary: str, *, now: datetime, retry_at: datetime | None = None) -> "InvestigationRequest":
+        return replace(
+            self,
+            status=(
+                InvestigationRequestStatus.QUEUED
+                if retry_at is not None
+                else InvestigationRequestStatus.FAILED
+            ),
+            lease_owner=None,
+            lease_expires_at=None,
+            next_attempt_at=retry_at,
+            error_summary=summary[:500],
+            updated_at=now,
+            completed_at=None if retry_at is not None else now,
+        )
 
 
 @dataclass(frozen=True, slots=True)

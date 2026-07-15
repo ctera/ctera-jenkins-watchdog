@@ -1,11 +1,7 @@
 """Jenkins agent health checks — executors, memory, and disk monitors."""
 
-import logging
-
-from jenkins_watchdog.checks.base import Finding
+from jenkins_watchdog.checks.base import CheckReport, Finding
 from jenkins_watchdog.clients.jenkins import JenkinsClient
-
-logger = logging.getLogger(__name__)
 
 
 class AgentConnectivityCheck:
@@ -14,23 +10,9 @@ class AgentConnectivityCheck:
     def __init__(self, jenkins: JenkinsClient) -> None:
         self._jenkins = jenkins
 
-    async def run(self) -> list[Finding]:
+    async def run(self) -> CheckReport:
         findings: list[Finding] = []
-
-        try:
-            nodes = await self._jenkins.get_nodes()
-        except Exception as e:
-            logger.error("Failed to query Jenkins nodes: %s", e)
-            findings.append(
-                Finding(
-                    severity="critical",
-                    category="jenkins_controller",
-                    resource="jenkins-controller",
-                    symptom=f"Cannot reach Jenkins API: {str(e)[:100]}",
-                    context={"error": str(e)[:200]},
-                )
-            )
-            return findings
+        nodes = await self._jenkins.get_nodes()
 
         for node in nodes:
             name = node.get("displayName", "unknown")
@@ -93,4 +75,15 @@ class AgentConnectivityCheck:
                             )
                         )
 
-        return findings
+        offline = [node for node in nodes if node.get("offline")]
+        temporarily_offline = [node for node in nodes if node.get("temporarilyOffline")]
+        return CheckReport(
+            findings=findings,
+            summary={
+                "agent_count": len(nodes),
+                "online_agent_count": len(nodes) - len(offline),
+                "offline_agent_count": len(offline),
+                "temporarily_offline_count": len(temporarily_offline),
+                "executor_count": sum(int(node.get("numExecutors") or 0) for node in nodes),
+            },
+        )

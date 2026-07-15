@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -12,8 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from jenkins_watchdog.application.delivery import DeliveryService
 from jenkins_watchdog.application.events import EventService
+from jenkins_watchdog.application.incidents import IncidentService
+from jenkins_watchdog.application.investigations import InvestigationQueueService
 from jenkins_watchdog.application.scan_service import ScanService
 from jenkins_watchdog.application.types import EnqueueScan
+from jenkins_watchdog.domain.jenkins import JenkinsBuildEnrichment, JenkinsBuildSnapshot, JenkinsJobSnapshot
 from jenkins_watchdog.domain.model import (
     Action,
     ActionStatus,
@@ -57,7 +60,18 @@ class Reasoning:
         del incident_id, force
         return self.investigation
 
-    async def chat(self, *, message: str, incident_id: str | None = None) -> str:
+    async def chat(
+        self,
+        *,
+        message: str,
+        incident_id: str | None = None,
+        history=(),
+        on_progress=None,
+    ) -> str:
+        del history
+        if on_progress:
+            await on_progress({"type": "tool_call", "tool": "jenkins_get_build_log", "arguments": {}})
+            await on_progress({"type": "tool_result", "tool": "jenkins_get_build_log", "ok": True})
         return f"{incident_id or 'global'}:{message}"
 
 
@@ -194,6 +208,8 @@ def make_app(
         notifier=notifier,
         scan_service=ScanService(uow, events=events),
         reasoning_service=reasoning or Reasoning(),
+        investigation_queue=InvestigationQueueService(uow_factory=uow, now=lambda: NOW),
+        incident_service=IncidentService(uow),
         make_delivery_worker=lambda owner: delivery,
     )
     app.state.container = container
@@ -300,9 +316,86 @@ async def test_incident_detail_filters_suppression_reasoning_and_chat(
     assert unauthenticated.status_code == 401
     assert suppressed.json()["suppressed_by"] == "operator@example.com"
     assert unsuppressed.json()["status"] == "open"
-    assert reinvestigated.json()["id"] == investigation.id
+    assert reinvestigated.status_code == 202
+    assert reinvestigated.json()["incident_id"] == incident.id
+    assert reinvestigated.json()["status"] == "queued"
     assert contextual_chat.json()["content"] == f"{incident.id}:why"
     assert global_chat.json()["content"] == "global:status"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_exposes_tool_activity_and_final_answer(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    app, _ = make_app(postgres_session_factory)
+    async with client(app) as api:
+        response = await api.post("/api/v2/chat/stream", json={"message": "inspect build"})
+
+    assert response.status_code == 200
+    assert "event: tool_call" in response.text
+    assert "jenkins_get_build_log" in response.text
+    assert "event: tool_result" in response.text
+    assert "event: message" in response.text
+    assert "global:inspect build" in response.text
+
+
+@pytest.mark.asyncio
+async def test_analyze_build_creates_incident_and_durable_request(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    job = JenkinsJobSnapshot(
+        full_name="Portal_Build_DAILY_MR_PATCH",
+        display_name="Portal Build",
+        url="https://jenkins/job/portal",
+        job_class="org.jenkinsci.plugins.workflow.job.WorkflowJob",
+        color="red",
+        parent_full_name=None,
+        last_build_number=12358,
+        last_build_at=NOW,
+    )
+    snapshot = JenkinsBuildSnapshot(
+        job_full_name=job.full_name,
+        number=12358,
+        result="FAILURE",
+        url="https://jenkins/job/portal/12358",
+        started_at=NOW,
+        duration_ms=120_000,
+    )
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        await uow.jenkins.upsert_jobs((job,), now=NOW)
+        await uow.jenkins.upsert_builds((snapshot,), now=NOW)
+        await uow.jenkins.save_enrichment(
+            JenkinsBuildEnrichment(
+                job_full_name=job.full_name,
+                number=12358,
+                failure_classification="compilation_error",
+                failure_signature="typescript-error",
+                failure_summary="TypeScript compilation failed",
+                error_lines=("TS2322",),
+                log_enriched=True,
+            ),
+            now=NOW,
+        )
+        await uow.jenkins.refresh_classifications(now=NOW)
+        page = await uow.jenkins.failure_builds(since=NOW - timedelta(hours=1), limit=1)
+        build_id = page.items[0]["id"]
+        await uow.commit()
+
+    app, _ = make_app(postgres_session_factory)
+    async with client(app) as api:
+        queued = await api.post(
+            f"/api/v2/jenkins/builds/{build_id}/analyze",
+            json={"mode": "deep"},
+            headers={"X-Actor": "operator@example.com"},
+        )
+        detail = await api.get(f"/api/v2/jenkins/builds/{build_id}")
+
+    assert queued.status_code == 202
+    assert queued.json()["mode"] == "deep"
+    assert queued.json()["status"] == "queued"
+    assert queued.json()["requested_by"] == "operator@example.com"
+    assert detail.json()["incident_id"] == queued.json()["incident_id"]
+    assert detail.json()["investigation_request"]["id"] == queued.json()["id"]
 
 
 @pytest.mark.asyncio

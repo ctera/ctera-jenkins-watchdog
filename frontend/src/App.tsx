@@ -4,10 +4,12 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 
 const Actions = lazy(() => import("./pages/Actions"));
+const Overview = lazy(() => import("./pages/Overview"));
 const ActionDetailPage = lazy(() => import("./pages/ActionDetail"));
 const Assistant = lazy(() => import("./pages/Assistant"));
 const IncidentDetailPage = lazy(() => import("./pages/IncidentDetail"));
 const Incidents = lazy(() => import("./pages/Incidents"));
+const JenkinsBuildDetailPage = lazy(() => import("./pages/JenkinsBuildDetail"));
 const ScanDetailPage = lazy(() => import("./pages/ScanDetail"));
 const Scans = lazy(() => import("./pages/Scans"));
 
@@ -40,7 +42,9 @@ export default function App() {
       <Suspense fallback={<Box sx={{ minHeight: 240, display: "grid", placeItems: "center" }}><CircularProgress size={28} /></Box>}>
         <Routes>
           <Route element={<Layout />}>
-            <Route index element={<Navigate to="/scans" replace />} />
+            <Route index element={<Navigate to="/overview" replace />} />
+            <Route path="/overview" element={<Overview />} />
+            <Route path="/jenkins/builds/:buildId" element={<JenkinsBuildDetailPage />} />
             <Route path="/scans" element={<Scans />} />
             <Route path="/scans/:scanId" element={<ScanDetailPage />} />
             <Route path="/incidents" element={<Incidents />} />
@@ -48,7 +52,7 @@ export default function App() {
             <Route path="/actions" element={<Actions />} />
             <Route path="/actions/:actionId" element={<ActionDetailPage />} />
             <Route path="/assistant" element={<Assistant />} />
-            <Route path="*" element={<Navigate to="/scans" replace />} />
+            <Route path="*" element={<Navigate to="/overview" replace />} />
           </Route>
         </Routes>
       </Suspense>

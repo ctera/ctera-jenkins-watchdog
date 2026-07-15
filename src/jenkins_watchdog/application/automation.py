@@ -113,9 +113,7 @@ class AutomationService:
                     _action(
                         incident_id=incident.id,
                         occurrence_id=incident.current_occurrence.id,
-                        action_type=(
-                            ActionType.GITHUB_COMMENT if provider == "github" else ActionType.GITLAB_COMMENT
-                        ),
+                        action_type=(ActionType.GITHUB_COMMENT if provider == "github" else ActionType.GITLAB_COMMENT),
                         destination=destination,
                         payload=self._renderer.render("mr_comment", context),
                         template_version=self._renderer.template_version,

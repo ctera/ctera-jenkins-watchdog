@@ -17,6 +17,7 @@ import jenkins
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 15.0
+_CONSOLE_SIZE_PROBE_START = 10**15
 MR_JOB_PATTERN = re.compile(
     r"(?:^|[/_-])(?:MR|mr|PR|pr)(?:[/_-]|$)|merge[-_]?request|MergeRequest|GatedMergeRequest|/MR-|/PR-",
     re.IGNORECASE,
@@ -118,6 +119,37 @@ class JenkinsClient:
         response = await self._http.get("/computer/api/json", params={"tree": _COMPUTER_TREE})
         response.raise_for_status()
         return response.json().get("computer", [])
+
+    async def get_json(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Read a Jenkins JSON endpoint through the configured authenticated client."""
+        response = await self._http.get(path, params=params)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError(f"Jenkins endpoint {path!r} did not return an object")
+        return payload
+
+    async def get_text(self, path: str) -> str:
+        """Read a Jenkins text endpoint through the configured authenticated client."""
+        response = await self._http.get(path)
+        response.raise_for_status()
+        return response.text
+
+    async def get_build_console_tail(self, name: str, number: int, *, max_bytes: int = 160_000) -> str:
+        """Read a bounded tail of a build log through Jenkins' progressive endpoint."""
+        path = f"{job_to_api_path(name)}/{number}/logText/progressiveText"
+        probe = await self._http.get(path, params={"start": _CONSOLE_SIZE_PROBE_START})
+        probe.raise_for_status()
+        size_header = probe.headers.get("x-text-size")
+        if size_header is None:
+            return await self.get_text(f"{job_to_api_path(name)}/{number}/consoleText")
+        try:
+            size = max(0, int(size_header))
+        except ValueError:
+            return await self.get_text(f"{job_to_api_path(name)}/{number}/consoleText")
+        response = await self._http.get(path, params={"start": max(0, size - max(1, max_bytes))})
+        response.raise_for_status()
+        return response.text
 
     async def get_nodes(self) -> list[dict[str, Any]]:
         computers = await self._get_computers()

@@ -9,6 +9,7 @@ from datetime import datetime
 from jenkins_watchdog.application.automation import AutomationService
 from jenkins_watchdog.application.events import EventService
 from jenkins_watchdog.application.incidents import IncidentService
+from jenkins_watchdog.application.investigations import InvestigationQueueService
 from jenkins_watchdog.application.ports import CheckRunner, UnitOfWorkFactory
 from jenkins_watchdog.application.reasoning import ReasoningService
 from jenkins_watchdog.domain.model import CheckStatus, Scan, ScanStage
@@ -39,6 +40,11 @@ class ScanPipeline:
         automation_service: AutomationService,
         events: EventService,
         now: Callable[[], datetime],
+        max_investigations: int = 12,
+        max_deep_investigations: int = 20,
+        token_budget: int = 24000,
+        deep_token_budget: int = 40000,
+        investigation_queue: InvestigationQueueService | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._check_runner = check_runner
@@ -47,6 +53,11 @@ class ScanPipeline:
         self._automation_service = automation_service
         self._events = events
         self._now = now
+        self._max_investigations = max(0, max_investigations)
+        self._max_deep_investigations = max(0, max_deep_investigations)
+        self._token_budget = max(0, token_budget)
+        self._deep_token_budget = max(0, deep_token_budget)
+        self._investigation_queue = investigation_queue
 
     async def execute(self, scan_id: str) -> Scan:
         scan = await self._get_scan(scan_id)
@@ -100,6 +111,10 @@ class ScanPipeline:
             successful_checks=frozenset(successful_checks),
             now=self._now(),
         )
+        if scan.mode.value == "deep":
+            async with self._uow_factory() as uow:
+                active_incident_ids = frozenset(item.id for item in await uow.incidents.active())
+            incident_ids = incident_ids | active_incident_ids
         await self._events.append(
             scan_id,
             "correlation_completed",
@@ -109,23 +124,86 @@ class ScanPipeline:
         scan = await self._advance(await self._get_scan(scan_id), ScanStage.RECONCILING)
         await self._raise_if_cancelled(scan)
         scan = await self._advance(scan, ScanStage.INVESTIGATING)
-        for incident_id in sorted(incident_ids):
-            await self._raise_if_cancelled(await self._get_scan(scan_id))
-            investigation = await self._reasoning_service.investigate_if_needed(incident_id)
-            if investigation is not None:
+        ranked_incidents = await self._rank_incidents(incident_ids)
+        limit = self._max_deep_investigations if scan.mode.value == "deep" else self._max_investigations
+        token_budget = self._deep_token_budget if scan.mode.value == "deep" else self._token_budget
+        candidates: list[str] = []
+        needs_investigation = getattr(self._reasoning_service, "needs_investigation", None)
+        for incident_id in ranked_incidents:
+            if needs_investigation is None or await needs_investigation(incident_id):
+                candidates.append(incident_id)
+
+        completed_investigations = 0
+        used_tokens = 0
+        queued_incidents: set[str] = set()
+        if self._investigation_queue is not None:
+            for position, incident_id in enumerate(candidates):
+                await self._raise_if_cancelled(await self._get_scan(scan_id))
+                request = await self._investigation_queue.enqueue_incident(
+                    incident_id,
+                    source="deep_scan" if scan.mode.value == "deep" else "scan",
+                    mode=scan.mode,
+                    priority=max(1, 100 - position),
+                    scan_id=scan_id,
+                )
+                if request is None:
+                    continue
+                queued_incidents.add(incident_id)
                 await self._events.append(
                     scan_id,
-                    "investigation_completed",
+                    "investigation_queued",
                     {
                         "incident_id": incident_id,
-                        "status": investigation.status.value,
-                        "confidence": investigation.confidence.value if investigation.confidence else None,
+                        "request_id": request.id,
+                        "status": request.status.value,
+                        "mode": request.mode.value,
                     },
                     now=self._now(),
                 )
+        else:
+            for incident_id in candidates[:limit]:
+                await self._raise_if_cancelled(await self._get_scan(scan_id))
+                investigation = await self._reasoning_service.investigate_if_needed(incident_id)
+                if investigation is not None:
+                    completed_investigations += 1
+                    total_tokens = investigation.usage.get("total_tokens")
+                    if isinstance(total_tokens, int):
+                        used_tokens += total_tokens
+                    await self._events.append(
+                        scan_id,
+                        "investigation_completed",
+                        {
+                            "incident_id": incident_id,
+                            "status": investigation.status.value,
+                            "confidence": investigation.confidence.value if investigation.confidence else None,
+                        },
+                        now=self._now(),
+                    )
+                    if token_budget and used_tokens >= token_budget:
+                        break
+        await self._events.append(
+            scan_id,
+            "investigation_budget_applied",
+            {
+                "candidate_count": len(candidates),
+                "completed_count": completed_investigations,
+                "queued_count": len(queued_incidents),
+                "skipped_count": (
+                    0
+                    if self._investigation_queue is not None
+                    else max(0, len(candidates) - completed_investigations)
+                ),
+                "max_investigations": None if self._investigation_queue is not None else limit,
+                "token_budget": token_budget,
+                "used_tokens": used_tokens,
+            },
+            now=self._now(),
+        )
         scan = await self._advance(scan, ScanStage.PLANNING_ACTIONS)
         for incident_id in sorted(incident_ids):
             await self._raise_if_cancelled(await self._get_scan(scan_id))
+            if incident_id in queued_incidents:
+                continue
             actions = await self._automation_service.plan(incident_id)
             if actions:
                 await self._events.append(
@@ -166,6 +244,25 @@ class ScanPipeline:
         if scan is None:
             raise LookupError(f"scan {scan_id} does not exist")
         return scan
+
+    async def _rank_incidents(self, incident_ids: frozenset[str]) -> tuple[str, ...]:
+        ranked: list[tuple[int, int, datetime, str]] = []
+        severity_rank = {"critical": 2, "warning": 1, "low": 0}
+        async with self._uow_factory() as uow:
+            for incident_id in incident_ids:
+                incident = await uow.incidents.get(incident_id)
+                if incident is None:
+                    continue
+                ranked.append(
+                    (
+                        severity_rank[incident.severity.value],
+                        len(incident.current_occurrence.observation_identities),
+                        incident.updated_at or incident.created_at,
+                        incident_id,
+                    )
+                )
+        ranked.sort(reverse=True)
+        return tuple(item[3] for item in ranked)
 
     async def _raise_if_cancelled(self, scan: Scan) -> None:
         if not scan.cancellation_requested:

@@ -11,7 +11,7 @@ from jenkins_watchdog.checks.agent_errors import AgentErrorCheck
 from jenkins_watchdog.checks.agent_pods import AgentPodCheck
 from jenkins_watchdog.checks.agent_resources import AgentResourceCheck
 from jenkins_watchdog.checks.agent_utils import extract_prefix_from_resource, symptom_class
-from jenkins_watchdog.checks.base import BaseCheck, Finding
+from jenkins_watchdog.checks.base import BaseCheck, CheckReport, Finding
 from jenkins_watchdog.checks.jenkins_failed_builds import JenkinsFailedBuildCheck
 from jenkins_watchdog.checks.jenkins_jobs import JenkinsJobCheck
 from jenkins_watchdog.checks.jenkins_pipeline_patterns import JenkinsPipelinePatternCheck
@@ -100,7 +100,7 @@ class LegacyCheckRunner:
         options = ScanOptions.deep_scan() if mode is ScanMode.DEEP else self._regular_options
         token = activate_scan_options(options)
         try:
-            findings = await asyncio.wait_for(check.run(), timeout=self._timeout_seconds)
+            output = await asyncio.wait_for(check.run(), timeout=self._timeout_seconds)
         except TimeoutError:
             completed_at = datetime.now(timezone.utc)
             return CheckResult(
@@ -129,6 +129,9 @@ class LegacyCheckRunner:
             reset_scan_options(token)
 
         completed_at = datetime.now(timezone.utc)
+        findings = output.findings if isinstance(output, CheckReport) else output
+        summary = dict(output.summary) if isinstance(output, CheckReport) else {}
+        summary.update(_finding_summary(findings))
         observations = tuple(
             _to_observation(scan_id=scan_id, check_name=check_name, finding=finding, observed_at=completed_at)
             for finding in findings
@@ -139,6 +142,7 @@ class LegacyCheckRunner:
             status=CheckStatus.SUCCEEDED,
             findings=observations,
             categories=CHECK_CATEGORIES[check_name],
+            summary=summary,
             started_at=started_at,
             completed_at=completed_at,
         )
@@ -169,7 +173,10 @@ def _to_observation(*, scan_id: str, check_name: str, finding: Finding, observed
     if node:
         dimensions["node"] = node
     if finding.category == "jenkins_agent":
-        dimensions["agent_pool"] = extract_prefix_from_resource(finding.resource)
+        dimensions["agent_pool"] = finding.context.get("agent_pool") or extract_prefix_from_resource(finding.resource)
+        container = finding.context.get("container")
+        if container:
+            dimensions["container"] = container
     return FindingObservation(
         scan_id=scan_id,
         check_name=check_name,
@@ -186,3 +193,17 @@ def _to_observation(*, scan_id: str, check_name: str, finding: Finding, observed
 
 def _failure_summary(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
+
+
+def _finding_summary(findings: list[Finding]) -> dict[str, Any]:
+    severity_counts = {"critical": 0, "warning": 0, "low": 0}
+    categories: dict[str, int] = {}
+    for finding in findings:
+        severity_counts[finding.severity] += 1
+        categories[finding.category] = categories.get(finding.category, 0) + 1
+    return {
+        "finding_count": len(findings),
+        "affected_resource_count": len({finding.resource for finding in findings}),
+        "severity_counts": severity_counts,
+        "category_counts": categories,
+    }

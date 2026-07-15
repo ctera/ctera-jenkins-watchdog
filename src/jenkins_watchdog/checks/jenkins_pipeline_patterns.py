@@ -5,7 +5,7 @@ import logging
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from jenkins_watchdog.checks.base import Finding
+from jenkins_watchdog.checks.base import CheckReport, Finding
 from jenkins_watchdog.clients.jenkins import (
     FailedBuildSummary,
     JenkinsClient,
@@ -79,9 +79,7 @@ def _detect_parameter_anomalies(params: dict[str, str], job_name: str) -> list[s
     return anomalies
 
 
-async def _fetch_log_signature(
-    jenkins: JenkinsClient, job_name: str, build_number: int
-) -> tuple[list[str], str, str]:
+async def _fetch_log_signature(jenkins: JenkinsClient, job_name: str, build_number: int) -> tuple[list[str], str, str]:
     """Fetch build log and return error lines, signature, and failure class."""
     try:
         console = await jenkins.get_build_console_output(job_name, build_number)
@@ -98,22 +96,21 @@ class JenkinsPipelinePatternCheck:
     def __init__(self, jenkins: JenkinsClient) -> None:
         self._jenkins = jenkins
 
-    async def run(self) -> list[Finding]:
+    async def run(self) -> CheckReport:
         findings: list[Finding] = []
         opts = get_scan_options()
         consecutive_threshold, history_limit = _thresholds()
 
-        try:
-            failed_builds = await self._jenkins.get_recent_failed_builds(
-                window_hours=opts.jenkins_failed_build_window_hours,
-                build_limit=opts.jenkins_build_depth,
-            )
-        except Exception as exc:
-            logger.warning("Pipeline pattern check: failed to get recent builds: %s", exc)
-            return findings
+        failed_builds = await self._jenkins.get_recent_failed_builds(
+            window_hours=opts.jenkins_failed_build_window_hours,
+            build_limit=opts.jenkins_build_depth,
+        )
 
         if not failed_builds:
-            return findings
+            return CheckReport(
+                findings=findings,
+                summary={"jobs_analyzed": 0, "failed_build_count": 0, "shared_signature_count": 0},
+            )
 
         grouped: dict[str, list[FailedBuildSummary]] = defaultdict(list)
         for build in failed_builds:
@@ -262,4 +259,11 @@ class JenkinsPipelinePatternCheck:
                 )
             )
 
-        return findings
+        return CheckReport(
+            findings=findings,
+            summary={
+                "jobs_analyzed": len(grouped),
+                "failed_build_count": len(failed_builds),
+                "shared_signature_count": sum(len(set(jobs)) >= 2 for jobs in signature_jobs.values()),
+            },
+        )

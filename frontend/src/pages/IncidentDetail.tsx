@@ -8,6 +8,7 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  Link,
   Paper,
   Stack,
   Tab,
@@ -25,9 +26,11 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import NotificationsOffOutlinedIcon from "@mui/icons-material/NotificationsOffOutlined";
 import NotificationsActiveOutlinedIcon from "@mui/icons-material/NotificationsActiveOutlined";
 import PsychologyOutlinedIcon from "@mui/icons-material/PsychologyOutlined";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ChatPanel from "../components/ChatPanel";
+import MarkdownContent from "../components/MarkdownContent";
 import PageHeader from "../components/PageHeader";
 import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
@@ -37,10 +40,11 @@ import {
   suppressIncident,
   unsuppressIncident,
   type IncidentDetail,
+  type Observation,
 } from "../services/api";
 import { formatDate, titleCase } from "../utils/format";
 
-const tabs = ["Overview", "Observations", "Investigation", "Actions", "Chat"];
+const tabs = ["Summary", "Affected resources", "Investigation", "History", "Actions", "Chat"];
 
 export default function IncidentDetailPage() {
   const { incidentId } = useParams();
@@ -66,6 +70,13 @@ export default function IncidentDetailPage() {
   }, [incidentId]);
 
   useEffect(() => void refresh(), [refresh]);
+
+  const investigationActive = ["queued", "running"].includes(detail?.investigation_request?.status ?? "");
+  useEffect(() => {
+    if (!investigationActive) return;
+    const timer = window.setInterval(() => void refresh(), 2500);
+    return () => window.clearInterval(timer);
+  }, [investigationActive, refresh]);
 
   async function suppress() {
     if (!incidentId || !reason.trim()) return;
@@ -127,10 +138,10 @@ export default function IncidentDetailPage() {
             <Button
               variant="outlined"
               startIcon={<PsychologyOutlinedIcon />}
-              disabled={working}
+              disabled={working || investigationActive}
               onClick={() => void reinvestigate()}
             >
-              Reinvestigate
+              {investigationActive ? "Investigation in progress" : "Reinvestigate"}
             </Button>
             {incident.status === "suppressed" ? (
               <Button
@@ -162,8 +173,9 @@ export default function IncidentDetailPage() {
           <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
             <StatusChip value={incident.severity} size="medium" />
             <StatusChip value={incident.status} size="medium" />
+            <Chip variant="outlined" label={`${incident.affected_resource_count} affected`} />
             <Chip variant="outlined" label={`Occurrence #${incident.occurrence_number}`} />
-            <Chip variant="outlined" label={titleCase(String(incident.source.kind ?? "unknown"))} />
+            <Chip variant="outlined" label={titleCase(incident.domain)} />
           </Stack>
           <Stack direction={{ xs: "column", sm: "row" }} gap={{ xs: 0.5, sm: 3 }}>
             <Meta label="Opened" value={formatDate(incident.created_at)} />
@@ -186,16 +198,18 @@ export default function IncidentDetailPage() {
           scrollButtons="auto"
           sx={{ px: 1, borderBottom: "1px solid", borderColor: "divider" }}
         >
-          {tabs.map((label, index) => (
-            <Tab key={label} label={label === "Observations" || label === "Actions" ? `${label} (${label === "Observations" ? detail.observations.length : detail.actions.length})` : label} id={`incident-tab-${index}`} />
-          ))}
+          {tabs.map((label, index) => {
+            const count = label === "Affected resources" ? (detail.current_observations ?? []).length : label === "Actions" ? detail.actions.length : null;
+            return <Tab key={label} label={count === null ? label : `${label} (${count})`} id={`incident-tab-${index}`} />;
+          })}
         </Tabs>
         <Box sx={{ p: { xs: 2, md: 2.5 } }}>
           {tab === 0 && <Overview detail={detail} />}
           {tab === 1 && <Observations detail={detail} />}
           {tab === 2 && <InvestigationView detail={detail} />}
-          {tab === 3 && <ActionsView detail={detail} onOpen={(id) => navigate(`/actions/${id}`)} />}
-          {tab === 4 && <ChatPanel incidentId={incident.id} />}
+          {tab === 3 && <History detail={detail} />}
+          {tab === 4 && <ActionsView detail={detail} onOpen={(id) => navigate(`/actions/${id}`)} />}
+          {tab === 5 && <ChatPanel incidentId={incident.id} />}
         </Box>
       </Paper>
 
@@ -226,82 +240,141 @@ export default function IncidentDetailPage() {
 
 function Overview({ detail }: { detail: IncidentDetail }) {
   const incident = detail.incident;
+  const investigation = detail.latest_investigation;
+  const result = investigation?.result ?? {};
   return (
     <Stack gap={3}>
       <Box>
-        <Typography variant="h6" sx={{ mb: 1.25 }}>Source association</Typography>
-        <KeyValues value={incident.source} />
+        <Typography variant="h6" sx={{ mb: 1.25 }}>What we know</Typography>
+        <Typography variant="body1">
+          This condition currently affects <strong>{incident.affected_resource_count}</strong> resource{incident.affected_resource_count === 1 ? "" : "s"}. It was first seen {formatDate(incident.first_seen_at ?? incident.created_at)} and last confirmed {formatDate(incident.last_seen_at ?? incident.updated_at)}.
+        </Typography>
+      </Box>
+      {textValue(result.quality_gate) && <Alert severity="warning">{textValue(result.quality_gate)}</Alert>}
+      <Divider />
+      <Box>
+        <Typography variant="h6" sx={{ mb: 1.25 }}>Likely cause</Typography>
+        <MarkdownContent content={textValue(result.root_cause, "Investigation has not produced a root-cause assessment yet.")} />
       </Box>
       <Divider />
       <Box>
-        <Typography variant="h6" sx={{ mb: 1.25 }}>Triage</Typography>
-        <Stack direction={{ xs: "column", sm: "row" }} gap={3}>
-          <Meta label="Actionability" value={incident.actionability ? titleCase(incident.actionability) : "-"} />
-          <Meta label="Classification" value={incident.classification ? titleCase(incident.classification) : "-"} />
-          <Meta label="Priority" value={incident.priority ? titleCase(incident.priority) : "-"} />
-        </Stack>
+        <Typography variant="h6" sx={{ mb: 1.25 }}>Recommended next action</Typography>
+        <MarkdownContent content={textValue(result.suggested_fix, "Review the affected resources and their source-system links.")} />
       </Box>
       <Divider />
-      <Box>
-        <Typography variant="h6" sx={{ mb: 1.25 }}>Occurrences</Typography>
-        <Stack divider={<Divider flexItem />}>
-          {detail.occurrences.map((occurrence) => (
-            <Stack key={occurrence.id} direction={{ xs: "column", md: "row" }} gap={2} sx={{ py: 1.5 }}>
-              <Typography fontWeight={700} sx={{ width: 110 }}>#{occurrence.number}</Typography>
-              <Box sx={{ flex: 1 }}>
-                <Typography variant="body2">{formatDate(occurrence.opened_at)} to {formatDate(occurrence.resolved_at)}</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {occurrence.responsible_checks.map(titleCase).join(", ")}
-                </Typography>
-              </Box>
-              <Typography variant="body2" color="text.secondary">{occurrence.observation_identities.length} observations</Typography>
-            </Stack>
-          ))}
-        </Stack>
-      </Box>
+      <Stack direction={{ xs: "column", md: "row" }} gap={3}>
+        <Meta label="Actionability" value={incident.actionability ? titleCase(incident.actionability) : "Unknown"} />
+        <Meta label="Classification" value={incident.classification ? titleCase(incident.classification) : titleCase(incident.domain)} />
+        <Meta label="Priority" value={incident.priority ? titleCase(incident.priority) : titleCase(incident.severity)} />
+        <Meta label="Confidence" value={investigation?.confidence ? titleCase(investigation.confidence) : "Not assessed"} />
+      </Stack>
+      {Object.keys(incident.source).length > 0 && (
+        <>
+          <Divider />
+          <Box>
+            <Typography variant="h6" sx={{ mb: 1.25 }}>Source association</Typography>
+            <KeyValues value={incident.source} />
+          </Box>
+        </>
+      )}
     </Stack>
   );
 }
 
-function Observations({ detail }: { detail: IncidentDetail }) {
-  if (!detail.observations.length) return <Typography color="text.secondary">No observations</Typography>;
+function History({ detail }: { detail: IncidentDetail }) {
   return (
     <Stack gap={2} divider={<Divider flexItem />}>
-      {detail.observations.map((item) => (
-        <Box key={`${item.scan_id}-${item.stable_identity}`} sx={{ py: 1 }}>
-          <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" gap={1}>
-            <Box sx={{ minWidth: 0 }}>
-              <Typography fontWeight={650}>{item.summary}</Typography>
-              <Typography variant="caption" color="text.secondary">{item.resource_id} · {formatDate(item.observed_at)}</Typography>
-            </Box>
-            <Stack direction="row" gap={1} alignItems="center">
-              <StatusChip value={item.severity} />
-              <Chip size="small" variant="outlined" label={titleCase(item.category)} />
-            </Stack>
-          </Stack>
-          {Object.keys(item.evidence).length > 0 && (
-            <Typography component="pre" variant="caption" sx={{ mt: 1.25, p: 1.5, bgcolor: "#f8f9fa", border: "1px solid", borderColor: "divider", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "ui-monospace, monospace" }}>
-              {JSON.stringify(item.evidence, null, 2)}
+      {detail.occurrences.map((occurrence) => (
+        <Stack key={occurrence.id} direction={{ xs: "column", md: "row" }} gap={2} sx={{ py: 1.5 }}>
+          <Typography fontWeight={700} sx={{ width: 110 }}>Occurrence #{occurrence.number}</Typography>
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="body2">{formatDate(occurrence.opened_at)} to {formatDate(occurrence.resolved_at)}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {occurrence.responsible_checks.map(titleCase).join(", ")}
             </Typography>
-          )}
-        </Box>
+          </Box>
+          <Typography variant="body2" color="text.secondary">{occurrence.observation_identities.length} unique resources observed</Typography>
+        </Stack>
       ))}
     </Stack>
   );
 }
 
+function Observations({ detail }: { detail: IncidentDetail }) {
+  const observations = [...(detail.current_observations ?? [])].sort(compareObservations);
+  if (!observations.length) return <Typography color="text.secondary">No current affected resources</Typography>;
+  return (
+    <TableContainer>
+      <Table sx={{ minWidth: 820 }}>
+        <TableHead><TableRow><TableCell>Resource</TableCell><TableCell>Problem</TableCell><TableCell>Details</TableCell><TableCell>Severity</TableCell><TableCell>Observed</TableCell><TableCell align="right">Source</TableCell></TableRow></TableHead>
+        <TableBody>
+          {observations.map((item) => {
+            const url = typeof item.evidence.url === "string" ? item.evidence.url : "";
+            return (
+              <TableRow key={`${item.scan_id}-${item.stable_identity}`}>
+                <TableCell>
+                  <Typography variant="body2" fontWeight={650}>{resourceLabel(item)}</Typography>
+                  <Typography variant="caption" color="text.secondary">{item.resource_id}</Typography>
+                </TableCell>
+                <TableCell>{item.summary}</TableCell>
+                <TableCell>{observationDetails(item)}</TableCell>
+                <TableCell><StatusChip value={item.severity} /></TableCell>
+                <TableCell>{formatDate(item.observed_at)}</TableCell>
+                <TableCell align="right">{url ? <Link href={url} target="_blank" rel="noreferrer" aria-label={`Open ${resourceLabel(item)}`}><OpenInNewIcon fontSize="small" /></Link> : "-"}</TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+}
+
 function InvestigationView({ detail }: { detail: IncidentDetail }) {
   const investigation = detail.latest_investigation;
-  if (!investigation) return <Typography color="text.secondary">No investigation recorded</Typography>;
+  const request = detail.investigation_request;
+  if (!investigation && !request) return <Typography color="text.secondary">No investigation recorded</Typography>;
   return (
     <Stack gap={2.5}>
       <Stack direction="row" gap={1} flexWrap="wrap">
-        <StatusChip value={investigation.status} />
-        {investigation.confidence && <Chip size="small" label={`${titleCase(investigation.confidence)} confidence`} variant="outlined" />}
-        <Chip size="small" label={investigation.model} variant="outlined" />
+        {request && <StatusChip value={request.status} />}
+        {request && <Chip size="small" label={`${titleCase(request.mode)} mode`} variant="outlined" />}
+        {investigation && !request && <StatusChip value={investigation.status} />}
+        {investigation?.confidence && <Chip size="small" label={`${titleCase(investigation.confidence)} confidence`} variant="outlined" />}
+        {investigation && <Chip size="small" label={investigation.model} variant="outlined" />}
       </Stack>
-      {investigation.error_summary && <Alert severity="error">{investigation.error_summary}</Alert>}
-      <KeyValues value={investigation.result} />
+      {request?.status === "queued" && <Alert severity="info">Agent analysis is queued.</Alert>}
+      {request?.status === "running" && <Alert severity="info">Agent is gathering live evidence.</Alert>}
+      {request?.status === "failed" && <Alert severity="error">{request.error_summary || "Agent analysis failed."}</Alert>}
+      {investigation?.error_summary && <Alert severity="error">{investigation.error_summary}</Alert>}
+      {textValue(investigation?.result.quality_gate) && <Alert severity="warning">{textValue(investigation?.result.quality_gate)}</Alert>}
+      {!investigation && <Typography color="text.secondary">No completed agent assessment recorded.</Typography>}
+      {investigation && <>
+      <Box>
+        <Typography variant="h6" sx={{ mb: 1 }}>Root cause</Typography>
+        <MarkdownContent content={textValue(investigation.result.root_cause)} />
+      </Box>
+      <Divider />
+      <Box>
+        <Typography variant="h6" sx={{ mb: 1 }}>Impact</Typography>
+        <MarkdownContent content={textValue(investigation.result.impact)} />
+      </Box>
+      <Divider />
+      <Box>
+        <Typography variant="h6" sx={{ mb: 1 }}>Recommended action</Typography>
+        <MarkdownContent content={textValue(investigation.result.suggested_fix)} />
+      </Box>
+      {Array.isArray(investigation.result.evidence) && (
+        <>
+          <Divider />
+          <Box>
+            <Typography variant="h6" sx={{ mb: 1 }}>Evidence used</Typography>
+            <Stack component="ul" gap={0.75} sx={{ pl: 2.5, m: 0 }}>
+              {investigation.result.evidence.map((item, index) => <Typography component="li" variant="body2" key={index}>{textValue(item)}</Typography>)}
+            </Stack>
+          </Box>
+        </>
+      )}
       <Divider />
       <Stack direction={{ xs: "column", md: "row" }} gap={3}>
         <Meta label="Evidence hash" value={investigation.evidence_hash} />
@@ -309,8 +382,79 @@ function InvestigationView({ detail }: { detail: IncidentDetail }) {
         <Meta label="Completed" value={formatDate(investigation.completed_at)} />
       </Stack>
       {Object.keys(investigation.usage).length > 0 && <KeyValues value={investigation.usage} />}
+      {Array.isArray(investigation.result.tool_trace) && investigation.result.tool_trace.length > 0 && (
+        <>
+          <Divider />
+          <Box>
+            <Typography variant="h6" sx={{ mb: 1 }}>Live evidence trace</Typography>
+            <Stack gap={0.75}>
+              {investigation.result.tool_trace.map((raw, index) => {
+                const item = recordValue(raw);
+                return (
+                  <Stack key={`${textValue(item.tool)}-${index}`} direction="row" gap={1} alignItems="center">
+                    <StatusChip value={item.ok ? "succeeded" : "failed"} />
+                    <Typography variant="body2" fontWeight={650}>{titleCase(textValue(item.tool))}</Typography>
+                    <Typography variant="caption" color="text.secondary">round {textValue(item.round)} · {textValue(item.duration_ms)} ms</Typography>
+                  </Stack>
+                );
+              })}
+            </Stack>
+          </Box>
+        </>
+      )}
+      </>}
     </Stack>
   );
+}
+
+function resourceLabel(item: Observation): string {
+  const jobName = item.evidence.job_name;
+  const buildNumber = item.evidence.build_number;
+  if (typeof jobName === "string") return buildNumber === undefined ? jobName : `${jobName} #${String(buildNumber)}`;
+  const pool = item.evidence.agent_pool;
+  if (typeof pool === "string" && pool) return pool;
+  const queueTask = item.evidence.queue_task;
+  if (typeof queueTask === "string" && queueTask) return queueTask;
+  return item.resource_id;
+}
+
+function observationDetails(item: Observation): string {
+  const details = [];
+  if (typeof item.evidence.elapsed_hours === "number") details.push(`${item.evidence.elapsed_hours.toFixed(1)}h runtime`);
+  if (typeof item.evidence.wait_minutes === "number") details.push(`${durationMinutes(item.evidence.wait_minutes)} waiting`);
+  if (typeof item.evidence.reason === "string" && item.evidence.reason) details.push(item.evidence.reason);
+  if (typeof item.evidence.node === "string" && item.evidence.node) details.push(item.evidence.node);
+  if (typeof item.evidence.container === "string" && item.evidence.container) details.push(`container ${item.evidence.container}`);
+  return details.join(" · ") || titleCase(item.category);
+}
+
+function compareObservations(left: Observation, right: Observation): number {
+  const leftDuration = numericEvidence(left, "elapsed_hours") * 60 + numericEvidence(left, "wait_minutes");
+  const rightDuration = numericEvidence(right, "elapsed_hours") * 60 + numericEvidence(right, "wait_minutes");
+  return rightDuration - leftDuration || resourceLabel(left).localeCompare(resourceLabel(right));
+}
+
+function numericEvidence(item: Observation, key: string): number {
+  const value = item.evidence[key];
+  return typeof value === "number" ? value : 0;
+}
+
+function durationMinutes(value: number): string {
+  if (value >= 1440) return `${(value / 1440).toFixed(1)}d`;
+  if (value >= 60) return `${(value / 60).toFixed(1)}h`;
+  return `${Math.round(value)}m`;
+}
+
+function textValue(value: unknown, fallback = "Not available"): string {
+  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return fallback;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function ActionsView({ detail, onOpen }: { detail: IncidentDetail; onOpen: (id: string) => void }) {

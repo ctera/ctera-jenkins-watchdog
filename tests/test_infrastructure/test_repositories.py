@@ -23,7 +23,7 @@ from jenkins_watchdog.infrastructure.uow import SqlAlchemyUnitOfWork
 NOW = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
 
 
-def test_schema_contains_exactly_ten_business_tables() -> None:
+def test_schema_contains_expected_business_tables() -> None:
     assert set(Base.metadata.tables) == {
         "scans",
         "check_executions",
@@ -35,6 +35,11 @@ def test_schema_contains_exactly_ten_business_tables() -> None:
         "actions",
         "delivery_attempts",
         "scan_events",
+        "jenkins_jobs",
+        "jenkins_builds",
+        "jenkins_build_edges",
+        "jenkins_sync_state",
+        "investigation_requests",
     }
 
 

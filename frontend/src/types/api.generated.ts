@@ -72,6 +72,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/chat/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Chat Stream */
+        post: operations["chat_stream_api_v2_chat_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v2/incidents": {
         parameters: {
             query?: never;
@@ -168,6 +185,91 @@ export interface paths {
         put?: never;
         /** Unsuppress Incident */
         post: operations["unsuppress_incident_api_v2_incidents__incident_id__unsuppress_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/jenkins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Jenkins Workspace */
+        get: operations["jenkins_workspace_api_v2_jenkins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/jenkins/builds/{build_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Jenkins Build Detail */
+        get: operations["jenkins_build_detail_api_v2_jenkins_builds__build_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/jenkins/builds/{build_id}/analyze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Analyze Jenkins Build */
+        post: operations["analyze_jenkins_build_api_v2_jenkins_builds__build_id__analyze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/jenkins/failures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Jenkins Failures */
+        get: operations["jenkins_failures_api_v2_jenkins_failures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Overview */
+        get: operations["overview_api_v2_overview_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -410,6 +512,15 @@ export interface components {
              */
             updated_at: string;
         };
+        /** V2AnalyzeBuildRequest */
+        V2AnalyzeBuildRequest: {
+            /**
+             * Mode
+             * @default regular
+             * @enum {string}
+             */
+            mode: "regular" | "deep";
+        };
         /** V2CancelResponse */
         V2CancelResponse: {
             /** Cancel Requested */
@@ -421,6 +532,10 @@ export interface components {
         };
         /** V2ChatRequest */
         V2ChatRequest: {
+            /** History */
+            history?: {
+                [key: string]: string;
+            }[];
             /** Incident Id */
             incident_id?: string | null;
             /** Message */
@@ -428,8 +543,40 @@ export interface components {
         };
         /** V2ChatResponse */
         V2ChatResponse: {
+            /** As Of */
+            as_of?: string | null;
             /** Content */
             content: string;
+            /**
+             * Coverage Status
+             * @default unknown
+             */
+            coverage_status: string;
+            /** References */
+            references?: {
+                [key: string]: string;
+            }[];
+        };
+        /** V2CheckExecutionResponse */
+        V2CheckExecutionResponse: {
+            /** Categories */
+            categories: string[];
+            /** Completed At */
+            completed_at: string | null;
+            /** Failure Summary */
+            failure_summary: string | null;
+            /** Finding Count */
+            finding_count: number;
+            /** Name */
+            name: string;
+            /** Started At */
+            started_at: string | null;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: {
+                [key: string]: unknown;
+            };
         };
         /** V2DeliveryAttemptResponse */
         V2DeliveryAttemptResponse: {
@@ -455,11 +602,47 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** V2FailurePatternResponse */
+        V2FailurePatternResponse: {
+            /** Affected Jobs */
+            affected_jobs: string[];
+            /** Classification */
+            classification: string;
+            /** Failed Wall Hours */
+            failed_wall_hours: number;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Latest Build Id */
+            latest_build_id: string;
+            /** Occurrence Count */
+            occurrence_count: number;
+            /** Priority Score */
+            priority_score: number;
+            /** Signature */
+            signature: string;
+            /** Title */
+            title: string;
+        };
         /** V2IncidentDetailResponse */
         V2IncidentDetailResponse: {
             /** Actions */
             actions: components["schemas"]["V2ActionResponse"][];
+            /** Current Observations */
+            current_observations?: components["schemas"]["V2ObservationResponse"][];
             incident: components["schemas"]["V2IncidentResponse"];
+            investigation_request?: components["schemas"]["V2InvestigationRequestResponse"] | null;
+            /** Jenkins Builds */
+            jenkins_builds?: {
+                [key: string]: unknown;
+            }[];
             latest_investigation: components["schemas"]["V2InvestigationResponse"] | null;
             /** Observations */
             observations: components["schemas"]["V2ObservationResponse"][];
@@ -477,6 +660,11 @@ export interface components {
         V2IncidentResponse: {
             /** Actionability */
             actionability: string | null;
+            /**
+             * Affected Resource Count
+             * @default 0
+             */
+            affected_resource_count: number;
             /** Classification */
             classification: string | null;
             /** Correlation Key */
@@ -488,8 +676,22 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Current Observation Count
+             * @default 0
+             */
+            current_observation_count: number;
+            /**
+             * Domain
+             * @default unknown
+             */
+            domain: string;
+            /** First Seen At */
+            first_seen_at?: string | null;
             /** Id */
             id: string;
+            /** Last Seen At */
+            last_seen_at?: string | null;
             /** Occurrence Number */
             occurrence_number: number;
             /** Priority */
@@ -514,6 +716,51 @@ export interface components {
             title: string;
             /** Updated At */
             updated_at: string | null;
+        };
+        /** V2InvestigationRequestResponse */
+        V2InvestigationRequestResponse: {
+            /** Attempt Count */
+            attempt_count: number;
+            /** Build Id */
+            build_id: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error Summary */
+            error_summary: string | null;
+            /** Evidence Hash */
+            evidence_hash: string;
+            /** Id */
+            id: string;
+            /** Incident Id */
+            incident_id: string;
+            /** Investigation Id */
+            investigation_id: string | null;
+            /** Mode */
+            mode: string;
+            /** Next Attempt At */
+            next_attempt_at: string | null;
+            /** Occurrence Id */
+            occurrence_id: string;
+            /** Priority */
+            priority: number;
+            /** Requested By */
+            requested_by: string | null;
+            /** Scan Id */
+            scan_id: string | null;
+            /** Source */
+            source: string;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** V2InvestigationResponse */
         V2InvestigationResponse: {
@@ -548,6 +795,370 @@ export interface components {
             usage: {
                 [key: string]: unknown;
             };
+        };
+        /** V2JenkinsBuildDetailResponse */
+        V2JenkinsBuildDetailResponse: {
+            /** Build Number */
+            build_number: number;
+            /**
+             * Building
+             * @default false
+             */
+            building: boolean;
+            /** Change Number */
+            change_number?: string | null;
+            /** Change Url */
+            change_url?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Coverage
+             * @default unknown
+             */
+            coverage: string;
+            /** Downstream Builds */
+            downstream_builds: {
+                [key: string]: unknown;
+            }[];
+            /** Duration Ms */
+            duration_ms: number;
+            /**
+             * Enrichment Status
+             * @default pending
+             */
+            enrichment_status: string;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Failed Stage */
+            failed_stage?: string | null;
+            /**
+             * Failure Classification
+             * @default unknown
+             */
+            failure_classification: string;
+            /**
+             * Failure Signature
+             * @default
+             */
+            failure_signature: string;
+            /** Failure Summary */
+            failure_summary?: string | null;
+            /** Head Name */
+            head_name?: string | null;
+            /**
+             * Head Type
+             * @default unknown
+             */
+            head_type: string;
+            /** Id */
+            id: string;
+            incident?: components["schemas"]["V2IncidentResponse"] | null;
+            /** Incident Id */
+            incident_id?: string | null;
+            investigation_request?: components["schemas"]["V2InvestigationRequestResponse"] | null;
+            /** Job Name */
+            job_name: string;
+            /**
+             * Job Type
+             * @default other
+             */
+            job_type: string;
+            latest_investigation?: components["schemas"]["V2InvestigationResponse"] | null;
+            /** Logical Run Key */
+            logical_run_key: string;
+            /**
+             * Novelty
+             * @default unclassified
+             */
+            novelty: string;
+            /** Parent */
+            parent?: string | null;
+            /** Priority Reasons */
+            priority_reasons?: string[];
+            /**
+             * Priority Score
+             * @default 0
+             */
+            priority_score: number;
+            /**
+             * Propagated Failure
+             * @default false
+             */
+            propagated_failure: boolean;
+            /** Repository */
+            repository?: string | null;
+            /** Result */
+            result: string;
+            /** Root Build Number */
+            root_build_number: number;
+            /** Root Job */
+            root_job: string;
+            /** Source Provider */
+            source_provider?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Trigger Kind
+             * @default unknown
+             */
+            trigger_kind: string;
+            /** Upstream Builds */
+            upstream_builds: {
+                [key: string]: unknown;
+            }[];
+            /** Url */
+            url: string;
+        };
+        /** V2JenkinsBuildResponse */
+        V2JenkinsBuildResponse: {
+            /** Build Number */
+            build_number: number;
+            /**
+             * Building
+             * @default false
+             */
+            building: boolean;
+            /** Change Number */
+            change_number?: string | null;
+            /** Change Url */
+            change_url?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Coverage
+             * @default unknown
+             */
+            coverage: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /**
+             * Enrichment Status
+             * @default pending
+             */
+            enrichment_status: string;
+            /** Failed Stage */
+            failed_stage?: string | null;
+            /**
+             * Failure Classification
+             * @default unknown
+             */
+            failure_classification: string;
+            /**
+             * Failure Signature
+             * @default
+             */
+            failure_signature: string;
+            /** Failure Summary */
+            failure_summary?: string | null;
+            /** Head Name */
+            head_name?: string | null;
+            /**
+             * Head Type
+             * @default unknown
+             */
+            head_type: string;
+            /** Id */
+            id: string;
+            /** Incident Id */
+            incident_id?: string | null;
+            /** Job Name */
+            job_name: string;
+            /**
+             * Job Type
+             * @default other
+             */
+            job_type: string;
+            /** Logical Run Key */
+            logical_run_key: string;
+            /**
+             * Novelty
+             * @default unclassified
+             */
+            novelty: string;
+            /** Parent */
+            parent?: string | null;
+            /** Priority Reasons */
+            priority_reasons?: string[];
+            /**
+             * Priority Score
+             * @default 0
+             */
+            priority_score: number;
+            /**
+             * Propagated Failure
+             * @default false
+             */
+            propagated_failure: boolean;
+            /** Repository */
+            repository?: string | null;
+            /** Result */
+            result: string;
+            /** Root Build Number */
+            root_build_number: number;
+            /** Root Job */
+            root_job: string;
+            /** Source Provider */
+            source_provider?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Trigger Kind
+             * @default unknown
+             */
+            trigger_kind: string;
+            /** Url */
+            url: string;
+        };
+        /** V2JenkinsFailurePage */
+        V2JenkinsFailurePage: {
+            /** Items */
+            items: components["schemas"]["V2JenkinsBuildResponse"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** V2JenkinsWorkspaceResponse */
+        V2JenkinsWorkspaceResponse: {
+            /** Active Executions */
+            active_executions: components["schemas"]["V2LogicalExecutionResponse"][];
+            /** Busy Jobs */
+            busy_jobs: components["schemas"]["V2JobFamilyResponse"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Multibranch */
+            multibranch: components["schemas"]["V2MultibranchFamilyResponse"][];
+            /** New Failures */
+            new_failures: components["schemas"]["V2JenkinsBuildResponse"][];
+            /** Recurring Patterns */
+            recurring_patterns: components["schemas"]["V2FailurePatternResponse"][];
+            /** Summary */
+            summary: {
+                [key: string]: unknown;
+            };
+            /** Window Hours */
+            window_hours: number;
+        };
+        /** V2JobFamilyResponse */
+        V2JobFamilyResponse: {
+            /** Coverage */
+            coverage: string;
+            /** Failure Rate */
+            failure_rate: number;
+            /** Head Name */
+            head_name?: string | null;
+            /** Head Type */
+            head_type: string;
+            /** Job Name */
+            job_name: string;
+            /** Job Type */
+            job_type: string;
+            /**
+             * Last Build At
+             * Format: date-time
+             */
+            last_build_at: string;
+            /** Latest Result */
+            latest_result: string;
+            /** Median Duration Minutes */
+            median_duration_minutes: number;
+            /** P95 Duration Minutes */
+            p95_duration_minutes: number;
+            /** Parent */
+            parent?: string | null;
+            /** Repository */
+            repository?: string | null;
+            /** Result Counts */
+            result_counts: {
+                [key: string]: number;
+            };
+            /** Run Count */
+            run_count: number;
+            /** Source Provider */
+            source_provider?: string | null;
+            /** Url */
+            url: string;
+            /** Wall Hours */
+            wall_hours: number;
+        };
+        /** V2LogicalExecutionResponse */
+        V2LogicalExecutionResponse: {
+            /** Affected Build Count */
+            affected_build_count: number;
+            /** Builds */
+            builds: {
+                [key: string]: unknown;
+            }[];
+            /** Change Number */
+            change_number?: string | null;
+            /** Change Url */
+            change_url?: string | null;
+            /** Classification */
+            classification: string;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Logical Run Key */
+            logical_run_key: string;
+            /** Primary Build Id */
+            primary_build_id: string;
+            /** Priority Reasons */
+            priority_reasons: string[];
+            /** Priority Score */
+            priority_score: number;
+            /** Propagated Build Count */
+            propagated_build_count: number;
+            /** Repository */
+            repository?: string | null;
+            /** Root Build Number */
+            root_build_number: number;
+            /** Root Job */
+            root_job: string;
+            /** Source Provider */
+            source_provider?: string | null;
+            /** Title */
+            title: string;
+        };
+        /** V2MultibranchFamilyResponse */
+        V2MultibranchFamilyResponse: {
+            /** Active Child Count */
+            active_child_count: number;
+            /** Child Count */
+            child_count: number;
+            /** Children */
+            children: {
+                [key: string]: unknown;
+            }[];
+            /** Head Counts */
+            head_counts: {
+                [key: string]: number;
+            };
+            /** Parent */
+            parent: string;
+            /** Result Counts */
+            result_counts: {
+                [key: string]: number;
+            };
+            /** Run Count */
+            run_count: number;
+            /** Url */
+            url: string;
         };
         /** V2ObservationResponse */
         V2ObservationResponse: {
@@ -601,6 +1212,39 @@ export interface components {
             /** Responsible Checks */
             responsible_checks: string[];
         };
+        /** V2OverviewResponse */
+        V2OverviewResponse: {
+            /** Active Incident Count */
+            active_incident_count: number;
+            /** Affected Resource Count */
+            affected_resource_count: number;
+            /** Coverage Status */
+            coverage_status: string;
+            /** Critical Incident Count */
+            critical_incident_count: number;
+            /** Environment */
+            environment: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Jenkins */
+            jenkins: {
+                [key: string]: unknown;
+            };
+            /** Kubernetes */
+            kubernetes: {
+                [key: string]: unknown;
+            };
+            latest_scan: components["schemas"]["V2ScanResponse"] | null;
+            /** Status */
+            status: string;
+            /** Top Incidents */
+            top_incidents: components["schemas"]["V2IncidentResponse"][];
+            /** Warning Incident Count */
+            warning_incident_count: number;
+        };
         /** V2ScanPage */
         V2ScanPage: {
             /** Items */
@@ -627,8 +1271,12 @@ export interface components {
             cancel_requested_at: string | null;
             /** Categories */
             categories: string[];
+            /** Checks */
+            checks?: components["schemas"]["V2CheckExecutionResponse"][];
             /** Completed At */
             completed_at: string | null;
+            /** Coverage Status */
+            coverage_status?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -808,6 +1456,39 @@ export interface operations {
             };
         };
     };
+    chat_stream_api_v2_chat_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V2ChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_incidents_api_v2_incidents_get: {
         parameters: {
             query?: {
@@ -921,12 +1602,12 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["V2InvestigationResponse"];
+                    "application/json": components["schemas"]["V2InvestigationRequestResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1002,6 +1683,160 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jenkins_workspace_api_v2_jenkins_get: {
+        parameters: {
+            query?: {
+                window_hours?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2JenkinsWorkspaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jenkins_build_detail_api_v2_jenkins_builds__build_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2JenkinsBuildDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analyze_jenkins_build_api_v2_jenkins_builds__build_id__analyze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V2AnalyzeBuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2InvestigationRequestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jenkins_failures_api_v2_jenkins_failures_get: {
+        parameters: {
+            query?: {
+                window_hours?: number;
+                view?: "all" | "new";
+                result?: ("FAILURE" | "UNSTABLE" | "ABORTED") | null;
+                job?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2JenkinsFailurePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    overview_api_v2_overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2OverviewResponse"];
                 };
             };
         };

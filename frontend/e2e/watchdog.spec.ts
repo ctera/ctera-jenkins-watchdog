@@ -43,6 +43,11 @@ function incident(overrides: Record<string, unknown> = {}) {
     suppressed_by: null,
     suppressed_at: null,
     occurrence_number: 1,
+    affected_resource_count: 2,
+    current_observation_count: 2,
+    first_seen_at: now,
+    last_seen_at: now,
+    domain: "builds",
     ...overrides,
   };
 }
@@ -73,6 +78,7 @@ async function installApi(page: Page) {
   let currentScan = scan();
   let currentIncident = incident();
   let currentAction = action();
+  let currentBuild = jenkinsBuildDetail();
   const eventHeaders: string[] = [];
 
   await page.route("**/auth/me", (route) => route.fulfill({ json: { authenticated: true, email: "operator@example.com" } }));
@@ -128,7 +134,7 @@ async function installApi(page: Page) {
       return;
     }
     if (path === "/api/v2/incidents/incident-1/reinvestigate") {
-      await route.fulfill({ json: investigation() });
+      await route.fulfill({ status: 202, json: investigationRequest({ source: "manual_incident", mode: "deep" }) });
       return;
     }
     if (path === "/api/v2/incidents/incident-1") {
@@ -153,8 +159,27 @@ async function installApi(page: Page) {
       await route.fulfill({ json: { items: [currentAction], next_cursor: null } });
       return;
     }
-    if (path === "/api/v2/chat") {
-      await route.fulfill({ json: { content: "The compiler error is isolated to the merge request change." } });
+    if (path === "/api/v2/jenkins/builds/build-1/analyze" && request.method() === "POST") {
+      const queued = investigationRequest({ source: "manual_build", mode: request.postDataJSON().mode, build_id: "build-1" });
+      currentBuild = jenkinsBuildDetail({ incident_id: "incident-1", investigation_request: queued });
+      await route.fulfill({ status: 202, json: queued });
+      return;
+    }
+    if (path === "/api/v2/jenkins/builds/build-1") {
+      await route.fulfill({ json: currentBuild });
+      return;
+    }
+    if (path === "/api/v2/chat/stream") {
+      const final = { content: "The compiler error is isolated to the merge request change.", references: [], as_of: now, coverage_status: "complete" };
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [
+          `event: tool_call\ndata: ${JSON.stringify({ type: "tool_call", tool: "jenkins_get_build_log", arguments: { job_name: "app/MR-42", build_number: 42 } })}\n\n`,
+          `event: tool_result\ndata: ${JSON.stringify({ type: "tool_result", tool: "jenkins_get_build_log", ok: true, duration_ms: 12 })}\n\n`,
+          `event: message\ndata: ${JSON.stringify(final)}\n\n`,
+        ].join(""),
+      });
       return;
     }
     await route.fulfill({ status: 404, json: { detail: { code: "not_mocked" } } });
@@ -171,12 +196,85 @@ function investigation() {
     input_version: "v1",
     prompt_version: "v1",
     model: "test-model",
-    confidence: "high",
+    confidence: "medium",
     usage: { total_tokens: 150 },
-    result: { root_cause: "Compiler error", impact: "MR blocked", suggested_fix: "Fix the type mismatch" },
+    result: {
+      root_cause: "Compiler error",
+      impact: "MR blocked",
+      suggested_fix: "Fix the type mismatch",
+      quality_gate: "Jenkins did not provide the failed-test report.",
+    },
     error_summary: null,
     created_at: now,
     completed_at: now,
+  };
+}
+
+function investigationRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "request-1",
+    incident_id: "incident-1",
+    occurrence_id: "occurrence-1",
+    mode: "regular",
+    source: "automatic",
+    priority: 100,
+    evidence_hash: "abc123",
+    status: "queued",
+    scan_id: null,
+    build_id: null,
+    requested_by: "operator@example.com",
+    attempt_count: 0,
+    next_attempt_at: now,
+    investigation_id: null,
+    error_summary: null,
+    created_at: now,
+    updated_at: now,
+    completed_at: null,
+    ...overrides,
+  };
+}
+
+function jenkinsBuildDetail(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "build-1",
+    job_name: "Portal_Build_DAILY_MR_PATCH",
+    build_number: 12358,
+    result: "FAILURE",
+    url: "https://jenkins/job/portal/12358",
+    started_at: now,
+    completed_at: now,
+    duration_ms: 1_320_000,
+    building: false,
+    job_type: "pipeline",
+    parent: null,
+    head_type: "change_request",
+    head_name: "MR-42",
+    source_provider: "github",
+    repository: "ctera/app",
+    change_number: "42",
+    change_url: "https://github.com/ctera/app/pull/42",
+    trigger_kind: "scm",
+    root_job: "Portal_Build_DAILY_MR_PATCH",
+    root_build_number: 12358,
+    logical_run_key: "Portal_Build_DAILY_MR_PATCH#12358",
+    propagated_failure: false,
+    failed_stage: "Compile",
+    failure_summary: "TypeScript compilation failed",
+    failure_classification: "compilation_error",
+    failure_signature: "typescript-error",
+    novelty: "new_regression",
+    priority_score: 70,
+    priority_reasons: ["current blockage +30", "change request blocked +5"],
+    coverage: "exact",
+    enrichment_status: "log_pending",
+    incident_id: null,
+    evidence: { error_lines: ["TS2322: Type string is not assignable"], stages: [], causes: [] },
+    upstream_builds: [],
+    downstream_builds: [],
+    incident: null,
+    investigation_request: null,
+    latest_investigation: null,
+    ...overrides,
   };
 }
 
@@ -213,12 +311,29 @@ test("operator can enqueue a regular scan", async ({ page }, testInfo) => {
   await expect(page.getByText("Active regular scan")).toBeVisible();
 });
 
+test("operator can queue a deep build analysis", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  await installApi(page);
+  await page.goto("/jenkins/builds/build-1");
+
+  await expect(page.getByText("Deterministic evidence: Log Pending")).toBeVisible();
+  await expect(page.getByText("Not analyzed")).toBeVisible();
+  await page.getByRole("button", { name: "Deep" }).click();
+  const requestPromise = page.waitForRequest((request) => request.url().endsWith("/api/v2/jenkins/builds/build-1/analyze"));
+  await page.getByRole("button", { name: "Analyze build" }).click();
+  const request = await requestPromise;
+
+  expect(request.postDataJSON()).toEqual({ mode: "deep" });
+  await expect(page.getByText("Agent analysis is queued.")).toBeVisible();
+});
+
 test("operator can browse, suppress, inspect retry, and chat", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium");
   await installApi(page);
   await page.goto("/incidents");
   await page.getByText("Compiler failure across MR builds").click();
   await expect(page.getByText("Source association")).toBeVisible();
+  await expect(page.getByText("Jenkins did not provide the failed-test report.")).toBeVisible();
 
   await page.getByRole("button", { name: "Suppress" }).click();
   await page.getByLabel("Audit reason").fill("Planned maintenance");
@@ -246,6 +361,10 @@ test("mobile navigation stays within the viewport", async ({ page }, testInfo) =
   await expect(page.getByRole("button", { name: "Start scan" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Incidents" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const firstAction = await page.getByRole("button", { name: "Jenkins" }).boundingBox();
+  const lastAction = await page.getByRole("button", { name: "Assistant" }).boundingBox();
+  expect(firstAction?.x).toBeGreaterThanOrEqual(0);
+  expect((lastAction?.x ?? 0) + (lastAction?.width ?? 0)).toBeLessThanOrEqual(page.viewportSize()!.width);
   await page.getByRole("button", { name: "Incidents" }).click();
   await expect(page.getByRole("heading", { name: "Incidents" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("mobile-incidents.png"), fullPage: true });

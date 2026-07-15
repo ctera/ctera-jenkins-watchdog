@@ -8,8 +8,9 @@ from typing import Any
 from uuid import uuid4
 
 from jenkins_watchdog.application.ports import UnitOfWorkFactory
+from jenkins_watchdog.application.reasoning import jenkins_build_observations
 from jenkins_watchdog.domain.model import FindingObservation, Incident
-from jenkins_watchdog.domain.policies import correlate_observation
+from jenkins_watchdog.domain.policies import correlate_observation, correlation_title
 
 
 class IncidentService:
@@ -36,6 +37,7 @@ class IncidentService:
                         correlation_key=decision.key,
                         observation=observation,
                         opened_at=observation.observed_at,
+                        title=correlation_title(decision, observation),
                     )
                 else:
                     incident = incident.observe(observation)
@@ -58,6 +60,43 @@ class IncidentService:
                     await uow.incidents.save(reconciled)
             await uow.commit()
             return await uow.incidents.observed_ids_for_scan(scan_id)
+
+    async def correlate_jenkins_build(self, build: dict[str, Any], *, now: datetime) -> Incident:
+        linked_id = build.get("incident_id")
+        if linked_id:
+            async with self._uow_factory() as uow:
+                linked = await uow.incidents.get(str(linked_id))
+            if linked is not None:
+                return linked
+
+        observation = jenkins_build_observations((build,))[0]
+        signature = str(build.get("failure_signature") or "")
+        logical_run = str(build.get("logical_run_key") or f"{build.get('job_name')}#{build.get('build_number')}")
+        correlation_key = f"signature:{signature}" if signature else f"logical-run:{logical_run}"
+        async with self._uow_factory() as uow:
+            incident = await uow.incidents.get_by_correlation("jenkins_failure", correlation_key)
+            if incident is None:
+                incident = Incident.open_new(
+                    id=str(uuid4()),
+                    correlation_rule_id="jenkins_failure",
+                    correlation_key=correlation_key,
+                    observation=observation,
+                    opened_at=observation.observed_at,
+                    title=str(
+                        build.get("failure_summary")
+                        or f"{build.get('job_name')} #{build.get('build_number')} failed"
+                    ),
+                )
+            else:
+                incident = incident.observe(observation)
+            incident = incident.associate_source(
+                _merge_source(incident.source, _source_association(observation)),
+                now=now,
+            )
+            await uow.incidents.save(incident)
+            await uow.jenkins.link_incident(str(build["id"]), incident.id)
+            await uow.commit()
+        return incident
 
 
 def _source_association(observation: FindingObservation) -> dict[str, Any]:
@@ -87,6 +126,7 @@ def _source_association(observation: FindingObservation) -> dict[str, Any]:
         "jenkins_agent",
         "jenkins_controller",
         "jenkins_queue",
+        "jenkins_build",
     }:
         return {"kind": "infrastructure", "confirmed": True}
     return {"kind": "unknown", "confirmed": False, "reason": "no_complete_source_metadata"}

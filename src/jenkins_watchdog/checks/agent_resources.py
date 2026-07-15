@@ -2,12 +2,11 @@
 
 import logging
 
-from jenkins_watchdog.checks.agent_utils import is_jenkins_agent_pod, list_jenkins_agent_pods
-from jenkins_watchdog.checks.base import Finding
+from jenkins_watchdog.checks.agent_utils import extract_agent_prefix, is_jenkins_agent_pod, list_jenkins_agent_pods
+from jenkins_watchdog.checks.base import CheckReport, Finding
 from jenkins_watchdog.clients.k8s import KubernetesClient
 from jenkins_watchdog.clients.k8s_metrics import (
     KubernetesMetricsClient,
-    MetricsUnavailableError,
     format_bytes,
     format_cores,
     parse_cpu_quantity,
@@ -45,44 +44,51 @@ class AgentResourceCheck:
         self._metrics = metrics
         self._namespace = namespace
 
-    async def run(self) -> list[Finding]:
+    async def run(self) -> CheckReport:
         findings: list[Finding] = []
-
-        try:
-            pod_metrics = await self._metrics.list_pod_metrics(self._namespace)
-        except MetricsUnavailableError:
-            logger.warning("Metrics-server unavailable — skipping agent resource checks")
-            return []
-        except Exception as exc:
-            logger.warning("Failed to fetch pod metrics: %s", exc)
-            return []
+        pod_metrics = await self._metrics.list_pod_metrics(self._namespace)
 
         metrics_by_pod = {m.name: m for m in pod_metrics}
         pods = await list_jenkins_agent_pods(self._kubernetes, self._namespace)
 
+        containers_checked = 0
+        missing_limit_containers = 0
         for pod in pods:
             ns = pod.metadata.namespace
             name = pod.metadata.name
+            labels = pod.metadata.labels or {}
+            agent_pool = extract_agent_prefix(name, labels)
             if not is_jenkins_agent_pod(name, pod.metadata.labels or {}):
                 continue
 
             resource = f"{ns}/{name}"
             pod_usage = metrics_by_pod.get(name)
             usage_by_container = {c.name: c for c in pod_usage.containers} if pod_usage else {}
+            resource_context = {
+                "agent_pool": agent_pool,
+                "pod_name": name,
+                "namespace": ns,
+                "node": pod.spec.node_name or "",
+            }
 
             for container in pod.spec.containers:
+                containers_checked += 1
                 limits = container.resources.limits if container.resources else None
                 mem_limit_raw = limits.get("memory") if limits else None
                 cpu_limit_raw = limits.get("cpu") if limits else None
 
                 if not mem_limit_raw and not cpu_limit_raw:
+                    missing_limit_containers += 1
                     findings.append(
                         Finding(
                             severity="warning",
                             category="jenkins_agent",
                             resource=resource,
                             symptom=f"No resource limits set (container: {container.name})",
-                            context={"container": container.name},
+                            context={
+                                **resource_context,
+                                "container": container.name,
+                            },
                         )
                     )
                     continue
@@ -106,6 +112,7 @@ class AgentResourceCheck:
                                     f"container: {container.name})"
                                 ),
                                 context={
+                                    **resource_context,
                                     "container": container.name,
                                     "memory_usage_pct": round(mem_pct, 1),
                                     "memory_used": usage.memory_bytes,
@@ -129,6 +136,7 @@ class AgentResourceCheck:
                                     f"container: {container.name})"
                                 ),
                                 context={
+                                    **resource_context,
                                     "container": container.name,
                                     "cpu_usage_pct": round(cpu_pct, 1),
                                     "cpu_used_cores": usage.cpu_cores,
@@ -137,4 +145,12 @@ class AgentResourceCheck:
                             )
                         )
 
-        return findings
+        return CheckReport(
+            findings=findings,
+            summary={
+                "agent_pod_count": len(pods),
+                "metrics_pod_count": len(pod_metrics),
+                "containers_checked": containers_checked,
+                "containers_missing_limits": missing_limit_containers,
+            },
+        )

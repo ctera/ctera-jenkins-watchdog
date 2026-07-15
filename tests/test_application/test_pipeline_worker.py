@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -16,6 +17,7 @@ from jenkins_watchdog.domain.model import (
     CheckResult,
     CheckStatus,
     FindingObservation,
+    InvestigationRequestStatus,
     ScanMode,
     ScanStage,
     ScanStatus,
@@ -124,6 +126,32 @@ class NoAutomation:
         return ()
 
 
+class RecordingAutomation:
+    def __init__(self, *, with_action: bool = False) -> None:
+        self.incidents: list[str] = []
+        self.with_action = with_action
+
+    async def plan(self, incident_id: str):
+        self.incidents.append(incident_id)
+        return (SimpleNamespace(id="action-1"),) if self.with_action else ()
+
+
+class RecordingInvestigationQueue:
+    def __init__(self, *, accept: bool = True) -> None:
+        self.accept = accept
+        self.calls: list[dict[str, object]] = []
+
+    async def enqueue_incident(self, incident_id: str, **kwargs):
+        self.calls.append({"incident_id": incident_id, **kwargs})
+        if not self.accept:
+            return None
+        return SimpleNamespace(
+            id=str(uuid.uuid4()),
+            status=InvestigationRequestStatus.QUEUED,
+            mode=kwargs["mode"],
+        )
+
+
 class FailingPipeline:
     def __init__(self) -> None:
         self.calls = 0
@@ -144,9 +172,14 @@ def uow_factory(factory: async_sessionmaker[AsyncSession]):
     return lambda: SqlAlchemyUnitOfWork(factory)
 
 
-async def enqueue(factory: async_sessionmaker[AsyncSession], categories: tuple[str, ...]) -> str:
+async def enqueue(
+    factory: async_sessionmaker[AsyncSession],
+    categories: tuple[str, ...],
+    *,
+    mode: ScanMode = ScanMode.REGULAR,
+) -> str:
     async with SqlAlchemyUnitOfWork(factory) as uow:
-        scan = await uow.scans.add(EnqueueScan(mode=ScanMode.REGULAR, categories=categories))
+        scan = await uow.scans.add(EnqueueScan(mode=mode, categories=categories))
         await uow.commit()
     return scan.id
 
@@ -156,6 +189,8 @@ def pipeline(
     runner: Runner,
     *,
     reasoning=NoReasoning(),
+    automation=None,
+    investigation_queue=None,
 ) -> ScanPipeline:
     factory_port = uow_factory(factory)
     return ScanPipeline(
@@ -163,9 +198,10 @@ def pipeline(
         check_runner=runner,
         incident_service=IncidentService(factory_port),
         reasoning_service=reasoning,
-        automation_service=NoAutomation(),
+        automation_service=automation or NoAutomation(),
         events=EventService(factory_port, NullEventNotifier()),
         now=lambda: datetime.now(timezone.utc),
+        investigation_queue=investigation_queue,
     )
 
 
@@ -223,6 +259,70 @@ async def test_pipeline_resume_does_not_rerun_terminal_check(
 
     assert completed.status is ScanStatus.SUCCEEDED
     assert runner.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_queues_investigation_and_defers_actions_until_agent_success(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scan_id = await enqueue(postgres_session_factory, ("jenkins_agent",))
+    queue = RecordingInvestigationQueue()
+    automation = RecordingAutomation()
+    completed = await pipeline(
+        postgres_session_factory,
+        Runner("finding"),
+        automation=automation,
+        investigation_queue=queue,
+    ).execute(scan_id)
+
+    assert completed.status is ScanStatus.SUCCEEDED
+    assert len(queue.calls) == 1
+    assert queue.calls[0]["source"] == "scan"
+    assert queue.calls[0]["mode"] is ScanMode.REGULAR
+    assert queue.calls[0]["priority"] == 100
+    assert queue.calls[0]["scan_id"] == scan_id
+    assert automation.incidents == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_plans_actions_when_queue_deduplicates_request(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scan_id = await enqueue(postgres_session_factory, ("jenkins_agent",))
+    queue = RecordingInvestigationQueue(accept=False)
+    automation = RecordingAutomation(with_action=True)
+    completed = await pipeline(
+        postgres_session_factory,
+        Runner("finding"),
+        automation=automation,
+        investigation_queue=queue,
+    ).execute(scan_id)
+
+    assert completed.status is ScanStatus.SUCCEEDED
+    assert len(queue.calls) == 1
+    assert automation.incidents == [queue.calls[0]["incident_id"]]
+
+
+@pytest.mark.asyncio
+async def test_deep_scan_includes_existing_active_incidents_in_agent_backlog(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    first_id = await enqueue(postgres_session_factory, ("jenkins_agent",))
+    await pipeline(postgres_session_factory, Runner("finding")).execute(first_id)
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        incident_id = next(iter(await uow.incidents.observed_ids_for_scan(first_id)))
+
+    deep_id = await enqueue(postgres_session_factory, ("jenkins_agent",), mode=ScanMode.DEEP)
+    queue = RecordingInvestigationQueue()
+    await pipeline(
+        postgres_session_factory,
+        Runner("failed"),
+        investigation_queue=queue,
+    ).execute(deep_id)
+
+    assert [call["incident_id"] for call in queue.calls] == [incident_id]
+    assert queue.calls[0]["source"] == "deep_scan"
+    assert queue.calls[0]["mode"] is ScanMode.DEEP
 
 
 @pytest.mark.asyncio

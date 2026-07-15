@@ -37,3 +37,11 @@ class ScanEvent:
 class ClaimedScan:
     scan: Scan
     lease_owner: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChatResult:
+    content: str
+    references: tuple[dict[str, str], ...]
+    as_of: datetime
+    coverage_status: str

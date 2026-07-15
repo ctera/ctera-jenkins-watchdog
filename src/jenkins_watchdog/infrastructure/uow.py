@@ -6,6 +6,7 @@ from types import TracebackType
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from jenkins_watchdog.infrastructure.jenkins_repository import SqlAlchemyJenkinsRepository
 from jenkins_watchdog.infrastructure.repositories import (
     SqlAlchemyActionRepository,
     SqlAlchemyCheckExecutionRepository,
@@ -14,6 +15,7 @@ from jenkins_watchdog.infrastructure.repositories import (
     SqlAlchemyFindingRepository,
     SqlAlchemyIncidentRepository,
     SqlAlchemyInvestigationRepository,
+    SqlAlchemyInvestigationRequestRepository,
     SqlAlchemyScanRepository,
 )
 
@@ -30,9 +32,11 @@ class SqlAlchemyUnitOfWork:
         self.findings = SqlAlchemyFindingRepository(self._session)
         self.incidents = SqlAlchemyIncidentRepository(self._session)
         self.investigations = SqlAlchemyInvestigationRepository(self._session)
+        self.investigation_requests = SqlAlchemyInvestigationRequestRepository(self._session)
         self.actions = SqlAlchemyActionRepository(self._session)
         self.delivery_attempts = SqlAlchemyDeliveryAttemptRepository(self._session)
         self.events = SqlAlchemyEventRepository(self._session)
+        self.jenkins = SqlAlchemyJenkinsRepository(self._session)
         return self
 
     async def __aexit__(

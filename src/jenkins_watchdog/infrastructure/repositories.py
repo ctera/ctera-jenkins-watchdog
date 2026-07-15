@@ -20,6 +20,8 @@ from jenkins_watchdog.domain.model import (
     FindingObservation,
     Incident,
     Investigation,
+    InvestigationRequest,
+    InvestigationRequestStatus,
     Scan,
     ScanStatus,
 )
@@ -29,11 +31,13 @@ from jenkins_watchdog.infrastructure.mappers import (
     delivery_attempt_from_record,
     incident_from_record,
     investigation_from_record,
+    investigation_request_from_record,
     jsonable,
     observation_from_record,
     scan_from_record,
     update_action_record,
     update_incident_record,
+    update_investigation_request_record,
     update_scan_record,
 )
 from jenkins_watchdog.infrastructure.models import (
@@ -45,6 +49,7 @@ from jenkins_watchdog.infrastructure.models import (
     IncidentOccurrenceRecord,
     IncidentRecord,
     InvestigationRecord,
+    InvestigationRequestRecord,
     ScanEventRecord,
     ScanRecord,
 )
@@ -112,6 +117,17 @@ class SqlAlchemyScanRepository:
             last = page[-1]
             next_cursor = encode_cursor(last.created_at, str(last.id))
         return CursorPage(tuple(scan_from_record(record) for record in page), next_cursor)
+
+    async def latest_completed(self) -> Scan | None:
+        record = await self._session.scalar(
+            select(ScanRecord)
+            .where(
+                ScanRecord.status.in_([ScanStatus.SUCCEEDED.value, ScanStatus.FAILED.value, ScanStatus.CANCELLED.value])
+            )
+            .order_by(ScanRecord.completed_at.desc(), ScanRecord.created_at.desc())
+            .limit(1)
+        )
+        return scan_from_record(record) if record else None
 
     async def claim(self, *, owner: str, now: datetime, lease_seconds: int) -> Scan | None:
         exhausted = await self._session.scalar(
@@ -213,6 +229,7 @@ class SqlAlchemyCheckExecutionRepository:
                 categories=sorted(result.categories),
                 status=result.status.value,
                 failure_summary=result.failure_summary,
+                summary=jsonable(result.summary),
                 started_at=result.started_at or now,
                 completed_at=result.completed_at,
             )
@@ -221,9 +238,27 @@ class SqlAlchemyCheckExecutionRepository:
             record.categories = sorted(result.categories)
             record.status = result.status.value
             record.failure_summary = result.failure_summary
+            record.summary = jsonable(result.summary)
             record.started_at = result.started_at or record.started_at
             record.completed_at = result.completed_at
         await self._session.flush()
+
+    async def for_scan(self, scan_id: str) -> tuple[CheckResult, ...]:
+        records = (
+            await self._session.scalars(
+                select(CheckExecutionRecord)
+                .where(CheckExecutionRecord.scan_id == _uuid(scan_id))
+                .options(selectinload(CheckExecutionRecord.findings))
+                .order_by(CheckExecutionRecord.started_at, CheckExecutionRecord.check_name)
+            )
+        ).all()
+        return tuple(
+            check_result_from_record(
+                record,
+                tuple(observation_from_record(finding) for finding in record.findings),
+            )
+            for record in records
+        )
 
 
 class SqlAlchemyFindingRepository:
@@ -379,6 +414,31 @@ class SqlAlchemyIncidentRepository:
         ).all()
         return tuple(observation_from_record(record) for record in records)
 
+    async def current_observations(self, incident_id: str) -> tuple[FindingObservation, ...]:
+        latest_scan_id = await self._session.scalar(
+            select(FindingRecord.scan_id)
+            .join(IncidentFindingRecord, IncidentFindingRecord.finding_id == FindingRecord.id)
+            .join(ScanRecord, ScanRecord.id == FindingRecord.scan_id)
+            .where(IncidentFindingRecord.incident_id == _uuid(incident_id))
+            .order_by(ScanRecord.created_at.desc(), FindingRecord.observed_at.desc())
+            .limit(1)
+        )
+        if latest_scan_id is None:
+            return ()
+        records = (
+            await self._session.scalars(
+                select(FindingRecord)
+                .join(IncidentFindingRecord, IncidentFindingRecord.finding_id == FindingRecord.id)
+                .where(
+                    IncidentFindingRecord.incident_id == _uuid(incident_id),
+                    FindingRecord.scan_id == latest_scan_id,
+                )
+                .options(selectinload(FindingRecord.check_execution))
+                .order_by(FindingRecord.severity, FindingRecord.resource_id)
+            )
+        ).all()
+        return tuple(observation_from_record(record) for record in records)
+
     async def save(self, incident: Incident) -> None:
         statement = (
             select(IncidentRecord)
@@ -485,6 +545,127 @@ class SqlAlchemyInvestigationRepository:
         else:
             for name, value in values.items():
                 setattr(record, name, value)
+        await self._session.flush()
+
+
+class SqlAlchemyInvestigationRequestRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get(self, request_id: str) -> InvestigationRequest | None:
+        record = await self._session.get(InvestigationRequestRecord, _uuid(request_id))
+        return investigation_request_from_record(record) if record else None
+
+    async def active_for_incident(self, incident_id: str) -> InvestigationRequest | None:
+        record = await self._session.scalar(
+            select(InvestigationRequestRecord)
+            .where(
+                InvestigationRequestRecord.incident_id == _uuid(incident_id),
+                InvestigationRequestRecord.status.in_([
+                    InvestigationRequestStatus.QUEUED.value,
+                    InvestigationRequestStatus.RUNNING.value,
+                ]),
+            )
+            .order_by(InvestigationRequestRecord.created_at.desc())
+            .limit(1)
+        )
+        return investigation_request_from_record(record) if record else None
+
+    async def latest_for_incident(self, incident_id: str) -> InvestigationRequest | None:
+        record = await self._session.scalar(
+            select(InvestigationRequestRecord)
+            .where(InvestigationRequestRecord.incident_id == _uuid(incident_id))
+            .order_by(InvestigationRequestRecord.created_at.desc(), InvestigationRequestRecord.id.desc())
+            .limit(1)
+        )
+        return investigation_request_from_record(record) if record else None
+
+    async def enqueue(self, request: InvestigationRequest) -> InvestigationRequest:
+        await self._session.scalar(
+            select(IncidentRecord.id).where(IncidentRecord.id == _uuid(request.incident_id)).with_for_update()
+        )
+        existing = await self.active_for_incident(request.incident_id)
+        if existing is not None:
+            return existing
+        record = InvestigationRequestRecord(
+            id=_uuid(request.id),
+            incident_id=_uuid(request.incident_id),
+            occurrence_id=_uuid(request.occurrence_id),
+            mode=request.mode.value,
+            source=request.source,
+            priority=request.priority,
+            evidence_hash=request.evidence_hash,
+            status=request.status.value,
+            scan_id=_uuid(request.scan_id) if request.scan_id else None,
+            build_id=_uuid(request.build_id) if request.build_id else None,
+            requested_by=request.requested_by,
+            lease_owner=request.lease_owner,
+            lease_expires_at=request.lease_expires_at,
+            attempt_count=request.attempt_count,
+            next_attempt_at=request.next_attempt_at,
+            investigation_id=_uuid(request.investigation_id) if request.investigation_id else None,
+            error_summary=request.error_summary,
+            created_at=request.created_at,
+            updated_at=request.updated_at,
+            completed_at=request.completed_at,
+        )
+        self._session.add(record)
+        await self._session.flush()
+        return request
+
+    async def claim(self, *, owner: str, now: datetime, lease_seconds: int) -> InvestigationRequest | None:
+        queued = and_(
+            InvestigationRequestRecord.status == InvestigationRequestStatus.QUEUED.value,
+            or_(
+                InvestigationRequestRecord.next_attempt_at.is_(None),
+                InvestigationRequestRecord.next_attempt_at <= now,
+            ),
+        )
+        expired = and_(
+            InvestigationRequestRecord.status == InvestigationRequestStatus.RUNNING.value,
+            InvestigationRequestRecord.lease_expires_at.is_not(None),
+            InvestigationRequestRecord.lease_expires_at <= now,
+        )
+        record = await self._session.scalar(
+            select(InvestigationRequestRecord)
+            .where(or_(queued, expired))
+            .order_by(InvestigationRequestRecord.priority.desc(), InvestigationRequestRecord.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if record is None:
+            return None
+        request = investigation_request_from_record(record).claim(
+            owner=owner, now=now, lease_seconds=lease_seconds
+        )
+        update_investigation_request_record(record, request)
+        await self._session.flush()
+        return request
+
+    async def heartbeat(self, request_id: str, *, owner: str, now: datetime, lease_seconds: int) -> bool:
+        record = await self._session.scalar(
+            select(InvestigationRequestRecord)
+            .where(InvestigationRequestRecord.id == _uuid(request_id))
+            .with_for_update()
+        )
+        if (
+            record is None
+            or record.status != InvestigationRequestStatus.RUNNING.value
+            or record.lease_owner != owner
+        ):
+            return False
+        request = investigation_request_from_record(record).heartbeat(
+            owner=owner, now=now, lease_seconds=lease_seconds
+        )
+        update_investigation_request_record(record, request)
+        await self._session.flush()
+        return True
+
+    async def save(self, request: InvestigationRequest) -> None:
+        record = await self._session.get(InvestigationRequestRecord, _uuid(request.id))
+        if record is None:
+            raise LookupError(f"investigation request {request.id} does not exist")
+        update_investigation_request_record(record, request)
         await self._session.flush()
 
 

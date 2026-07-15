@@ -2,8 +2,9 @@
 
 import hashlib
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 _DYNAMIC_VALUES = re.compile(r"\b\d+(\.\d+)?(%|s|h|ms|gb|mb|kb)?\b", re.IGNORECASE)
 
@@ -33,9 +34,24 @@ class Finding:
         }
 
 
+@dataclass
+class CheckReport:
+    findings: list[Finding] = field(default_factory=list)
+    summary: dict[str, Any] = field(default_factory=dict)
+
+    def __iter__(self) -> Iterator[Finding]:
+        return iter(self.findings)
+
+    def __len__(self) -> int:
+        return len(self.findings)
+
+    def __getitem__(self, index: int | slice) -> Finding | list[Finding]:
+        return self.findings[index]
+
+
 class BaseCheck(Protocol):
     """Protocol for all checks."""
 
     name: str
 
-    async def run(self) -> list[Finding]: ...
+    async def run(self) -> list[Finding] | CheckReport: ...

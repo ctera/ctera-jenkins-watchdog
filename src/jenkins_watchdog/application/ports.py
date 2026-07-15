@@ -7,6 +7,13 @@ from datetime import datetime
 from typing import Any, Protocol, Self
 
 from jenkins_watchdog.application.types import CursorPage, EnqueueScan, ScanEvent
+from jenkins_watchdog.domain.jenkins import (
+    JenkinsBuildEnrichment,
+    JenkinsBuildHistoryPage,
+    JenkinsBuildSnapshot,
+    JenkinsJobSnapshot,
+    JenkinsSyncStats,
+)
 from jenkins_watchdog.domain.model import (
     Action,
     CheckResult,
@@ -14,6 +21,7 @@ from jenkins_watchdog.domain.model import (
     FindingObservation,
     Incident,
     Investigation,
+    InvestigationRequest,
     Scan,
     ScanMode,
 )
@@ -30,6 +38,8 @@ class ScanRepository(Protocol):
 
     async def list(self, *, limit: int, cursor: str | None = None) -> CursorPage: ...
 
+    async def latest_completed(self) -> Scan | None: ...
+
     async def claim(self, *, owner: str, now: datetime, lease_seconds: int) -> Scan | None: ...
 
     async def heartbeat(self, scan_id: str, *, owner: str, now: datetime, lease_seconds: int) -> bool: ...
@@ -43,6 +53,8 @@ class CheckExecutionRepository(Protocol):
     async def get(self, scan_id: str, check_name: str) -> CheckResult | None: ...
 
     async def save(self, scan_id: str, result: CheckResult) -> None: ...
+
+    async def for_scan(self, scan_id: str) -> tuple[CheckResult, ...]: ...
 
 
 class FindingRepository(Protocol):
@@ -72,6 +84,8 @@ class IncidentRepository(Protocol):
 
     async def observations(self, incident_id: str) -> tuple[FindingObservation, ...]: ...
 
+    async def current_observations(self, incident_id: str) -> tuple[FindingObservation, ...]: ...
+
     async def save(self, incident: Incident) -> None: ...
 
     async def link_observation(self, incident: Incident, observation: FindingObservation) -> None: ...
@@ -81,6 +95,22 @@ class InvestigationRepository(Protocol):
     async def latest_for_incident(self, incident_id: str) -> Investigation | None: ...
 
     async def save(self, investigation: Investigation) -> None: ...
+
+
+class InvestigationRequestRepository(Protocol):
+    async def get(self, request_id: str) -> InvestigationRequest | None: ...
+
+    async def active_for_incident(self, incident_id: str) -> InvestigationRequest | None: ...
+
+    async def latest_for_incident(self, incident_id: str) -> InvestigationRequest | None: ...
+
+    async def enqueue(self, request: InvestigationRequest) -> InvestigationRequest: ...
+
+    async def claim(self, *, owner: str, now: datetime, lease_seconds: int) -> InvestigationRequest | None: ...
+
+    async def heartbeat(self, request_id: str, *, owner: str, now: datetime, lease_seconds: int) -> bool: ...
+
+    async def save(self, request: InvestigationRequest) -> None: ...
 
 
 class ActionRepository(Protocol):
@@ -119,15 +149,102 @@ class EventRepository(Protocol):
     async def after(self, scan_id: str, sequence: int, *, limit: int = 500) -> tuple[ScanEvent, ...]: ...
 
 
+class JenkinsSourcePort(Protocol):
+    async def discover_jobs(self) -> tuple[JenkinsJobSnapshot, ...]: ...
+
+    async def enrich_job_source(self, job: JenkinsJobSnapshot) -> JenkinsJobSnapshot: ...
+
+    async def build_history(
+        self,
+        job: JenkinsJobSnapshot,
+        *,
+        cutoff: datetime,
+        after_number: int | None,
+    ) -> JenkinsBuildHistoryPage: ...
+
+    async def enrich_build(self, build: JenkinsBuildSnapshot, *, include_log: bool) -> JenkinsBuildEnrichment: ...
+
+
+class JenkinsRepository(Protocol):
+    async def claim_sync(self, *, owner: str, now: datetime, lease_seconds: int) -> bool: ...
+
+    async def heartbeat_sync(self, *, owner: str, now: datetime, lease_seconds: int) -> bool: ...
+
+    async def complete_sync(self, *, owner: str, stats: JenkinsSyncStats) -> None: ...
+
+    async def fail_sync(self, *, owner: str, now: datetime, summary: str) -> None: ...
+
+    async def upsert_jobs(self, jobs: tuple[JenkinsJobSnapshot, ...], *, now: datetime) -> None: ...
+
+    async def watermarks(self, job_names: tuple[str, ...]) -> dict[str, int | None]: ...
+
+    async def running_build_numbers(self) -> dict[str, tuple[int, ...]]: ...
+
+    async def upsert_builds(
+        self,
+        builds: tuple[JenkinsBuildSnapshot, ...],
+        *,
+        now: datetime,
+    ) -> int: ...
+
+    async def set_job_coverage(self, job_name: str, coverage: str, *, now: datetime) -> None: ...
+
+    async def pending_enrichment(
+        self,
+        *,
+        limit: int,
+        log_limit: int,
+    ) -> tuple[JenkinsBuildSnapshot, ...]: ...
+
+    async def save_enrichment(self, enrichment: JenkinsBuildEnrichment, *, now: datetime) -> None: ...
+
+    async def mark_enrichment_failed(self, job_name: str, number: int, *, now: datetime, summary: str) -> None: ...
+
+    async def refresh_classifications(self, *, now: datetime) -> None: ...
+
+    async def sync_status(self) -> dict[str, Any]: ...
+
+    async def jenkins_summary(self, *, since: datetime) -> dict[str, Any]: ...
+
+    async def failure_builds(
+        self,
+        *,
+        since: datetime,
+        limit: int,
+        cursor: str | None = None,
+        novelty: frozenset[str] | None = None,
+        job: str | None = None,
+        result: str | None = None,
+    ) -> CursorPage: ...
+
+    async def logical_executions(self, *, since: datetime, limit: int) -> tuple[dict[str, Any], ...]: ...
+
+    async def recurring_patterns(self, *, since: datetime, limit: int) -> tuple[dict[str, Any], ...]: ...
+
+    async def job_families(self, *, since: datetime, limit: int) -> tuple[dict[str, Any], ...]: ...
+
+    async def multibranch_families(self, *, since: datetime, limit: int) -> tuple[dict[str, Any], ...]: ...
+
+    async def build_detail(self, build_id: str) -> dict[str, Any] | None: ...
+
+    async def builds_for_incident(self, incident_id: str) -> tuple[dict[str, Any], ...]: ...
+
+    async def link_incident(self, build_id: str, incident_id: str) -> None: ...
+
+    async def analysis_candidates(self, *, min_priority: int, limit: int) -> tuple[dict[str, Any], ...]: ...
+
+
 class UnitOfWork(AbstractAsyncContextManager["UnitOfWork"], Protocol):
     scans: ScanRepository
     checks: CheckExecutionRepository
     findings: FindingRepository
     incidents: IncidentRepository
     investigations: InvestigationRepository
+    investigation_requests: InvestigationRequestRepository
     actions: ActionRepository
     delivery_attempts: DeliveryAttemptRepository
     events: EventRepository
+    jenkins: JenkinsRepository
 
     async def __aenter__(self) -> Self: ...
 
@@ -155,12 +272,32 @@ class EventNotifier(Protocol):
     async def publish(self, event: ScanEvent) -> None: ...
 
 
+class ReasoningProgress(Protocol):
+    async def __call__(self, event: dict[str, Any]) -> None: ...
+
+
 class ReasoningPort(Protocol):
     async def triage(self, incident: Incident, observations: tuple[FindingObservation, ...]) -> dict[str, Any]: ...
 
-    async def investigate(self, incident: Incident, observations: tuple[FindingObservation, ...]) -> Investigation: ...
+    async def investigate(
+        self,
+        incident: Incident,
+        observations: tuple[FindingObservation, ...],
+        *,
+        context: dict[str, Any] | None = None,
+        mode: ScanMode = ScanMode.REGULAR,
+        on_progress: ReasoningProgress | None = None,
+    ) -> Investigation: ...
 
-    async def chat(self, *, message: str, incident: Incident | None = None) -> str: ...
+    async def chat(
+        self,
+        *,
+        message: str,
+        incident: Incident | None = None,
+        context: dict[str, Any] | None = None,
+        history: tuple[dict[str, str], ...] = (),
+        on_progress: ReasoningProgress | None = None,
+    ) -> str: ...
 
 
 class ActionDeliveryPort(Protocol):

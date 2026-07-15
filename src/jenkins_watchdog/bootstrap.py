@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from jenkins_watchdog.application.delivery import DeliveryService
     from jenkins_watchdog.application.events import EventService
     from jenkins_watchdog.application.incidents import IncidentService
+    from jenkins_watchdog.application.investigations import InvestigationQueueService, InvestigationWorker
+    from jenkins_watchdog.application.jenkins_monitor import JenkinsMonitorService, JenkinsMonitorWorker
     from jenkins_watchdog.application.pipeline import ScanPipeline
     from jenkins_watchdog.application.reasoning import ReasoningService
     from jenkins_watchdog.application.scan_service import ScanService
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
     from jenkins_watchdog.clients.jenkins import JenkinsClient
     from jenkins_watchdog.clients.k8s import KubernetesClient
     from jenkins_watchdog.clients.k8s_metrics import KubernetesMetricsClient
+    from jenkins_watchdog.clients.prometheus import PrometheusClient
     from jenkins_watchdog.infrastructure.delivery import DeliveryRouter
     from jenkins_watchdog.infrastructure.events import ValkeyEventNotifier
     from jenkins_watchdog.infrastructure.uow import SqlAlchemyUnitOfWorkFactory
@@ -46,6 +49,7 @@ class Container:
     jenkins: JenkinsClient
     kubernetes: KubernetesClient
     kubernetes_metrics: KubernetesMetricsClient
+    prometheus: PrometheusClient
     uow_factory: SqlAlchemyUnitOfWorkFactory
     notifier: ValkeyEventNotifier
     events: EventService
@@ -55,6 +59,8 @@ class Container:
     automation_service: AutomationService
     delivery_router: DeliveryRouter
     pipeline: ScanPipeline
+    jenkins_monitor: JenkinsMonitorService
+    investigation_queue: InvestigationQueueService
 
     def make_worker(self, owner: str | None = None) -> ScanWorker:
         from jenkins_watchdog.application.worker import ScanWorker
@@ -81,6 +87,32 @@ class Container:
             lease_seconds=self.settings.worker_lease_seconds,
             heartbeat_seconds=self.settings.worker_heartbeat_seconds,
             poll_interval_seconds=self.settings.worker_poll_interval_s,
+        )
+
+    def make_jenkins_worker(self, owner: str | None = None) -> JenkinsMonitorWorker:
+        from jenkins_watchdog.application.jenkins_monitor import JenkinsMonitorWorker
+
+        return JenkinsMonitorWorker(
+            owner=owner or socket.gethostname(),
+            monitor=self.jenkins_monitor,
+            interval_seconds=self.settings.jenkins_sync_interval_s,
+        )
+
+    def make_investigation_worker(self, owner: str | None = None) -> InvestigationWorker:
+        from jenkins_watchdog.application.investigations import InvestigationWorker
+
+        return InvestigationWorker(
+            owner=owner or socket.gethostname(),
+            uow_factory=self.uow_factory,
+            reasoning=self.reasoning_service,
+            queue=self.investigation_queue,
+            automation=self.automation_service,
+            events=self.events,
+            now=_utcnow,
+            lease_seconds=self.settings.investigation_worker_lease_seconds,
+            heartbeat_seconds=self.settings.worker_heartbeat_seconds,
+            poll_interval_seconds=self.settings.worker_poll_interval_s,
+            max_attempts=self.settings.investigation_max_attempts,
         )
 
     async def ready(self) -> None:
@@ -124,12 +156,15 @@ def build_container(settings: Settings) -> Container:
     from jenkins_watchdog.application.automation import AutomationService, IntegrationPolicy
     from jenkins_watchdog.application.events import EventService
     from jenkins_watchdog.application.incidents import IncidentService
+    from jenkins_watchdog.application.investigations import InvestigationQueueService
+    from jenkins_watchdog.application.jenkins_monitor import JenkinsMonitorService
     from jenkins_watchdog.application.pipeline import ScanPipeline
     from jenkins_watchdog.application.reasoning import ReasoningService
     from jenkins_watchdog.application.scan_service import ScanService
     from jenkins_watchdog.clients.jenkins import JenkinsClient
     from jenkins_watchdog.clients.k8s import KubernetesClient
     from jenkins_watchdog.clients.k8s_metrics import KubernetesMetricsClient
+    from jenkins_watchdog.clients.prometheus import PrometheusClient
     from jenkins_watchdog.infrastructure.checks import LegacyCheckRunner, default_checks
     from jenkins_watchdog.infrastructure.database import create_engine, create_session_factory
     from jenkins_watchdog.infrastructure.delivery import (
@@ -140,9 +175,11 @@ def build_container(settings: Settings) -> Container:
         JiraDelivery,
     )
     from jenkins_watchdog.infrastructure.events import ValkeyEventNotifier
+    from jenkins_watchdog.infrastructure.jenkins_source import JenkinsSourceAdapter
     from jenkins_watchdog.infrastructure.reasoning import LiteLLMReasoningAdapter
     from jenkins_watchdog.infrastructure.routing import load_routing_config
     from jenkins_watchdog.infrastructure.templates import FilePayloadRenderer
+    from jenkins_watchdog.infrastructure.tools import ReadOnlyToolRegistry
     from jenkins_watchdog.infrastructure.uow import SqlAlchemyUnitOfWorkFactory
     from jenkins_watchdog.scan_options import ScanOptions
 
@@ -168,12 +205,49 @@ def build_container(settings: Settings) -> Container:
         failed_build_window_hours=settings.jenkins_failed_build_window_hours,
         timeout_seconds=settings.request_timeout_s,
     )
-    kubernetes_client = KubernetesClient(request_timeout_seconds=settings.request_timeout_s)
+    kubernetes_client = KubernetesClient(
+        request_timeout_seconds=settings.request_timeout_s,
+        kubeconfig_path=settings.kubeconfig_path or None,
+    )
     kubernetes_metrics = KubernetesMetricsClient(kubernetes_client)
+    prometheus_client = PrometheusClient(
+        http_client,
+        endpoint=settings.prometheus_endpoint,
+        enabled=settings.prometheus_enabled,
+    )
+    tool_registry = ReadOnlyToolRegistry(
+        jenkins=jenkins_client,
+        kubernetes=kubernetes_client,
+        metrics=kubernetes_metrics,
+        prometheus=prometheus_client,
+        http=http_client,
+        jenkins_namespace=settings.jenkins_namespace,
+        github_api_url=settings.github_api_url,
+        github_token=settings.github_token,
+        gitlab_api_url=settings.gitlab_api_url,
+        gitlab_token=settings.gitlab_token,
+    )
     notifier = ValkeyEventNotifier(valkey_client)
     events = EventService(uow_factory, notifier)
     scan_service = ScanService(uow_factory, events=events)
     incident_service = IncidentService(uow_factory)
+    investigation_queue = InvestigationQueueService(uow_factory=uow_factory, now=_utcnow)
+    jenkins_monitor = JenkinsMonitorService(
+        source=JenkinsSourceAdapter(jenkins_client),
+        uow_factory=uow_factory,
+        now=_utcnow,
+        window_hours=settings.jenkins_sync_window_hours,
+        fetch_concurrency=settings.jenkins_sync_concurrency,
+        enrichment_limit=settings.jenkins_sync_enrichment_limit,
+        log_enrichment_limit=settings.jenkins_sync_log_limit,
+        lease_seconds=max(settings.worker_lease_seconds * 10, 900),
+        heartbeat_seconds=settings.worker_heartbeat_seconds,
+        incident_service=incident_service,
+        investigation_queue=investigation_queue,
+        automatic_investigations=settings.automatic_investigations_enabled,
+        minimum_investigation_priority=settings.automatic_investigation_min_priority,
+        analysis_candidate_limit=settings.automatic_investigation_batch_size,
+    )
     reasoning_adapter = LiteLLMReasoningAdapter(
         model=settings.llm_model,
         fallback_models=tuple(item.strip() for item in settings.llm_fallback_models.split(",") if item.strip()),
@@ -181,9 +255,17 @@ def build_container(settings: Settings) -> Container:
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
         max_retries=settings.llm_max_retries,
+        max_tool_rounds=settings.max_tool_rounds,
+        max_deep_tool_rounds=settings.max_deep_tool_rounds,
+        token_budget=settings.llm_scan_token_budget,
+        deep_token_budget=settings.llm_deep_scan_token_budget,
+        tools=tool_registry,
     )
     reasoning_service = ReasoningService(uow_factory=uow_factory, reasoning=reasoning_adapter, now=_utcnow)
     routing = load_routing_config(settings.routing_config_path)
+    fallback_recipients = _email_recipients(settings.email_fallback_recipients)
+    if fallback_recipients:
+        routing = replace(routing, global_fallback_recipients=fallback_recipients)
     renderer = FilePayloadRenderer(settings.automation_templates_path)
     jira_project = next((item.strip() for item in settings.jira_projects.split(",") if item.strip()), "CI")
     automation_service = AutomationService(
@@ -263,6 +345,11 @@ def build_container(settings: Settings) -> Container:
         automation_service=automation_service,
         events=events,
         now=_utcnow,
+        max_investigations=settings.max_investigations_per_scan,
+        max_deep_investigations=settings.max_deep_investigations_per_scan,
+        token_budget=settings.llm_scan_token_budget,
+        deep_token_budget=settings.llm_deep_scan_token_budget,
+        investigation_queue=investigation_queue,
     )
     return Container(
         settings=settings,
@@ -274,6 +361,7 @@ def build_container(settings: Settings) -> Container:
         jenkins=jenkins_client,
         kubernetes=kubernetes_client,
         kubernetes_metrics=kubernetes_metrics,
+        prometheus=prometheus_client,
         uow_factory=uow_factory,
         notifier=notifier,
         events=events,
@@ -283,6 +371,8 @@ def build_container(settings: Settings) -> Container:
         automation_service=automation_service,
         delivery_router=delivery_router,
         pipeline=pipeline,
+        jenkins_monitor=jenkins_monitor,
+        investigation_queue=investigation_queue,
     )
 
 
@@ -335,3 +425,14 @@ def _required(value: str, name: str, enabled: bool) -> str:
     if enabled and not value:
         raise ValueError(f"{name} is required when the integration is enabled")
     return value
+
+
+def _email_recipients(value: str) -> tuple[str, ...]:
+    recipients = tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
+    invalid = next(
+        (item for item in recipients if "@" not in item or item.startswith("@") or item.endswith("@")),
+        None,
+    )
+    if invalid:
+        raise ValueError(f"invalid email fallback recipient {invalid!r}")
+    return recipients

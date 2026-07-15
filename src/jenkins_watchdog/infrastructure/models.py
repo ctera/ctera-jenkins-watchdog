@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM metadata for the ten-table v2 PostgreSQL schema."""
+"""SQLAlchemy ORM metadata for the v2 PostgreSQL schema."""
 
 from __future__ import annotations
 
@@ -78,6 +78,7 @@ class CheckExecutionRecord(Base):
     categories: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     failure_summary: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -142,6 +143,7 @@ class IncidentRecord(Base):
     )
     finding_links: Mapped[list[IncidentFindingRecord]] = relationship(back_populates="incident")
     investigations: Mapped[list[InvestigationRecord]] = relationship(back_populates="incident")
+    investigation_requests: Mapped[list[InvestigationRequestRecord]] = relationship(back_populates="incident")
     actions: Mapped[list[ActionRecord]] = relationship(back_populates="incident")
 
 
@@ -200,6 +202,48 @@ class InvestigationRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     incident: Mapped[IncidentRecord] = relationship(back_populates="investigations")
+
+
+class InvestigationRequestRecord(Base):
+    __tablename__ = "investigation_requests"
+    __table_args__ = (
+        Index(
+            "uq_investigation_requests_active_incident",
+            "incident_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+        Index("ix_investigation_requests_claim", "status", "next_attempt_at", "lease_expires_at", "priority"),
+        Index("ix_investigation_requests_incident_created", "incident_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False)
+    occurrence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("incident_occurrences.id", ondelete="CASCADE"), nullable=False
+    )
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    scan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
+    build_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jenkins_builds.id", ondelete="SET NULL"))
+    requested_by: Mapped[str | None] = mapped_column(String(320))
+    lease_owner: Mapped[str | None] = mapped_column(String(255))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    investigation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("investigations.id", ondelete="SET NULL")
+    )
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    incident: Mapped[IncidentRecord] = relationship(back_populates="investigation_requests")
 
 
 class ActionRecord(Base):
@@ -272,3 +316,115 @@ class ScanEventRecord(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False)
 
     scan: Mapped[ScanRecord] = relationship(back_populates="events")
+
+
+class JenkinsJobRecord(Base):
+    __tablename__ = "jenkins_jobs"
+    __table_args__ = (
+        Index("ix_jenkins_jobs_parent", "parent_full_name"),
+        Index("ix_jenkins_jobs_last_build", "last_build_at"),
+        Index("ix_jenkins_jobs_type", "job_type", "head_type"),
+    )
+
+    full_name: Mapped[str] = mapped_column(String(768), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    job_class: Mapped[str] = mapped_column(String(512), nullable=False)
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    color: Mapped[str | None] = mapped_column(String(32))
+    parent_full_name: Mapped[str | None] = mapped_column(String(768))
+    first_build_number: Mapped[int | None] = mapped_column(Integer)
+    first_build_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_build_number: Mapped[int | None] = mapped_column(Integer)
+    last_build_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    watermark_build_number: Mapped[int | None] = mapped_column(Integer)
+    history_coverage: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
+    head_type: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    head_name: Mapped[str | None] = mapped_column(String(768))
+    source_provider: Mapped[str | None] = mapped_column(String(32))
+    repository: Mapped[str | None] = mapped_column(String(768))
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class JenkinsBuildRecord(Base):
+    __tablename__ = "jenkins_builds"
+    __table_args__ = (
+        UniqueConstraint("job_full_name", "build_number", name="uq_jenkins_build_job_number"),
+        Index("ix_jenkins_builds_started", "started_at", "id"),
+        Index("ix_jenkins_builds_result_started", "result", "started_at"),
+        Index("ix_jenkins_builds_logical_run", "logical_run_key"),
+        Index("ix_jenkins_builds_signature", "failure_signature", "started_at"),
+        Index("ix_jenkins_builds_enrichment", "enrichment_status", "started_at"),
+        Index("ix_jenkins_builds_incident", "incident_id", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incidents.id", ondelete="SET NULL"))
+    job_full_name: Mapped[str] = mapped_column(
+        ForeignKey("jenkins_jobs.full_name", ondelete="CASCADE"), nullable=False
+    )
+    build_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    result: Mapped[str] = mapped_column(String(24), nullable=False)
+    building: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    upstream_job_full_name: Mapped[str | None] = mapped_column(String(768))
+    upstream_build_number: Mapped[int | None] = mapped_column(Integer)
+    root_job_full_name: Mapped[str | None] = mapped_column(String(768))
+    root_build_number: Mapped[int | None] = mapped_column(Integer)
+    logical_run_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    trigger_kind: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    source_provider: Mapped[str | None] = mapped_column(String(32))
+    repository: Mapped[str | None] = mapped_column(String(768))
+    change_number: Mapped[str | None] = mapped_column(String(128))
+    change_url: Mapped[str | None] = mapped_column(String(2048))
+    head_name: Mapped[str | None] = mapped_column(String(768))
+    failed_stage: Mapped[str | None] = mapped_column(String(768))
+    failure_classification: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    failure_signature: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    failure_summary: Mapped[str | None] = mapped_column(Text)
+    propagated_failure: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    novelty: Mapped[str] = mapped_column(String(32), nullable=False, default="unclassified")
+    priority_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    priority_reasons: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    enrichment_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class JenkinsBuildEdgeRecord(Base):
+    __tablename__ = "jenkins_build_edges"
+    __table_args__ = (
+        UniqueConstraint("upstream_build_id", "downstream_build_id", name="uq_jenkins_build_edge"),
+        Index("ix_jenkins_build_edges_downstream", "downstream_build_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    upstream_build_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("jenkins_builds.id", ondelete="CASCADE"), nullable=False
+    )
+    downstream_build_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("jenkins_builds.id", ondelete="CASCADE"), nullable=False
+    )
+    relationship_type: Mapped[str] = mapped_column(String(32), nullable=False, default="triggered")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class JenkinsSyncStateRecord(Base):
+    __tablename__ = "jenkins_sync_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(255))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_summary: Mapped[str | None] = mapped_column(Text)
+    stats: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

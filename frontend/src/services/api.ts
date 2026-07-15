@@ -3,6 +3,8 @@ import type { components } from "../types/api.generated";
 type Schemas = components["schemas"];
 
 export type Scan = Schemas["V2ScanResponse"];
+export type CheckExecution = Schemas["V2CheckExecutionResponse"];
+export type Overview = Schemas["V2OverviewResponse"];
 export type ScanPage = Schemas["V2ScanPage"];
 export type Incident = Schemas["V2IncidentResponse"];
 export type IncidentPage = Schemas["V2IncidentPage"];
@@ -10,10 +12,20 @@ export type IncidentDetail = Schemas["V2IncidentDetailResponse"];
 export type Observation = Schemas["V2ObservationResponse"];
 export type Occurrence = Schemas["V2OccurrenceResponse"];
 export type Investigation = Schemas["V2InvestigationResponse"];
+export type InvestigationRequest = Schemas["V2InvestigationRequestResponse"];
 export type Action = Schemas["V2ActionResponse"];
 export type ActionPage = Schemas["V2ActionPage"];
 export type ActionDetail = Schemas["V2ActionDetailResponse"];
 export type DeliveryAttempt = Schemas["V2DeliveryAttemptResponse"];
+export type ChatResponse = Schemas["V2ChatResponse"];
+export type JenkinsWorkspace = Schemas["V2JenkinsWorkspaceResponse"];
+export type JenkinsBuild = Schemas["V2JenkinsBuildResponse"];
+export type JenkinsBuildDetail = Schemas["V2JenkinsBuildDetailResponse"];
+export type JenkinsFailurePage = Schemas["V2JenkinsFailurePage"];
+export type JenkinsExecution = Schemas["V2LogicalExecutionResponse"];
+export type JenkinsFailurePattern = Schemas["V2FailurePatternResponse"];
+export type JenkinsJobFamily = Schemas["V2JobFamilyResponse"];
+export type JenkinsMultibranchFamily = Schemas["V2MultibranchFamilyResponse"];
 
 export interface ScanEventEnvelope {
   sequence: number;
@@ -21,6 +33,11 @@ export interface ScanEventEnvelope {
   occurred_at: string;
   payload_version: number;
   payload: Record<string, unknown>;
+}
+
+export interface ChatStreamEvent {
+  event: "tool_call" | "tool_result" | "reasoning" | "message" | "error" | string;
+  data: Record<string, unknown>;
 }
 
 export interface IncidentFilters {
@@ -46,6 +63,40 @@ export class ApiError extends Error {
 }
 
 const BASE = "/api/v2";
+
+export function getOverview(): Promise<Overview> {
+  return request<Overview>("/overview");
+}
+
+export function getJenkinsWorkspace(windowHours = 168, limit = 50): Promise<JenkinsWorkspace> {
+  return request<JenkinsWorkspace>(`/jenkins${query({ window_hours: windowHours, limit })}`);
+}
+
+export function listJenkinsFailures(
+  windowHours = 168,
+  filters: { view?: "all" | "new"; result?: "FAILURE" | "UNSTABLE" | "ABORTED"; job?: string } = {},
+  limit = 100,
+  cursor?: string,
+): Promise<JenkinsFailurePage> {
+  return request<JenkinsFailurePage>(
+    `/jenkins/failures${query({ window_hours: windowHours, limit, cursor, ...filters })}`,
+  );
+}
+
+export function getJenkinsBuild(buildId: string): Promise<JenkinsBuildDetail> {
+  return request<JenkinsBuildDetail>(`/jenkins/builds/${encodeURIComponent(buildId)}`);
+}
+
+export function analyzeJenkinsBuild(
+  buildId: string,
+  mode: "regular" | "deep",
+): Promise<InvestigationRequest> {
+  return request<InvestigationRequest>(`/jenkins/builds/${encodeURIComponent(buildId)}/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+}
 
 export async function createScan(mode: "regular" | "deep", categories: string[]): Promise<Scan> {
   return request<Scan>("/scans", {
@@ -87,8 +138,8 @@ export function unsuppressIncident(incidentId: string): Promise<Incident> {
   return request<Incident>(`/incidents/${encodeURIComponent(incidentId)}/unsuppress`, { method: "POST" });
 }
 
-export function reinvestigateIncident(incidentId: string): Promise<Investigation> {
-  return request<Investigation>(`/incidents/${encodeURIComponent(incidentId)}/reinvestigate`, { method: "POST" });
+export function reinvestigateIncident(incidentId: string): Promise<InvestigationRequest> {
+  return request<InvestigationRequest>(`/incidents/${encodeURIComponent(incidentId)}/reinvestigate`, { method: "POST" });
 }
 
 export function listActions(filters: ActionFilters = {}, cursor?: string, limit = 25): Promise<ActionPage> {
@@ -103,13 +154,30 @@ export function retryAction(actionId: string): Promise<Action> {
   return request<Action>(`/actions/${encodeURIComponent(actionId)}/retry`, { method: "POST" });
 }
 
-export async function chat(message: string, incidentId?: string): Promise<string> {
-  const response = await request<Schemas["V2ChatResponse"]>("/chat", {
+export function chat(message: string, incidentId?: string): Promise<ChatResponse> {
+  return request<ChatResponse>("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, incident_id: incidentId ?? null }),
   });
-  return response.content;
+}
+
+export async function* streamChat(
+  message: string,
+  incidentId: string | undefined,
+  history: Array<{ role: "user" | "assistant"; content: string }>,
+  signal: AbortSignal,
+): AsyncGenerator<ChatStreamEvent> {
+  const response = await fetch(`${BASE}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ message, incident_id: incidentId ?? null, history }),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    throw await apiError(response, "Failed to start live agent chat");
+  }
+  for await (const event of parseNamedSse(response.body, signal)) yield event;
 }
 
 export async function* streamScanEvents(
@@ -199,6 +267,37 @@ async function* parseSse(stream: ReadableStream<Uint8Array>, signal: AbortSignal
           .map((line) => line.slice(5).trimStart())
           .join("\n");
         if (data) yield JSON.parse(data) as ScanEventEnvelope;
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function* parseNamedSse(
+  stream: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): AsyncGenerator<ChatStreamEvent> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replaceAll("\r\n", "\n");
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        let event = "message";
+        const data: string[] = [];
+        block.split("\n").forEach((line) => {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+        });
+        if (data.length) yield { event, data: JSON.parse(data.join("\n")) as Record<string, unknown> };
         boundary = buffer.indexOf("\n\n");
       }
     }

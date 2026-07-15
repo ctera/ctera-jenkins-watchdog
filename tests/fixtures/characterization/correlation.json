@@ -20,15 +20,15 @@
     "dimensions": {
       "node": "worker-1"
     },
-    "rule_id": "jenkins_kubernetes_node",
-    "key": "worker-1"
+    "rule_id": "jenkins_kubernetes_node_symptom_v2",
+    "key": "worker-1:unknown"
   },
   {
     "dimensions": {
       "agent_pool": "linux",
       "symptom_family": "disconnect"
     },
-    "rule_id": "agent_pool_symptom_family",
+    "rule_id": "agent_pool_symptom_family_v2",
     "key": "linux:disconnect"
   }
 ]

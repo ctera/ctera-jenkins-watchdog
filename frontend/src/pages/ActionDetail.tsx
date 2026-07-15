@@ -14,6 +14,7 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
+import MarkdownContent from "../components/MarkdownContent";
 import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
 import { getAction, retryAction, type ActionDetail } from "../services/api";
@@ -103,9 +104,22 @@ export default function ActionDetailPage() {
         <Box sx={{ flex: 1, width: "100%", minWidth: 0 }}>
           <Typography variant="h6" sx={{ mb: 1.25 }}>Rendered payload</Typography>
           <Paper variant="outlined" sx={{ p: 2, bgcolor: "#f8f9fa" }}>
-            <Typography component="pre" variant="body2" sx={{ m: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "ui-monospace, monospace" }}>
-              {JSON.stringify(action.rendered_payload, null, 2)}
-            </Typography>
+            {typeof action.rendered_payload.body === "string" ? (
+              <Stack gap={1.5}>
+                {typeof action.rendered_payload.subject === "string" && (
+                  <Box>
+                    <Typography variant="caption" color="text.secondary">Subject</Typography>
+                    <Typography variant="body2" fontWeight={650}>{action.rendered_payload.subject.trim()}</Typography>
+                  </Box>
+                )}
+                <Divider />
+                <MarkdownContent content={action.rendered_payload.body} />
+              </Stack>
+            ) : (
+              <Typography component="pre" variant="body2" sx={{ m: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "ui-monospace, monospace" }}>
+                {JSON.stringify(action.rendered_payload, null, 2)}
+              </Typography>
+            )}
           </Paper>
         </Box>
         <Box sx={{ flex: 1, width: "100%", minWidth: 0 }}>

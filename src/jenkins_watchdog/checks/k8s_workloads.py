@@ -2,7 +2,7 @@
 
 import logging
 
-from jenkins_watchdog.checks.base import Finding
+from jenkins_watchdog.checks.base import CheckReport, Finding
 from jenkins_watchdog.clients.k8s import KubernetesClient
 
 logger = logging.getLogger(__name__)
@@ -14,16 +14,18 @@ class WorkloadCheck:
     def __init__(self, kubernetes: KubernetesClient) -> None:
         self._kubernetes = kubernetes
 
-    async def run(self) -> list[Finding]:
+    async def run(self) -> CheckReport:
         findings: list[Finding] = []
         apps = self._kubernetes.apps_v1()
 
         deployments = await self._kubernetes.run_sync(apps.list_deployment_for_all_namespaces, timeout=20)
+        related_deployments = 0
         for dep in deployments.items:
             ns = dep.metadata.namespace
             name = dep.metadata.name
             if not self._is_jenkins_related(name, dep.metadata.labels or {}):
                 continue
+            related_deployments += 1
 
             desired = dep.spec.replicas or 0
             available = dep.status.available_replicas or 0
@@ -58,11 +60,13 @@ class WorkloadCheck:
                         )
 
         statefulsets = await self._kubernetes.run_sync(apps.list_stateful_set_for_all_namespaces, timeout=20)
+        related_statefulsets = 0
         for sts in statefulsets.items:
             ns = sts.metadata.namespace
             name = sts.metadata.name
             if not self._is_jenkins_related(name, sts.metadata.labels or {}):
                 continue
+            related_statefulsets += 1
 
             desired = sts.spec.replicas or 0
             ready = sts.status.ready_replicas or 0
@@ -78,7 +82,13 @@ class WorkloadCheck:
                     )
                 )
 
-        return findings
+        return CheckReport(
+            findings=findings,
+            summary={
+                "jenkins_deployment_count": related_deployments,
+                "jenkins_statefulset_count": related_statefulsets,
+            },
+        )
 
     def _is_jenkins_related(self, name: str, labels: dict) -> bool:
         name_lower = name.lower()

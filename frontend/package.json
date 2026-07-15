@@ -18,12 +18,14 @@
     "@mui/material": "^7.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7.0.0"
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.0.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@playwright/test": "^1.54.1",
     "@vitejs/plugin-react": "^4.4.0",
     "openapi-typescript": "^7.8.0",
     "typescript": "^5.7.0",

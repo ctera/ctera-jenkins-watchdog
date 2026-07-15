@@ -55,9 +55,8 @@ async def test_agent_connectivity_characterizes_controller_and_resource_findings
     async def unavailable():
         raise RuntimeError("offline")
 
-    [controller] = await AgentConnectivityCheck(namespace(get_nodes=unavailable)).run()
-    assert controller.category == "jenkins_controller"
-    assert "Cannot reach" in controller.symptom
+    with pytest.raises(RuntimeError, match="offline"):
+        await AgentConnectivityCheck(namespace(get_nodes=unavailable)).run()
 
 
 @pytest.mark.asyncio

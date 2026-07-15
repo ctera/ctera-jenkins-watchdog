@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import signal
 import time
 from pathlib import Path
@@ -20,6 +21,8 @@ def parser() -> argparse.ArgumentParser:
     subcommands = root.add_subparsers(dest="command")
     subcommands.add_parser("api", help="run the HTTP API")
     subcommands.add_parser("worker", help="run scan and delivery workers")
+    sync_jenkins = subcommands.add_parser("sync-jenkins", help="synchronize the durable Jenkins build index once")
+    sync_jenkins.add_argument("--window-hours", type=int, default=None)
 
     scheduled = subcommands.add_parser("enqueue-scheduled", help="enqueue a scheduled scan")
     scheduled.add_argument("--mode", choices=("regular", "deep"), default="regular")
@@ -41,6 +44,7 @@ def main() -> None:
         level=settings.log_level.upper(),
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     command_name = args.command or "api"
     if command_name == "api":
         _api(settings)
@@ -50,6 +54,7 @@ def main() -> None:
         return
     runners = {
         "worker": lambda: _worker(settings),
+        "sync-jenkins": lambda: _sync_jenkins(settings, window_hours=args.window_hours),
         "enqueue-scheduled": lambda: _enqueue_scheduled(settings, mode=args.mode, categories=tuple(args.category)),
         "schema-check": lambda: _schema_check(settings, wait=args.wait, timeout_seconds=args.timeout),
         "worker-health": lambda: _worker_health(settings),
@@ -90,12 +95,37 @@ async def _worker(settings) -> int:
             pass
     scan_worker = container.make_worker()
     delivery_worker = container.make_delivery_worker()
+    jenkins_worker = container.make_jenkins_worker()
+    investigation_worker = container.make_investigation_worker()
     try:
         await container.ready()
-        await asyncio.gather(
+        tasks = [
             scan_worker.run_forever(stop),
             delivery_worker.run_forever(stop),
+            investigation_worker.run_forever(stop),
+        ]
+        if settings.jenkins_monitor_enabled:
+            tasks.append(jenkins_worker.run_forever(stop))
+        await asyncio.gather(*tasks)
+        return 0
+    finally:
+        await container.close()
+
+
+async def _sync_jenkins(settings, *, window_hours: int | None) -> int:
+    from dataclasses import asdict
+
+    container = build_container(settings)
+    try:
+        await container.ready()
+        stats = await container.jenkins_monitor.sync(
+            owner=f"cli-{os.getpid()}",
+            window_hours=window_hours,
         )
+        if stats is None:
+            print(json.dumps({"status": "skipped", "reason": "sync_active"}))
+            return 0
+        print(json.dumps({"status": "completed", **asdict(stats)}, default=str))
         return 0
     finally:
         await container.close()

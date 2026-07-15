@@ -16,8 +16,9 @@ T = TypeVar("T")
 
 
 class KubernetesClient:
-    def __init__(self, *, request_timeout_seconds: float) -> None:
+    def __init__(self, *, request_timeout_seconds: float, kubeconfig_path: str | None = None) -> None:
         self.request_timeout_seconds = request_timeout_seconds
+        self.kubeconfig_path = kubeconfig_path
         self._core_v1: CoreV1Api | None = None
         self._apps_v1: AppsV1Api | None = None
         self._batch_v1: BatchV1Api | None = None
@@ -27,7 +28,7 @@ class KubernetesClient:
         try:
             config.load_incluster_config()
         except config.ConfigException:
-            config.load_kube_config()
+            config.load_kube_config(config_file=self.kubeconfig_path)
             logger.warning("Using local kubeconfig (not in-cluster)")
         self._core_v1 = CoreV1Api()
         self._apps_v1 = AppsV1Api()

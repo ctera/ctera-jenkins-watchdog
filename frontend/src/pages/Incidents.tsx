@@ -13,6 +13,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -26,7 +27,8 @@ import { formatRelative, titleCase } from "../utils/format";
 
 export default function Incidents() {
   const navigate = useNavigate();
-  const [filters, setFilters] = useState<IncidentFilters>({});
+  const [filters, setFilters] = useState<IncidentFilters>({ status: "open" });
+  const [search, setSearch] = useState("");
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +61,14 @@ export default function Incidents() {
     setFilters((current) => ({ ...current, [name]: value || undefined }));
   }
 
+  const visibleIncidents = incidents
+    .filter((incident) => !search.trim() || `${incident.title} ${incident.domain}`.toLowerCase().includes(search.trim().toLowerCase()))
+    .sort((left, right) => {
+      const severity = { critical: 2, warning: 1, low: 0 };
+      return (severity[right.severity as keyof typeof severity] ?? 0) - (severity[left.severity as keyof typeof severity] ?? 0)
+        || right.affected_resource_count - left.affected_resource_count;
+    });
+
   return (
     <Box>
       <PageHeader
@@ -66,28 +76,30 @@ export default function Incidents() {
         actions={<Button variant="outlined" startIcon={<RefreshIcon />} onClick={() => void refresh()}>Refresh</Button>}
       />
       <Stack direction={{ xs: "column", sm: "row" }} gap={1.5} sx={{ mb: 2.5 }}>
+        <TextField size="small" label="Search conditions" value={search} onChange={(event) => setSearch(event.target.value)} sx={{ minWidth: { xs: 0, sm: 240 } }} />
         <Filter label="Status" value={filters.status ?? ""} onChange={(value) => setFilter("status", value as IncidentFilters["status"])} options={["open", "resolved", "suppressed"]} />
         <Filter label="Severity" value={filters.severity ?? ""} onChange={(value) => setFilter("severity", value as IncidentFilters["severity"])} options={["critical", "warning", "low"]} />
         <Filter label="Source" value={filters.source_type ?? ""} onChange={(value) => setFilter("source_type", value as IncidentFilters["source_type"])} options={["merge_request", "infrastructure", "unknown"]} />
       </Stack>
 
       {Boolean(error) && <Box sx={{ mb: 2 }}><ErrorPanel error={error} /></Box>}
-      {loading ? <LoadingPanel label="Loading incidents" /> : incidents.length === 0 ? <EmptyPanel label="No matching incidents" /> : (
+      {loading ? <LoadingPanel label="Loading incidents" /> : visibleIncidents.length === 0 ? <EmptyPanel label="No matching incidents" /> : (
         <>
           <TableContainer component={Paper} variant="outlined">
-            <Table sx={{ minWidth: 840 }}>
+            <Table sx={{ minWidth: 920 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>Severity</TableCell>
                   <TableCell>Incident</TableCell>
+                  <TableCell>Affected</TableCell>
+                  <TableCell>Area</TableCell>
                   <TableCell>Status</TableCell>
-                  <TableCell>Source</TableCell>
-                  <TableCell>Occurrence</TableCell>
-                  <TableCell>Updated</TableCell>
+                  <TableCell>First seen</TableCell>
+                  <TableCell>Last seen</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {incidents.map((incident) => (
+                {visibleIncidents.map((incident) => (
                   <TableRow
                     hover
                     key={incident.id}
@@ -99,12 +111,13 @@ export default function Incidents() {
                     <TableCell><StatusChip value={incident.severity} /></TableCell>
                     <TableCell sx={{ maxWidth: 420 }}>
                       <Typography variant="body2" fontWeight={650} noWrap>{incident.title}</Typography>
-                      <Typography variant="caption" color="text.secondary">{incident.correlation_rule_id}</Typography>
+                      <Typography variant="caption" color="text.secondary">Occurrence #{incident.occurrence_number}</Typography>
                     </TableCell>
+                    <TableCell>{incident.affected_resource_count}</TableCell>
+                    <TableCell>{titleCase(incident.domain)}</TableCell>
                     <TableCell><StatusChip value={incident.status} /></TableCell>
-                    <TableCell>{titleCase(String(incident.source.kind ?? "unknown"))}</TableCell>
-                    <TableCell>#{incident.occurrence_number}</TableCell>
-                    <TableCell>{formatRelative(incident.updated_at ?? incident.created_at)}</TableCell>
+                    <TableCell>{formatRelative(incident.first_seen_at ?? incident.created_at)}</TableCell>
+                    <TableCell>{formatRelative(incident.last_seen_at ?? incident.updated_at ?? incident.created_at)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

@@ -12,6 +12,15 @@ data:
   WATCHDOG_JENKINS_AGENT_LABEL: {{ .Values.config.jenkinsAgentLabel | quote }}
   WATCHDOG_JENKINS_NAMESPACE: {{ .Values.config.jenkinsNamespace | quote }}
   WATCHDOG_JENKINS_FAILED_BUILD_WINDOW_HOURS: {{ .Values.config.jenkinsFailedBuildWindowHours | quote }}
+  WATCHDOG_JENKINS_MONITOR_ENABLED: {{ .Values.config.jenkinsMonitorEnabled | quote }}
+  WATCHDOG_JENKINS_SYNC_INTERVAL_S: {{ .Values.config.jenkinsSyncIntervalSeconds | quote }}
+  WATCHDOG_JENKINS_SYNC_WINDOW_HOURS: {{ .Values.config.jenkinsSyncWindowHours | quote }}
+  WATCHDOG_JENKINS_SYNC_CONCURRENCY: {{ .Values.config.jenkinsSyncConcurrency | quote }}
+  WATCHDOG_JENKINS_SYNC_ENRICHMENT_LIMIT: {{ .Values.config.jenkinsSyncEnrichmentLimit | quote }}
+  WATCHDOG_JENKINS_SYNC_LOG_LIMIT: {{ .Values.config.jenkinsSyncLogLimit | quote }}
+  WATCHDOG_AUTOMATIC_INVESTIGATIONS_ENABLED: {{ .Values.config.automaticInvestigationsEnabled | quote }}
+  WATCHDOG_AUTOMATIC_INVESTIGATION_MIN_PRIORITY: {{ .Values.config.automaticInvestigationMinPriority | quote }}
+  WATCHDOG_AUTOMATIC_INVESTIGATION_BATCH_SIZE: {{ .Values.config.automaticInvestigationBatchSize | quote }}
   WATCHDOG_PROMETHEUS_ENDPOINT: {{ .Values.config.prometheusEndpoint | quote }}
   WATCHDOG_PROMETHEUS_ENABLED: {{ .Values.config.prometheusEnabled | quote }}
   WATCHDOG_VALKEY_HOST: {{ .Values.config.valkeyHost | quote }}
@@ -28,8 +37,14 @@ data:
   WATCHDOG_LLM_TEMPERATURE: {{ .Values.config.llmTemperature | quote }}
   WATCHDOG_LLM_MAX_TOKENS: {{ .Values.config.llmMaxTokens | quote }}
   WATCHDOG_LLM_MAX_RETRIES: {{ .Values.config.llmMaxRetries | quote }}
+  WATCHDOG_LLM_SCAN_TOKEN_BUDGET: {{ .Values.config.llmScanTokenBudget | quote }}
+  WATCHDOG_LLM_DEEP_SCAN_TOKEN_BUDGET: {{ .Values.config.llmDeepScanTokenBudget | quote }}
   WATCHDOG_MAX_TOOL_ROUNDS: {{ .Values.config.maxToolRounds | quote }}
+  WATCHDOG_MAX_DEEP_TOOL_ROUNDS: {{ .Values.config.maxDeepToolRounds | quote }}
   WATCHDOG_MAX_INVESTIGATIONS_PER_SCAN: {{ .Values.config.maxInvestigationsPerScan | quote }}
+  WATCHDOG_MAX_DEEP_INVESTIGATIONS_PER_SCAN: {{ .Values.config.maxDeepInvestigationsPerScan | quote }}
+  WATCHDOG_INVESTIGATION_WORKER_LEASE_SECONDS: {{ .Values.config.investigationWorkerLeaseSeconds | quote }}
+  WATCHDOG_INVESTIGATION_MAX_ATTEMPTS: {{ .Values.config.investigationMaxAttempts | quote }}
   WATCHDOG_OIDC_ISSUER: {{ .Values.config.oidcIssuer | quote }}
   WATCHDOG_OIDC_CLIENT_ID: {{ .Values.config.oidcClientId | quote }}
   WATCHDOG_OIDC_REDIRECT_URI: {{ .Values.config.oidcRedirectUri | quote }}

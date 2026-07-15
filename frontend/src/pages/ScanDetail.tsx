@@ -7,6 +7,12 @@ import {
   LinearProgress,
   Paper,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Typography,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
@@ -94,6 +100,11 @@ export default function ScanDetailPage() {
 
       {Boolean(error) && <Box sx={{ mb: 2 }}><ErrorPanel error={error} /></Box>}
       {scan.failure_summary && <Alert severity="error" sx={{ mb: 2 }}>{scan.failure_summary}</Alert>}
+      {scan.coverage_status && !active && scan.coverage_status !== "complete" && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Detector coverage was {titleCase(scan.coverage_status)}. Incident results may be incomplete and unresolved conditions were preserved.
+        </Alert>
+      )}
 
       <Paper variant="outlined" sx={{ mb: 2.5, overflow: "hidden" }}>
         <Box sx={{ p: { xs: 2, md: 2.5 } }}>
@@ -126,6 +137,29 @@ export default function ScanDetailPage() {
           </Stack>
         </Box>
       </Paper>
+
+      <Typography variant="h6" sx={{ mb: 1.25 }}>Detector coverage</Typography>
+      <TableContainer component={Paper} variant="outlined" sx={{ mb: 2.5 }}>
+        <Table sx={{ minWidth: 760 }}>
+          <TableHead><TableRow><TableCell>Check</TableCell><TableCell>Coverage</TableCell><TableCell>Status</TableCell><TableCell>Findings</TableCell><TableCell>Duration</TableCell></TableRow></TableHead>
+          <TableBody>
+            {(scan.checks ?? []).length === 0 ? (
+              <TableRow><TableCell colSpan={5}><Typography color="text.secondary" sx={{ py: 2, textAlign: "center" }}>Checks have not started</Typography></TableCell></TableRow>
+            ) : (scan.checks ?? []).map((check) => (
+              <TableRow key={check.name}>
+                <TableCell>
+                  <Typography variant="body2" fontWeight={650}>{titleCase(check.name)}</Typography>
+                  {check.failure_summary && <Typography variant="caption" color="error.main">{check.failure_summary}</Typography>}
+                </TableCell>
+                <TableCell>{check.categories.map(titleCase).join(", ")}</TableCell>
+                <TableCell><StatusChip value={check.status} /></TableCell>
+                <TableCell>{check.finding_count}</TableCell>
+                <TableCell>{checkDuration(check.started_at, check.completed_at)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
 
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.25 }}>
         <Typography variant="h6">Event timeline</Typography>
@@ -166,4 +200,11 @@ function Meta({ label, value }: { label: string; value: string }) {
       <Typography variant="body2" fontWeight={600}>{value}</Typography>
     </Box>
   );
+}
+
+function checkDuration(startedAt: string | null, completedAt: string | null): string {
+  if (!startedAt) return "-";
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
+  const seconds = Math.max(0, Math.round((end - new Date(startedAt).getTime()) / 1000));
+  return `${seconds}s`;
 }
