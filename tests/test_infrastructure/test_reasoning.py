@@ -292,6 +292,67 @@ async def test_tool_loop_persists_trace_and_enforces_pipeline_log_quality_gate(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_investigation_requires_representative_log_before_model_concludes() -> None:
+    payload = (
+        '{"root_cause":"version gate","evidence":["console"],"impact":"blocked",'
+        '"suggested_fix":"upgrade","actionability":"actionable",'
+        '"classification":"configuration","priority":"critical","confidence":"high"}'
+    )
+
+    async def complete(**kwargs):
+        messages = kwargs["messages"]
+        assert any("Mandatory pipeline evidence" in str(message.get("content")) for message in messages)
+        return response(payload)
+
+    item = replace(observation(), category="jenkins_build")
+    incident = Incident.open_new(
+        id="incident",
+        correlation_rule_id="jenkins_failure",
+        correlation_key="signature",
+        observation=item,
+        opened_at=NOW,
+    )
+    tools = Tools("jenkins_get_build_log")
+    adapter = LiteLLMReasoningAdapter(
+        model="model",
+        fallback_models=(),
+        api_key="key",
+        temperature=0.1,
+        max_tokens=100,
+        max_retries=0,
+        tools=tools,
+        completion=complete,
+    )
+
+    result = await adapter.investigate(
+        incident,
+        (item,),
+        context={
+            "jenkins_builds": [
+                {
+                    "job_name": "DeployGenesisAndRunSyncTests",
+                    "build_number": 14279,
+                    "propagated_failure": False,
+                }
+            ]
+        },
+    )
+
+    assert result.status is InvestigationStatus.SUCCEEDED
+    assert result.confidence.value == "high"
+    assert tools.calls == 1
+    assert result.result["tools_used"] == ("jenkins_get_build_log",)
+    assert result.result["tool_trace"][0]["round"] == 0
+    assert result.result["tool_trace"][0]["arguments"] == {
+        "job_name": "DeployGenesisAndRunSyncTests",
+        "build_number": 14279,
+        "tail_lines": 1500,
+        "full": False,
+    }
+    assert "quality_gate" not in result.result
+
+
+@pytest.mark.asyncio
 async def test_tool_loop_stops_calling_tools_at_per_investigation_token_budget() -> None:
     payload = (
         '{"root_cause":"bounded evidence","evidence":[],"impact":"unknown",'

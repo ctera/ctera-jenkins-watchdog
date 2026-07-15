@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
@@ -22,7 +23,7 @@ from jenkins_watchdog.domain.serialization import to_primitive
 from jenkins_watchdog.infrastructure.tools import ReadOnlyToolRegistry, ToolExecution
 
 INPUT_VERSION = "v2"
-PROMPT_VERSION = "tool-agent-v1"
+PROMPT_VERSION = "tool-agent-v2"
 Completion = Callable[..., Awaitable[Any]]
 
 _PIPELINE_CATEGORIES = frozenset({"jenkins_failed_build", "jenkins_pipeline_pattern", "jenkins_build"})
@@ -91,6 +92,7 @@ class LiteLLMReasoningAdapter:
                     mode=mode,
                     on_progress=on_progress,
                     final_only=True,
+                    initial_tool_calls=_required_pipeline_tool_calls(observations, context=context, mode=mode),
                 )
                 result, extraction_model, extraction_usage = await self._extract(raw_reasoning, mode=mode)
                 model = extraction_model or model
@@ -216,6 +218,7 @@ class LiteLLMReasoningAdapter:
         history: list[dict[str, str]] | None = None,
         summary_prompt: str | None = None,
         final_only: bool = False,
+        initial_tool_calls: tuple[tuple[str, dict[str, Any]], ...] = (),
     ) -> tuple[str, list[dict[str, Any]], str, dict[str, int]]:
         if not self._api_key:
             raise RuntimeError("reasoning integration is disabled")
@@ -232,6 +235,36 @@ class LiteLLMReasoningAdapter:
         last_model = self._models[0]
         max_rounds = self._max_deep_tool_rounds if mode is ScanMode.DEEP else self._max_tool_rounds
         token_budget = self._deep_token_budget if mode is ScanMode.DEEP else self._token_budget
+
+        for name, arguments in initial_tool_calls:
+            await _emit(
+                on_progress,
+                {"type": "tool_call", "round": 0, "tool": name, "arguments": arguments, "required": True},
+            )
+            execution = await self._tools.execute(name, arguments, mode=mode)
+            trace.append(_trace_entry(execution, round_number=0))
+            await _emit(
+                on_progress,
+                {
+                    "type": "tool_result",
+                    "round": 0,
+                    "tool": name,
+                    "ok": execution.ok,
+                    "duration_ms": execution.duration_ms,
+                    "preview": execution.output[:500],
+                    "required": True,
+                },
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Mandatory pipeline evidence collected before reasoning. Use this live tool result in the "
+                        f"assessment. Tool: {name}; arguments: "
+                        f"{json.dumps(arguments, separators=(',', ':'), ensure_ascii=False)}\n{execution.output}"
+                    ),
+                }
+            )
 
         for round_number in range(1, max_rounds + 1):
             response, last_model = await self._call_with_fallback(
@@ -593,9 +626,7 @@ def _apply_quality_gates(
     *,
     context: dict[str, Any] | None,
 ) -> None:
-    pipeline = any(item.category in _PIPELINE_CATEGORIES for item in observations) or bool(
-        (context or {}).get("jenkins_builds")
-    )
+    pipeline = _is_pipeline_investigation(observations, context=context)
     tools_used = {str(item.get("tool")) for item in trace if item.get("ok")}
     if pipeline and not tools_used.intersection(_LOG_TOOLS):
         result["confidence"] = Confidence.LOW.value
@@ -619,6 +650,74 @@ def _apply_quality_gates(
             "The build log confirms test failures, but Jenkins did not provide the failed-test report needed to verify "
             "the individual test mechanism."
         )
+
+
+def _required_pipeline_tool_calls(
+    observations: tuple[FindingObservation, ...],
+    *,
+    context: dict[str, Any] | None,
+    mode: ScanMode,
+) -> tuple[tuple[str, dict[str, Any]], ...]:
+    if not _is_pipeline_investigation(observations, context=context):
+        return ()
+    build = _representative_pipeline_build(observations, context=context)
+    if build is None:
+        return ()
+    job_name, build_number = build
+    return (
+        (
+            "jenkins_get_build_log",
+            {
+                "job_name": job_name,
+                "build_number": build_number,
+                "tail_lines": 1500,
+                "full": mode is ScanMode.DEEP,
+            },
+        ),
+    )
+
+
+def _is_pipeline_investigation(
+    observations: tuple[FindingObservation, ...], *, context: dict[str, Any] | None
+) -> bool:
+    return any(item.category in _PIPELINE_CATEGORIES for item in observations) or bool(
+        (context or {}).get("jenkins_builds")
+    )
+
+
+def _representative_pipeline_build(
+    observations: tuple[FindingObservation, ...], *, context: dict[str, Any] | None
+) -> tuple[str, int] | None:
+    builds = (context or {}).get("jenkins_builds") or ()
+    candidates = [item for item in builds if isinstance(item, Mapping)]
+    direct = [item for item in candidates if not item.get("propagated_failure")]
+    propagated = [item for item in candidates if item.get("propagated_failure")]
+    for build in (*direct, *propagated):
+        parsed = _build_reference(build)
+        if parsed is not None:
+            return parsed
+
+    for observation in sorted(observations, key=lambda item: item.observed_at, reverse=True):
+        parsed = _build_reference(observation.evidence)
+        if parsed is not None:
+            return parsed
+        failed_builds = observation.evidence.get("failed_builds") or ()
+        for build in failed_builds:
+            if isinstance(build, Mapping) and (parsed := _build_reference(build)) is not None:
+                return parsed
+    return None
+
+
+def _build_reference(value: Mapping[str, Any]) -> tuple[str, int] | None:
+    job_name = value.get("job_name") or value.get("job_full_name")
+    build_number = value.get("build_number") or value.get("latest_build") or value.get("number")
+    try:
+        number = int(build_number)
+    except (TypeError, ValueError):
+        return None
+    if not job_name or number < 1:
+        return None
+    return str(job_name), number
 
 
 def _claims_test_failure(result: dict[str, Any]) -> bool:
