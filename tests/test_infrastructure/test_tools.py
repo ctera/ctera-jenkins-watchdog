@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import jenkins as python_jenkins
 import pytest
 
 from jenkins_watchdog.clients.k8s_metrics import ContainerUsage, NodeMetrics, PodMetrics
@@ -111,6 +112,20 @@ class FakeJenkins:
                 ],
             }
         raise AssertionError(path)
+
+
+class FlakyJenkins(FakeJenkins):
+    def __init__(self, *, failures: int, error: Exception) -> None:
+        super().__init__()
+        self.failures = failures
+        self.error = error
+        self.log_attempts = 0
+
+    async def get_build_console_tail(self, job: str, number: int, *, max_bytes: int = 160_000):
+        self.log_attempts += 1
+        if self.log_attempts <= self.failures:
+            raise self.error
+        return await super().get_build_console_tail(job, number, max_bytes=max_bytes)
 
 
 def _pod(name: str = "pod-a") -> SimpleNamespace:
@@ -298,8 +313,13 @@ def _http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def _registry(http: httpx.AsyncClient | None = None) -> tuple[ReadOnlyToolRegistry, FakeJenkins, FakePrometheus]:
-    jenkins = FakeJenkins()
+def _registry(
+    http: httpx.AsyncClient | None = None,
+    *,
+    jenkins: FakeJenkins | None = None,
+    jenkins_retry_delays: tuple[float, ...] = (0.0, 0.0),
+) -> tuple[ReadOnlyToolRegistry, FakeJenkins, FakePrometheus]:
+    jenkins = jenkins or FakeJenkins()
     prometheus = FakePrometheus()
     registry = ReadOnlyToolRegistry(
         jenkins=jenkins,  # type: ignore[arg-type]
@@ -312,6 +332,7 @@ def _registry(http: httpx.AsyncClient | None = None) -> tuple[ReadOnlyToolRegist
         github_token="github-secret",
         gitlab_api_url="https://gitlab.test/api/v4/",
         gitlab_token="gitlab-secret",
+        jenkins_retry_delays=jenkins_retry_delays,
     )
     return registry, jenkins, prometheus
 
@@ -357,6 +378,41 @@ async def test_jenkins_tools_return_bounded_redacted_evidence_in_regular_and_dee
     )
     assert deep.ok and "full-secret" not in deep.output and "[REDACTED]" in deep.output
     assert jenkins.full_calls == [("portal", 12)]
+
+
+@pytest.mark.asyncio
+async def test_jenkins_tool_retries_transient_500_and_records_attempt_count() -> None:
+    flaky = FlakyJenkins(
+        failures=2,
+        error=python_jenkins.JenkinsException("Possibly authentication failed [500]: Internal Server Error"),
+    )
+    registry, _, _ = _registry(jenkins=flaky)
+
+    execution = await registry.execute(
+        "jenkins_get_build_log",
+        {"job_name": "portal", "build_number": 12},
+        mode=ScanMode.REGULAR,
+    )
+
+    assert execution.ok
+    assert execution.attempts == 3
+    assert flaky.log_attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_jenkins_tool_does_not_retry_non_transient_error() -> None:
+    flaky = FlakyJenkins(failures=1, error=python_jenkins.JenkinsException("job does not exist"))
+    registry, _, _ = _registry(jenkins=flaky)
+
+    execution = await registry.execute(
+        "jenkins_get_build_log",
+        {"job_name": "portal", "build_number": 12},
+        mode=ScanMode.REGULAR,
+    )
+
+    assert not execution.ok
+    assert execution.attempts == 1
+    assert flaky.log_attempts == 1
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -11,6 +12,7 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 
 import httpx
+import jenkins as python_jenkins
 
 from jenkins_watchdog.clients.jenkins import JenkinsClient, job_to_api_path
 from jenkins_watchdog.clients.k8s import KubernetesClient
@@ -25,6 +27,24 @@ from jenkins_watchdog.clients.prometheus import PrometheusClient
 from jenkins_watchdog.domain.model import ScanMode
 
 ToolHandler = Callable[[dict[str, Any], ScanMode], Awaitable[Any]]
+_RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_JENKINS_HTTP_STATUS = re.compile(r"\[(\d{3})\]")
+
+
+def _is_transient_jenkins_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_HTTP_STATUSES
+    if isinstance(
+        exc,
+        (python_jenkins.TimeoutException, python_jenkins.EmptyResponseException, python_jenkins.BadHTTPException),
+    ):
+        return True
+    if isinstance(exc, python_jenkins.JenkinsException):
+        match = _JENKINS_HTTP_STATUS.search(str(exc))
+        return match is not None and int(match.group(1)) in _RETRYABLE_HTTP_STATUSES
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +54,7 @@ class ToolExecution:
     output: str
     ok: bool
     duration_ms: int
+    attempts: int = 1
 
 
 class ReadOnlyToolRegistry:
@@ -52,6 +73,7 @@ class ReadOnlyToolRegistry:
         github_token: str,
         gitlab_api_url: str,
         gitlab_token: str,
+        jenkins_retry_delays: tuple[float, ...] = (0.25, 1.0),
     ) -> None:
         self._jenkins = jenkins
         self._kubernetes = kubernetes
@@ -63,6 +85,7 @@ class ReadOnlyToolRegistry:
         self._github_token = github_token
         self._gitlab_api_url = gitlab_api_url.rstrip("/")
         self._gitlab_token = gitlab_token
+        self._jenkins_retry_delays = jenkins_retry_delays
         self._handlers: dict[str, ToolHandler] = {
             "jenkins_list_agents": self._jenkins_list_agents,
             "jenkins_get_agent": self._jenkins_get_agent,
@@ -96,20 +119,38 @@ class ReadOnlyToolRegistry:
         if handler is None:
             output = json.dumps({"error": f"unknown read-only tool: {name}"})
             return ToolExecution(name, arguments, output, False, 0)
-        try:
-            result = await handler(arguments, mode)
-            output = result if isinstance(result, str) else json.dumps(result, default=str, ensure_ascii=False)
-            output = _truncate(_redact(output), mode=mode)
-            ok = not output.startswith('{"error"')
-        except Exception as exc:
-            output = json.dumps({"error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False)
-            ok = False
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                result = await handler(arguments, mode)
+                output = result if isinstance(result, str) else json.dumps(result, default=str, ensure_ascii=False)
+                output = _truncate(_redact(output), mode=mode)
+                ok = not output.startswith('{"error"')
+                break
+            except Exception as exc:
+                retry_index = attempts - 1
+                should_retry = (
+                    name.startswith("jenkins_")
+                    and retry_index < len(self._jenkins_retry_delays)
+                    and _is_transient_jenkins_error(exc)
+                )
+                if should_retry:
+                    await asyncio.sleep(self._jenkins_retry_delays[retry_index])
+                    continue
+                output = _truncate(
+                    _redact(json.dumps({"error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False)),
+                    mode=mode,
+                )
+                ok = False
+                break
         return ToolExecution(
             name=name,
             arguments=arguments,
             output=output,
             ok=ok,
             duration_ms=round((time.monotonic() - started) * 1000),
+            attempts=attempts,
         )
 
     async def _jenkins_list_agents(self, _: dict[str, Any], mode: ScanMode) -> Any:

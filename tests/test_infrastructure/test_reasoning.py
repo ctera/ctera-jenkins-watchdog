@@ -375,6 +375,39 @@ def test_tool_history_compaction_and_failed_test_report_cap_confidence() -> None
     assert "failed-test report" in result["quality_gate"]
 
 
+def test_pipeline_quality_gate_distinguishes_failed_log_access_from_no_attempt() -> None:
+    result = {"classification": "infrastructure", "confidence": "high", "root_cause": "version mismatch"}
+
+    _apply_quality_gates(
+        result,
+        (replace(observation(), category="jenkins_build"),),
+        [{"tool": "jenkins_get_build_log", "ok": False, "attempts": 3}],
+        context={"jenkins_builds": [{"id": "build"}]},
+    )
+
+    assert result["confidence"] == "low"
+    assert "attempted but failed after 3 attempts" in result["quality_gate"]
+    assert "retained scan evidence" in result["quality_gate"]
+
+
+def test_pipeline_quality_gate_does_not_treat_pre_test_abort_as_test_failure() -> None:
+    result = {
+        "classification": "configuration",
+        "confidence": "high",
+        "root_cause": "The version gate failed all builds before any deployment or test execution occurred.",
+    }
+
+    _apply_quality_gates(
+        result,
+        (replace(observation(), category="jenkins_build"),),
+        [{"tool": "jenkins_get_build_log", "ok": True, "attempts": 1}],
+        context={"jenkins_builds": [{"id": "build"}]},
+    )
+
+    assert result["confidence"] == "high"
+    assert "quality_gate" not in result
+
+
 @pytest.mark.asyncio
 async def test_tool_backed_chat_returns_only_final_answer_not_interim_planning() -> None:
     calls = 0

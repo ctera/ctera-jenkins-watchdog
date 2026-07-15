@@ -28,8 +28,8 @@ Completion = Callable[..., Awaitable[Any]]
 _PIPELINE_CATEGORIES = frozenset({"jenkins_failed_build", "jenkins_pipeline_pattern", "jenkins_build"})
 _LOG_TOOLS = frozenset({"jenkins_get_build_log", "jenkins_analyze_build_failure"})
 _TEST_FAILURE_CLAIM = re.compile(
-    r"(?:\btests?\b.{0,120}\b(?:failed|failing|failure)\b|"
-    r"\b(?:failed|failing|failure)\b.{0,120}\btests?\b|"
+    r"(?:\btests?\b[^.!?\n]{0,120}\b(?:failed|failing|failure)\b|"
+    r"\b(?:failed|failing)\b(?:\s+\d+)?\s+(?:(?:unit|integration|system|e2e)\s+)?tests?\b|"
     r"\btest(?:ing)?[_ -]?failure\b)",
     re.IGNORECASE,
 )
@@ -581,6 +581,7 @@ def _trace_entry(execution: ToolExecution, *, round_number: int) -> dict[str, An
         "arguments": execution.arguments,
         "ok": execution.ok,
         "duration_ms": execution.duration_ms,
+        "attempts": execution.attempts,
         "output": execution.output,
     }
 
@@ -598,7 +599,18 @@ def _apply_quality_gates(
     tools_used = {str(item.get("tool")) for item in trace if item.get("ok")}
     if pipeline and not tools_used.intersection(_LOG_TOOLS):
         result["confidence"] = Confidence.LOW.value
-        result["quality_gate"] = "Pipeline root cause is unverified because no build console log was read."
+        log_attempts = [item for item in trace if item.get("tool") in _LOG_TOOLS]
+        if log_attempts:
+            attempt_count = max(int(item.get("attempts") or 1) for item in log_attempts)
+            attempts_text = f" after {attempt_count} attempts" if attempt_count > 1 else ""
+            result["quality_gate"] = (
+                f"Jenkins console-log access was attempted but failed{attempts_text}; the proposed root cause is "
+                "based on retained scan evidence and remains unverified against the live console log."
+            )
+        else:
+            result["quality_gate"] = (
+                "Pipeline root cause is unverified because the agent did not read a build console log."
+            )
         return
     test_report_verified = any(item.get("tool") == "jenkins_get_test_report" and item.get("ok") for item in trace)
     if _claims_test_failure(result) and not test_report_verified and result.get("confidence") == Confidence.HIGH.value:
@@ -610,9 +622,11 @@ def _apply_quality_gates(
 
 
 def _claims_test_failure(result: dict[str, Any]) -> bool:
-    classification = str(result.get("classification") or "")
-    if "test_failure" in classification.lower():
+    classification = str(result.get("classification") or "").lower()
+    if "test_failure" in classification:
         return True
+    if classification not in {"merge_request", "unknown"}:
+        return False
     diagnosis = " ".join(
         str(value)
         for key in ("root_cause", "evidence", "suggested_fix", "fix_location")
