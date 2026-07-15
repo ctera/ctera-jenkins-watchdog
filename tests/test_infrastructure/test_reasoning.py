@@ -4,12 +4,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from jenkins_watchdog.application.types import TriageCandidate
 from jenkins_watchdog.domain.model import FindingObservation, Incident, InvestigationStatus, ScanMode, Severity
 from jenkins_watchdog.infrastructure.reasoning import (
     LiteLLMReasoningAdapter,
     _apply_quality_gates,
     _compact_tool_messages,
     _extract_assessment,
+    _investigation_system_prompt,
+    _usage,
 )
 from jenkins_watchdog.infrastructure.tools import ToolExecution, _redact
 
@@ -49,6 +52,26 @@ def test_structured_extraction_accepts_json_fence_and_handles_malformed_values()
     conservative = _extract_assessment(payload.replace('"medium"', '"certain"'))
     assert conservative["confidence"] == "low"
     assert "unrecognized confidence" in conservative["quality_gate"]
+
+
+def test_platform_instructions_are_restored_from_the_shared_prompt() -> None:
+    prompt = _investigation_system_prompt(ScanMode.REGULAR)
+    assert "Pipeline failures first" in prompt
+    assert "Read actual build logs for pipeline failures" in prompt
+    assert "## Current task" in prompt
+
+
+def test_usage_extracts_provider_cache_tokens() -> None:
+    item = response("ok")
+    item.usage.prompt_tokens_details = SimpleNamespace(cached_tokens=3)
+    item.usage.cache_creation_input_tokens = 2
+    assert _usage(item) == {
+        "prompt_tokens": 5,
+        "completion_tokens": 7,
+        "total_tokens": 12,
+        "cache_read_input_tokens": 3,
+        "cache_creation_input_tokens": 2,
+    }
 
 
 @pytest.mark.asyncio
@@ -97,6 +120,10 @@ async def test_reasoning_falls_back_accounts_usage_and_supports_triage_and_chat(
         models.append(kwargs["model"])
         if kwargs["model"] == "primary" and models.count("primary") == 1:
             raise RuntimeError("primary unavailable")
+        if "Return decisions as an array" in kwargs["messages"][-1]["content"]:
+            return response(
+                '{"decisions":[{"incident_id":"incident","action":"investigate","reason":"new failure"}]}'
+            )
         return response(payload)
 
     item = observation()
@@ -115,23 +142,23 @@ async def test_reasoning_falls_back_accounts_usage_and_supports_triage_and_chat(
         max_tokens=100,
         max_retries=0,
         completion=complete,
+        cost_calculator=lambda **_: 0.001,
     )
 
     investigation = await adapter.investigate(target, (item,))
-    triage = await adapter.triage(target, (item,))
+    triage = await adapter.triage_batch((TriageCandidate(target, (item,)),))
     answer = await adapter.chat(message="why", incident=target, context={"as_of": NOW})
 
     assert investigation.status is InvestigationStatus.SUCCEEDED
     assert investigation.model == "fallback"
-    assert investigation.usage == {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
+    assert investigation.usage["call_count"] == 1
+    assert investigation.usage["total_tokens"] == 12
+    assert investigation.usage["estimated_cost_usd"] == 0.001
     assert investigation.result["deterministic_severity"] == "warning"
-    assert triage == {
-        "actionability": "actionable",
-        "classification": "merge_request",
-        "priority": "warning",
-        "confidence": "medium",
-    }
-    assert answer == payload
+    assert triage.routes[0].action == "investigate"
+    assert triage.model_calls[0].purpose == "triage"
+    assert answer.content == payload
+    assert answer.model_calls[0].purpose == "chat"
     assert models[:2] == ["primary", "fallback"]
 
 
@@ -501,4 +528,4 @@ async def test_tool_backed_chat_returns_only_final_answer_not_interim_planning()
 
     answer = await adapter.chat(message="why did it fail?")
 
-    assert answer == "The verified final answer."
+    assert answer.content == "The verified final answer."

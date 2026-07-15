@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from jenkins_watchdog.application import reasoning as reasoning_module
 from jenkins_watchdog.application.reasoning import ReasoningService, evidence_digest
-from jenkins_watchdog.application.types import EnqueueScan
+from jenkins_watchdog.application.types import EnqueueScan, ReasoningReply, TriageBatchResult
 from jenkins_watchdog.domain.model import (
     CheckResult,
     CheckStatus,
@@ -32,9 +32,9 @@ class ReasoningPort:
         self.chats = []
         self.investigation_options = []
 
-    async def triage(self, incident, observations):
-        del incident, observations
-        return {}
+    async def triage_batch(self, candidates):
+        del candidates
+        return TriageBatchResult(routes=())
 
     async def investigate(self, incident, observations, **kwargs):
         self.investigations += 1
@@ -63,7 +63,7 @@ class ReasoningPort:
     async def chat(self, *, message, incident=None, context=None, history=(), on_progress=None):
         del context
         self.chats.append((message, incident.id if incident else None, history, on_progress is not None))
-        return "answer"
+        return ReasoningReply(content="answer")
 
 
 async def seed(factory: async_sessionmaker[AsyncSession]) -> Incident:

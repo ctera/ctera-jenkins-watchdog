@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from jenkins_watchdog.infrastructure.jenkins_repository import SqlAlchemyJenkinsRepository
 from jenkins_watchdog.infrastructure.repositories import (
     SqlAlchemyActionRepository,
+    SqlAlchemyAnalysisDecisionRepository,
     SqlAlchemyCheckExecutionRepository,
     SqlAlchemyDeliveryAttemptRepository,
     SqlAlchemyEventRepository,
@@ -16,6 +17,7 @@ from jenkins_watchdog.infrastructure.repositories import (
     SqlAlchemyIncidentRepository,
     SqlAlchemyInvestigationRepository,
     SqlAlchemyInvestigationRequestRepository,
+    SqlAlchemyLLMCallRepository,
     SqlAlchemyScanRepository,
 )
 
@@ -33,6 +35,8 @@ class SqlAlchemyUnitOfWork:
         self.incidents = SqlAlchemyIncidentRepository(self._session)
         self.investigations = SqlAlchemyInvestigationRepository(self._session)
         self.investigation_requests = SqlAlchemyInvestigationRequestRepository(self._session)
+        self.analysis_decisions = SqlAlchemyAnalysisDecisionRepository(self._session)
+        self.llm_calls = SqlAlchemyLLMCallRepository(self._session)
         self.actions = SqlAlchemyActionRepository(self._session)
         self.delivery_attempts = SqlAlchemyDeliveryAttemptRepository(self._session)
         self.events = SqlAlchemyEventRepository(self._session)

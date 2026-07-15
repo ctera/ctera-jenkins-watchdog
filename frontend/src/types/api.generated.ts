@@ -512,6 +512,34 @@ export interface components {
              */
             updated_at: string;
         };
+        /** V2AnalysisDecisionResponse */
+        V2AnalysisDecisionResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Evidence Hash */
+            evidence_hash: string;
+            /** Id */
+            id: string;
+            /** Mode */
+            mode: string;
+            /** Outcome */
+            outcome: string;
+            /** Priority */
+            priority: number;
+            /** Reason */
+            reason: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Request Id */
+            request_id: string | null;
+            /** Scan Id */
+            scan_id: string | null;
+            /** Source */
+            source: string;
+        };
         /** V2AnalyzeBuildRequest */
         V2AnalyzeBuildRequest: {
             /**
@@ -635,6 +663,7 @@ export interface components {
         V2IncidentDetailResponse: {
             /** Actions */
             actions: components["schemas"]["V2ActionResponse"][];
+            analysis_decision?: components["schemas"]["V2AnalysisDecisionResponse"] | null;
             /** Current Observations */
             current_observations?: components["schemas"]["V2ObservationResponse"][];
             incident: components["schemas"]["V2IncidentResponse"];
@@ -721,6 +750,8 @@ export interface components {
         V2InvestigationRequestResponse: {
             /** Attempt Count */
             attempt_count: number;
+            /** Budget Kind */
+            budget_kind: string;
             /** Build Id */
             build_id: string | null;
             /** Completed At */
@@ -750,6 +781,8 @@ export interface components {
             priority: number;
             /** Requested By */
             requested_by: string | null;
+            /** Reserved Tokens */
+            reserved_tokens: number;
             /** Scan Id */
             scan_id: string | null;
             /** Source */
@@ -783,6 +816,8 @@ export interface components {
             input_version: string;
             /** Model */
             model: string;
+            /** Model Calls */
+            model_calls?: components["schemas"]["V2LLMCallResponse"][];
             /** Prompt Version */
             prompt_version: string;
             /** Result */
@@ -887,6 +922,11 @@ export interface components {
              * @default false
              */
             propagated_failure: boolean;
+            /**
+             * Recovered
+             * @default false
+             */
+            recovered: boolean;
             /** Repository */
             repository?: string | null;
             /** Result */
@@ -994,6 +1034,11 @@ export interface components {
              * @default false
              */
             propagated_failure: boolean;
+            /**
+             * Recovered
+             * @default false
+             */
+            recovered: boolean;
             /** Repository */
             repository?: string | null;
             /** Result */
@@ -1089,6 +1134,34 @@ export interface components {
             url: string;
             /** Wall Hours */
             wall_hours: number;
+        };
+        /** V2LLMCallResponse */
+        V2LLMCallResponse: {
+            /** Cache Creation Input Tokens */
+            cache_creation_input_tokens: number;
+            /** Cache Read Input Tokens */
+            cache_read_input_tokens: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Cost Source */
+            cost_source: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number | null;
+            /** Id */
+            id: string;
+            /** Model */
+            model: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Purpose */
+            purpose: string;
+            /** Total Tokens */
+            total_tokens: number;
         };
         /** V2LogicalExecutionResponse */
         V2LogicalExecutionResponse: {
@@ -1238,6 +1311,10 @@ export interface components {
                 [key: string]: unknown;
             };
             latest_scan: components["schemas"]["V2ScanResponse"] | null;
+            /** Llm Usage */
+            llm_usage?: {
+                [key: string]: unknown;
+            };
             /** Status */
             status: string;
             /** Top Incidents */
@@ -1286,6 +1363,10 @@ export interface components {
             failure_summary: string | null;
             /** Id */
             id: string;
+            /** Llm Usage */
+            llm_usage?: {
+                [key: string]: unknown;
+            };
             /** Mode */
             mode: string;
             /** Stage */

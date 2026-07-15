@@ -15,6 +15,7 @@ from jenkins_watchdog.application.events import EventService
 from jenkins_watchdog.application.incidents import IncidentService
 from jenkins_watchdog.application.investigations import InvestigationQueueService
 from jenkins_watchdog.application.scan_service import ScanService
+from jenkins_watchdog.application.selection import AnalysisSelectionService
 from jenkins_watchdog.application.types import EnqueueScan
 from jenkins_watchdog.domain.jenkins import JenkinsBuildEnrichment, JenkinsBuildSnapshot, JenkinsJobSnapshot
 from jenkins_watchdog.domain.model import (
@@ -203,12 +204,20 @@ def make_app(
     uow = factory_port(factory)
     events = EventService(uow, notifier)
     delivery = DeliveryService(owner="api-retry", uow_factory=uow, delivery=NeverDeliver(), now=lambda: NOW)
+    queue = InvestigationQueueService(uow_factory=uow, now=lambda: NOW)
+    selection = AnalysisSelectionService(
+        uow_factory=uow,
+        reasoning=SimpleNamespace(),
+        queue=queue,
+        now=lambda: NOW,
+    )
     container = SimpleNamespace(
         uow_factory=uow,
         notifier=notifier,
         scan_service=ScanService(uow, events=events),
         reasoning_service=reasoning or Reasoning(),
-        investigation_queue=InvestigationQueueService(uow_factory=uow, now=lambda: NOW),
+        investigation_queue=queue,
+        selection_service=selection,
         incident_service=IncidentService(uow),
         make_delivery_worker=lambda owner: delivery,
     )

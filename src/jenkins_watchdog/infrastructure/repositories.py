@@ -15,24 +15,29 @@ from jenkins_watchdog.application.types import CursorPage, EnqueueScan, ScanEven
 from jenkins_watchdog.domain.model import (
     Action,
     ActionStatus,
+    AnalysisDecision,
     CheckResult,
     DeliveryAttempt,
     FindingObservation,
     Incident,
     Investigation,
+    InvestigationBudgetKind,
     InvestigationRequest,
     InvestigationRequestStatus,
+    LLMCall,
     Scan,
     ScanStatus,
 )
 from jenkins_watchdog.infrastructure.mappers import (
     action_from_record,
+    analysis_decision_from_record,
     check_result_from_record,
     delivery_attempt_from_record,
     incident_from_record,
     investigation_from_record,
     investigation_request_from_record,
     jsonable,
+    llm_call_from_record,
     observation_from_record,
     scan_from_record,
     update_action_record,
@@ -42,6 +47,7 @@ from jenkins_watchdog.infrastructure.mappers import (
 )
 from jenkins_watchdog.infrastructure.models import (
     ActionRecord,
+    AnalysisDecisionRecord,
     CheckExecutionRecord,
     DeliveryAttemptRecord,
     FindingRecord,
@@ -50,6 +56,7 @@ from jenkins_watchdog.infrastructure.models import (
     IncidentRecord,
     InvestigationRecord,
     InvestigationRequestRecord,
+    LLMCallRecord,
     ScanEventRecord,
     ScanRecord,
 )
@@ -599,6 +606,8 @@ class SqlAlchemyInvestigationRequestRepository:
             scan_id=_uuid(request.scan_id) if request.scan_id else None,
             build_id=_uuid(request.build_id) if request.build_id else None,
             requested_by=request.requested_by,
+            budget_kind=request.budget_kind.value,
+            reserved_tokens=request.reserved_tokens,
             lease_owner=request.lease_owner,
             lease_expires_at=request.lease_expires_at,
             attempt_count=request.attempt_count,
@@ -612,6 +621,26 @@ class SqlAlchemyInvestigationRequestRepository:
         self._session.add(record)
         await self._session.flush()
         return request
+
+    async def lock_budget(self) -> None:
+        bind = self._session.get_bind()
+        if bind.dialect.name == "postgresql":
+            await self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 7463617})
+
+    async def active_reserved_tokens(
+        self,
+        *,
+        budget_kind: InvestigationBudgetKind | None = None,
+    ) -> int:
+        statement = select(func.coalesce(func.sum(InvestigationRequestRecord.reserved_tokens), 0)).where(
+            InvestigationRequestRecord.status.in_([
+                InvestigationRequestStatus.QUEUED.value,
+                InvestigationRequestStatus.RUNNING.value,
+            ])
+        )
+        if budget_kind is not None:
+            statement = statement.where(InvestigationRequestRecord.budget_kind == budget_kind.value)
+        return int(await self._session.scalar(statement) or 0)
 
     async def claim(self, *, owner: str, now: datetime, lease_seconds: int) -> InvestigationRequest | None:
         queued = and_(
@@ -667,6 +696,149 @@ class SqlAlchemyInvestigationRequestRepository:
             raise LookupError(f"investigation request {request.id} does not exist")
         update_investigation_request_record(record, request)
         await self._session.flush()
+
+
+class SqlAlchemyAnalysisDecisionRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def latest_for_incident(self, incident_id: str) -> AnalysisDecision | None:
+        record = await self._session.scalar(
+            select(AnalysisDecisionRecord)
+            .where(AnalysisDecisionRecord.incident_id == _uuid(incident_id))
+            .order_by(AnalysisDecisionRecord.created_at.desc(), AnalysisDecisionRecord.id.desc())
+            .limit(1)
+        )
+        return analysis_decision_from_record(record) if record else None
+
+    async def for_incident(self, incident_id: str, *, limit: int = 50) -> tuple[AnalysisDecision, ...]:
+        records = (
+            await self._session.scalars(
+                select(AnalysisDecisionRecord)
+                .where(AnalysisDecisionRecord.incident_id == _uuid(incident_id))
+                .order_by(AnalysisDecisionRecord.created_at.desc(), AnalysisDecisionRecord.id.desc())
+                .limit(limit)
+            )
+        ).all()
+        return tuple(analysis_decision_from_record(record) for record in records)
+
+    async def save(self, decision: AnalysisDecision) -> None:
+        record = AnalysisDecisionRecord(
+            id=_uuid(decision.id),
+            incident_id=_uuid(decision.incident_id),
+            occurrence_id=_uuid(decision.occurrence_id),
+            outcome=decision.outcome.value,
+            reason_code=decision.reason_code,
+            reason=decision.reason,
+            source=decision.source[:32],
+            mode=decision.mode.value,
+            priority=decision.priority,
+            evidence_hash=decision.evidence_hash,
+            scan_id=_uuid(decision.scan_id) if decision.scan_id else None,
+            request_id=_uuid(decision.request_id) if decision.request_id else None,
+            llm_call_id=_uuid(decision.llm_call_id) if decision.llm_call_id else None,
+            metadata_json=jsonable(decision.metadata),
+            created_at=decision.created_at,
+        )
+        self._session.add(record)
+        await self._session.flush()
+
+
+class SqlAlchemyLLMCallRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def save_many(self, calls: tuple[LLMCall, ...]) -> None:
+        for call in calls:
+            if await self._session.get(LLMCallRecord, _uuid(call.id)) is not None:
+                continue
+            self._session.add(
+                LLMCallRecord(
+                    id=_uuid(call.id),
+                    purpose=call.purpose[:32],
+                    model=call.model[:160],
+                    prompt_tokens=call.prompt_tokens,
+                    completion_tokens=call.completion_tokens,
+                    cache_read_input_tokens=call.cache_read_input_tokens,
+                    cache_creation_input_tokens=call.cache_creation_input_tokens,
+                    total_tokens=call.total_tokens,
+                    estimated_cost_usd=call.estimated_cost_usd,
+                    cost_source=call.cost_source[:32],
+                    budget_kind=call.budget_kind.value if call.budget_kind else None,
+                    incident_id=_uuid(call.incident_id) if call.incident_id else None,
+                    investigation_id=_uuid(call.investigation_id) if call.investigation_id else None,
+                    scan_id=_uuid(call.scan_id) if call.scan_id else None,
+                    metadata_json=jsonable(call.metadata),
+                    created_at=call.created_at,
+                )
+            )
+        await self._session.flush()
+
+    async def for_investigation(self, investigation_id: str) -> tuple[LLMCall, ...]:
+        records = (
+            await self._session.scalars(
+                select(LLMCallRecord)
+                .where(LLMCallRecord.investigation_id == _uuid(investigation_id))
+                .order_by(LLMCallRecord.created_at, LLMCallRecord.id)
+            )
+        ).all()
+        return tuple(llm_call_from_record(record) for record in records)
+
+    async def summary_since(
+        self,
+        since: datetime,
+        *,
+        budget_kind: InvestigationBudgetKind | None = None,
+    ) -> dict[str, Any]:
+        conditions = [LLMCallRecord.created_at >= since]
+        if budget_kind is not None:
+            conditions.append(LLMCallRecord.budget_kind == budget_kind.value)
+        return await self._summary(*conditions)
+
+    async def summary_for_scan(self, scan_id: str) -> dict[str, Any]:
+        return await self._summary(LLMCallRecord.scan_id == _uuid(scan_id))
+
+    async def _summary(self, *conditions: Any) -> dict[str, Any]:
+        columns = (
+            func.count(LLMCallRecord.id),
+            func.coalesce(func.sum(LLMCallRecord.prompt_tokens), 0),
+            func.coalesce(func.sum(LLMCallRecord.completion_tokens), 0),
+            func.coalesce(func.sum(LLMCallRecord.cache_read_input_tokens), 0),
+            func.coalesce(func.sum(LLMCallRecord.cache_creation_input_tokens), 0),
+            func.coalesce(func.sum(LLMCallRecord.total_tokens), 0),
+            func.coalesce(func.sum(LLMCallRecord.estimated_cost_usd), 0),
+        )
+        row = (await self._session.execute(select(*columns).where(*conditions))).one()
+        purpose_rows = (
+            await self._session.execute(
+                select(
+                    LLMCallRecord.purpose,
+                    func.count(LLMCallRecord.id),
+                    func.coalesce(func.sum(LLMCallRecord.total_tokens), 0),
+                    func.coalesce(func.sum(LLMCallRecord.estimated_cost_usd), 0),
+                )
+                .where(*conditions)
+                .group_by(LLMCallRecord.purpose)
+                .order_by(LLMCallRecord.purpose)
+            )
+        ).all()
+        return {
+            "call_count": int(row[0] or 0),
+            "prompt_tokens": int(row[1] or 0),
+            "completion_tokens": int(row[2] or 0),
+            "cache_read_input_tokens": int(row[3] or 0),
+            "cache_creation_input_tokens": int(row[4] or 0),
+            "total_tokens": int(row[5] or 0),
+            "estimated_cost_usd": float(row[6] or 0),
+            "by_purpose": {
+                purpose: {
+                    "call_count": int(count),
+                    "total_tokens": int(tokens or 0),
+                    "estimated_cost_usd": float(cost or 0),
+                }
+                for purpose, count, tokens, cost in purpose_rows
+            },
+        }
 
 
 class SqlAlchemyActionRepository:

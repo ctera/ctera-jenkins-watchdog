@@ -42,7 +42,7 @@ import {
   type IncidentDetail,
   type Observation,
 } from "../services/api";
-import { formatDate, titleCase } from "../utils/format";
+import { formatDate, formatTokens, formatUsd, titleCase } from "../utils/format";
 
 const tabs = ["Summary", "Affected resources", "Investigation", "History", "Actions", "Chat"];
 
@@ -245,6 +245,7 @@ function Overview({ detail }: { detail: IncidentDetail }) {
   const result = hasAssessment ? investigation.result : {};
   const requestActive = ["queued", "running"].includes(detail.investigation_request?.status ?? "");
   const analysisFailed = detail.investigation_request?.status === "failed" || (!requestActive && investigation?.status === "failed");
+  const decision = detail.analysis_decision;
   return (
     <Stack gap={3}>
       <Box>
@@ -253,6 +254,12 @@ function Overview({ detail }: { detail: IncidentDetail }) {
           This condition currently affects <strong>{incident.affected_resource_count}</strong> resource{incident.affected_resource_count === 1 ? "" : "s"}. It was first seen {formatDate(incident.first_seen_at ?? incident.created_at)} and last confirmed {formatDate(incident.last_seen_at ?? incident.updated_at)}.
         </Typography>
       </Box>
+      {decision && (
+        <Alert severity={decision.outcome === "budget_deferred" ? "warning" : decision.outcome === "selected" ? "info" : "success"}>
+          <Typography variant="body2" fontWeight={700}>Agent selection: {titleCase(decision.outcome)}</Typography>
+          <Typography variant="body2">{decision.reason}</Typography>
+        </Alert>
+      )}
       {analysisFailed && (
         <Alert severity="error">
           Agent analysis failed before producing a root-cause assessment. This is a Watchdog agent error, not an explanation of the incident. Use Reinvestigate to retry it.
@@ -341,7 +348,8 @@ function Observations({ detail }: { detail: IncidentDetail }) {
 function InvestigationView({ detail }: { detail: IncidentDetail }) {
   const investigation = detail.latest_investigation;
   const request = detail.investigation_request;
-  if (!investigation && !request) return <Typography color="text.secondary">No investigation recorded</Typography>;
+  const decision = detail.analysis_decision;
+  if (!investigation && !request && !decision) return <Typography color="text.secondary">No investigation recorded</Typography>;
   const hasAssessment = investigation?.status === "succeeded";
   const requestActive = ["queued", "running"].includes(request?.status ?? "");
   const analysisFailed = request?.status === "failed" || (!requestActive && investigation?.status === "failed");
@@ -354,7 +362,13 @@ function InvestigationView({ detail }: { detail: IncidentDetail }) {
         {investigation && !request && <StatusChip value={investigation.status} />}
         {hasAssessment && investigation.confidence && <Chip size="small" label={`${titleCase(investigation.confidence)} confidence`} variant="outlined" />}
         {hasAssessment && <Chip size="small" label={investigation.model} variant="outlined" />}
+        {request && request.reserved_tokens > 0 && <Chip size="small" label={`${formatTokens(request.reserved_tokens)} reserved`} variant="outlined" />}
       </Stack>
+      {decision && (
+        <Alert severity={decision.outcome === "budget_deferred" ? "warning" : "info"}>
+          <strong>{titleCase(decision.outcome)}:</strong> {decision.reason}
+        </Alert>
+      )}
       {request?.status === "queued" && <Alert severity="info">Agent analysis is queued.</Alert>}
       {request?.status === "running" && <Alert severity="info">Agent is gathering live evidence.</Alert>}
       {analysisFailed && (
@@ -397,7 +411,32 @@ function InvestigationView({ detail }: { detail: IncidentDetail }) {
         <Meta label="Prompt" value={investigation.prompt_version} />
         <Meta label="Completed" value={formatDate(investigation.completed_at)} />
       </Stack>
-      {Object.keys(investigation.usage).length > 0 && <KeyValues value={investigation.usage} />}
+      {Object.keys(investigation.usage).length > 0 && <UsageSummary usage={investigation.usage} />}
+      {(investigation.model_calls ?? []).length > 0 && (
+        <>
+          <Divider />
+          <Box>
+            <Typography variant="h6" sx={{ mb: 1 }}>Model calls</Typography>
+            <TableContainer>
+              <Table size="small" sx={{ minWidth: 680 }}>
+                <TableHead><TableRow><TableCell>Purpose</TableCell><TableCell>Model</TableCell><TableCell align="right">Input</TableCell><TableCell align="right">Output</TableCell><TableCell align="right">Cached</TableCell><TableCell align="right">Cost</TableCell></TableRow></TableHead>
+                <TableBody>
+                  {(investigation.model_calls ?? []).map((call) => (
+                    <TableRow key={call.id}>
+                      <TableCell>{titleCase(call.purpose)}</TableCell>
+                      <TableCell>{call.model}</TableCell>
+                      <TableCell align="right">{call.prompt_tokens.toLocaleString()}</TableCell>
+                      <TableCell align="right">{call.completion_tokens.toLocaleString()}</TableCell>
+                      <TableCell align="right">{call.cache_read_input_tokens.toLocaleString()}</TableCell>
+                      <TableCell align="right">{formatUsd(call.estimated_cost_usd)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        </>
+      )}
       {Array.isArray(investigation.result.tool_trace) && investigation.result.tool_trace.length > 0 && (
         <>
           <Divider />
@@ -420,6 +459,21 @@ function InvestigationView({ detail }: { detail: IncidentDetail }) {
       )}
       </>}
     </Stack>
+  );
+}
+
+function UsageSummary({ usage }: { usage: Record<string, unknown> }) {
+  return (
+    <Box>
+      <Typography variant="h6" sx={{ mb: 1 }}>Investigation cost</Typography>
+      <Stack direction={{ xs: "column", sm: "row" }} gap={{ xs: 1, sm: 4 }}>
+        <Meta label="Model calls" value={String(usage.call_count ?? 0)} />
+        <Meta label="Input" value={formatTokens(usage.prompt_tokens)} />
+        <Meta label="Output" value={formatTokens(usage.completion_tokens)} />
+        <Meta label="Cache read" value={formatTokens(usage.cache_read_input_tokens)} />
+        <Meta label="Estimated cost" value={formatUsd(usage.estimated_cost_usd)} />
+      </Stack>
+    </Box>
   );
 }
 

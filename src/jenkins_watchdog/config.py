@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_scan_token_budget: int = 24000
     llm_deep_scan_token_budget: int = 40000
+    llm_daily_token_budget: int = 400000
+    llm_manual_token_reserve: int = 100000
+    llm_triage_batch_size: int = 50
 
     # OIDC (DEX)
     oidc_issuer: str = ""

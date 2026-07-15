@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -14,6 +15,7 @@ from jenkins_watchdog.domain.model import (
     FindingObservation,
     Incident,
     Investigation,
+    InvestigationBudgetKind,
     InvestigationStatus,
     ScanMode,
     Severity,
@@ -42,6 +44,8 @@ class ReasoningService:
         force: bool = False,
         mode: ScanMode = ScanMode.REGULAR,
         on_progress: ReasoningProgress | None = None,
+        budget_kind: InvestigationBudgetKind = InvestigationBudgetKind.AUTOMATIC,
+        scan_id: str | None = None,
     ) -> Investigation | None:
         async with self._uow_factory() as uow:
             incident = await uow.incidents.get(incident_id)
@@ -72,6 +76,11 @@ class ReasoningService:
             investigation = await self._reasoning.investigate(incident, observations)
         async with self._uow_factory() as uow:
             await uow.investigations.save(investigation)
+            calls = tuple(
+                replace(call, budget_kind=budget_kind, scan_id=scan_id or call.scan_id)
+                for call in investigation.model_calls
+            )
+            await uow.llm_calls.save_many(calls)
             if investigation.status is InvestigationStatus.SUCCEEDED:
                 result = investigation.result
                 incident = incident.apply_triage(
@@ -178,7 +187,7 @@ class ReasoningService:
                 )
 
         if history or on_progress is not None:
-            content = await self._reasoning.chat(
+            reply = await self._reasoning.chat(
                 message=message,
                 incident=incident,
                 context=context,
@@ -186,9 +195,21 @@ class ReasoningService:
                 on_progress=on_progress,
             )
         else:
-            content = await self._reasoning.chat(message=message, incident=incident, context=context)
+            reply = await self._reasoning.chat(message=message, incident=incident, context=context)
+        calls = tuple(
+            replace(
+                call,
+                budget_kind=InvestigationBudgetKind.MANUAL,
+                incident_id=incident.id if incident else call.incident_id,
+            )
+            for call in reply.model_calls
+        )
+        if calls:
+            async with self._uow_factory() as uow:
+                await uow.llm_calls.save_many(calls)
+                await uow.commit()
         return ChatResult(
-            content=content,
+            content=reply.content,
             references=tuple(references),
             as_of=now,
             coverage_status=coverage,

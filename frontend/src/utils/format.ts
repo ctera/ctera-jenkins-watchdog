@@ -28,3 +28,19 @@ export function titleCase(value: string): string {
 export function shortId(value: string): string {
   return value.slice(0, 8);
 }
+
+export function formatTokens(value: unknown): string {
+  const tokens = typeof value === "number" ? value : Number(value ?? 0);
+  return Number.isFinite(tokens) ? `${Math.round(tokens).toLocaleString()} tokens` : "0 tokens";
+}
+
+export function formatUsd(value: unknown): string {
+  const cost = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(cost)) return "Cost unavailable";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: cost < 0.01 ? 4 : 2,
+    maximumFractionDigits: cost < 0.01 ? 6 : 2,
+  }).format(cost);
+}

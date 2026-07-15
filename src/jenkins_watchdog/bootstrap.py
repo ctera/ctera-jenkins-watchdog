@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from jenkins_watchdog.application.pipeline import ScanPipeline
     from jenkins_watchdog.application.reasoning import ReasoningService
     from jenkins_watchdog.application.scan_service import ScanService
+    from jenkins_watchdog.application.selection import AnalysisSelectionService
     from jenkins_watchdog.application.worker import ScanWorker
     from jenkins_watchdog.clients.jenkins import JenkinsClient
     from jenkins_watchdog.clients.k8s import KubernetesClient
@@ -61,6 +62,7 @@ class Container:
     pipeline: ScanPipeline
     jenkins_monitor: JenkinsMonitorService
     investigation_queue: InvestigationQueueService
+    selection_service: AnalysisSelectionService
 
     def make_worker(self, owner: str | None = None) -> ScanWorker:
         from jenkins_watchdog.application.worker import ScanWorker
@@ -161,6 +163,7 @@ def build_container(settings: Settings) -> Container:
     from jenkins_watchdog.application.pipeline import ScanPipeline
     from jenkins_watchdog.application.reasoning import ReasoningService
     from jenkins_watchdog.application.scan_service import ScanService
+    from jenkins_watchdog.application.selection import AnalysisSelectionService
     from jenkins_watchdog.clients.jenkins import JenkinsClient
     from jenkins_watchdog.clients.k8s import KubernetesClient
     from jenkins_watchdog.clients.k8s_metrics import KubernetesMetricsClient
@@ -231,22 +234,13 @@ def build_container(settings: Settings) -> Container:
     events = EventService(uow_factory, notifier)
     scan_service = ScanService(uow_factory, events=events)
     incident_service = IncidentService(uow_factory)
-    investigation_queue = InvestigationQueueService(uow_factory=uow_factory, now=_utcnow)
-    jenkins_monitor = JenkinsMonitorService(
-        source=JenkinsSourceAdapter(jenkins_client),
+    investigation_queue = InvestigationQueueService(
         uow_factory=uow_factory,
         now=_utcnow,
-        window_hours=settings.jenkins_sync_window_hours,
-        fetch_concurrency=settings.jenkins_sync_concurrency,
-        enrichment_limit=settings.jenkins_sync_enrichment_limit,
-        log_enrichment_limit=settings.jenkins_sync_log_limit,
-        lease_seconds=max(settings.worker_lease_seconds * 10, 900),
-        heartbeat_seconds=settings.worker_heartbeat_seconds,
-        incident_service=incident_service,
-        investigation_queue=investigation_queue,
-        automatic_investigations=settings.automatic_investigations_enabled,
-        minimum_investigation_priority=settings.automatic_investigation_min_priority,
-        analysis_candidate_limit=settings.automatic_investigation_batch_size,
+        token_budget=settings.llm_scan_token_budget,
+        deep_token_budget=settings.llm_deep_scan_token_budget,
+        daily_token_budget=settings.llm_daily_token_budget,
+        manual_token_reserve=settings.llm_manual_token_reserve,
     )
     reasoning_adapter = LiteLLMReasoningAdapter(
         model=settings.llm_model,
@@ -262,6 +256,32 @@ def build_container(settings: Settings) -> Container:
         tools=tool_registry,
     )
     reasoning_service = ReasoningService(uow_factory=uow_factory, reasoning=reasoning_adapter, now=_utcnow)
+    selection_service = AnalysisSelectionService(
+        uow_factory=uow_factory,
+        reasoning=reasoning_adapter,
+        queue=investigation_queue,
+        now=_utcnow,
+        triage_batch_size=settings.llm_triage_batch_size,
+        triage_token_reservation=settings.llm_max_tokens,
+        automatic_enabled=settings.automatic_investigations_enabled,
+    )
+    jenkins_monitor = JenkinsMonitorService(
+        source=JenkinsSourceAdapter(jenkins_client),
+        uow_factory=uow_factory,
+        now=_utcnow,
+        window_hours=settings.jenkins_sync_window_hours,
+        fetch_concurrency=settings.jenkins_sync_concurrency,
+        enrichment_limit=settings.jenkins_sync_enrichment_limit,
+        log_enrichment_limit=settings.jenkins_sync_log_limit,
+        lease_seconds=max(settings.worker_lease_seconds * 10, 900),
+        heartbeat_seconds=settings.worker_heartbeat_seconds,
+        incident_service=incident_service,
+        selection_service=selection_service,
+        automatic_investigations=settings.automatic_investigations_enabled,
+        minimum_investigation_priority=settings.automatic_investigation_min_priority,
+        analysis_candidate_limit=settings.automatic_investigation_batch_size,
+        automatic_selection_limit=settings.max_investigations_per_scan,
+    )
     routing = load_routing_config(settings.routing_config_path)
     fallback_recipients = _email_recipients(settings.email_fallback_recipients)
     if fallback_recipients:
@@ -341,15 +361,12 @@ def build_container(settings: Settings) -> Container:
         uow_factory=uow_factory,
         check_runner=check_runner,
         incident_service=incident_service,
-        reasoning_service=reasoning_service,
+        selection_service=selection_service,
         automation_service=automation_service,
         events=events,
         now=_utcnow,
         max_investigations=settings.max_investigations_per_scan,
         max_deep_investigations=settings.max_deep_investigations_per_scan,
-        token_budget=settings.llm_scan_token_budget,
-        deep_token_budget=settings.llm_deep_scan_token_budget,
-        investigation_queue=investigation_queue,
     )
     return Container(
         settings=settings,
@@ -373,6 +390,7 @@ def build_container(settings: Settings) -> Container:
         pipeline=pipeline,
         jenkins_monitor=jenkins_monitor,
         investigation_queue=investigation_queue,
+        selection_service=selection_service,
     )
 
 

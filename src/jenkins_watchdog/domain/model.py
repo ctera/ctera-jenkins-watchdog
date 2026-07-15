@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
@@ -70,6 +71,19 @@ class InvestigationRequestStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class AnalysisDecisionOutcome(StrEnum):
+    SELECTED = "selected"
+    DEFERRED = "deferred"
+    REUSED = "reused"
+    MANUAL_ONLY = "manual_only"
+    BUDGET_DEFERRED = "budget_deferred"
+
+
+class InvestigationBudgetKind(StrEnum):
+    AUTOMATIC = "automatic"
+    MANUAL = "manual"
 
 
 class Confidence(StrEnum):
@@ -469,14 +483,61 @@ class Investigation:
     model: str
     created_at: datetime
     confidence: Confidence | None = None
-    usage: Mapping[str, int] = field(default_factory=dict)
+    usage: Mapping[str, Any] = field(default_factory=dict)
     result: Mapping[str, Any] = field(default_factory=dict)
+    model_calls: tuple["LLMCall", ...] = ()
     error_summary: str | None = None
     completed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "usage", _freeze_mapping(self.usage))
         object.__setattr__(self, "result", _freeze_mapping(self.result))
+        object.__setattr__(self, "model_calls", tuple(self.model_calls))
+
+
+@dataclass(frozen=True, slots=True)
+class LLMCall:
+    id: str
+    purpose: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    total_tokens: int
+    created_at: datetime
+    estimated_cost_usd: Decimal | None = None
+    cost_source: str = "unavailable"
+    incident_id: str | None = None
+    investigation_id: str | None = None
+    scan_id: str | None = None
+    budget_kind: InvestigationBudgetKind | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisDecision:
+    id: str
+    incident_id: str
+    occurrence_id: str
+    outcome: AnalysisDecisionOutcome
+    reason_code: str
+    reason: str
+    source: str
+    mode: ScanMode
+    priority: int
+    evidence_hash: str
+    created_at: datetime
+    scan_id: str | None = None
+    request_id: str | None = None
+    llm_call_id: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
 
 
 @dataclass(frozen=True, slots=True)
@@ -493,6 +554,8 @@ class InvestigationRequest:
     status: InvestigationRequestStatus
     created_at: datetime
     updated_at: datetime
+    budget_kind: InvestigationBudgetKind = InvestigationBudgetKind.AUTOMATIC
+    reserved_tokens: int = 0
     scan_id: str | None = None
     build_id: str | None = None
     requested_by: str | None = None

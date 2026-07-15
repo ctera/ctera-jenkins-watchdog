@@ -37,6 +37,7 @@ import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
 import {
   getJenkinsWorkspace,
+  getOverview,
   listJenkinsFailures,
   type JenkinsBuild,
   type JenkinsExecution,
@@ -44,8 +45,9 @@ import {
   type JenkinsJobFamily,
   type JenkinsMultibranchFamily,
   type JenkinsWorkspace,
+  type Overview as OperationalOverview,
 } from "../services/api";
-import { formatRelative, titleCase } from "../utils/format";
+import { formatRelative, formatTokens, formatUsd, titleCase } from "../utils/format";
 
 type JenkinsView = "new" | "executions" | "recurring" | "all" | "jobs" | "multibranch";
 type FailureResult = "FAILURE" | "UNSTABLE" | "ABORTED";
@@ -63,6 +65,7 @@ export default function OverviewPage() {
   const [windowHours, setWindowHours] = useState(168);
   const [view, setView] = useState<JenkinsView>("new");
   const [workspace, setWorkspace] = useState<JenkinsWorkspace | null>(null);
+  const [operational, setOperational] = useState<OperationalOverview | null>(null);
   const [failures, setFailures] = useState<JenkinsBuild[]>([]);
   const [queryText, setQueryText] = useState("");
   const [jobQuery, setJobQuery] = useState("");
@@ -76,8 +79,9 @@ export default function OverviewPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const next = await getJenkinsWorkspace(windowHours, 100);
+      const [next, status] = await Promise.all([getJenkinsWorkspace(windowHours, 100), getOverview()]);
       setWorkspace(next);
+      setOperational(status);
       setError(null);
     } catch (requestError) {
       setError(requestError);
@@ -145,6 +149,7 @@ export default function OverviewPage() {
   }
 
   const summary = asRecord(workspace?.summary);
+  const dailyUsage = asRecord(operational?.llm_usage);
   const sync = asRecord(summary.sync);
   const syncStats = asRecord(sync.stats);
   const syncErrors = Array.isArray(syncStats.errors) ? syncStats.errors.length : 0;
@@ -256,7 +261,7 @@ export default function OverviewPage() {
             {numberValue(summary.enriched_failure_count).toLocaleString()} causes analyzed · {numberValue(summary.pending_failure_analysis_count).toLocaleString()} awaiting evidence
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ ml: { sm: "auto" } }}>
-            {numberValue(summary.running_build_count).toLocaleString()} running
+            {numberValue(summary.running_build_count).toLocaleString()} running · {formatTokens(dailyUsage.total_tokens)} · {formatUsd(dailyUsage.estimated_cost_usd)} today
           </Typography>
         </Stack>
       </Paper>

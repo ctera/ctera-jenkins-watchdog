@@ -12,6 +12,8 @@ from jenkins_watchdog.application import jenkins_monitor as monitor_module
 from jenkins_watchdog.application.incidents import IncidentService
 from jenkins_watchdog.application.investigations import InvestigationQueueService
 from jenkins_watchdog.application.jenkins_monitor import JenkinsMonitorService, JenkinsMonitorWorker
+from jenkins_watchdog.application.selection import AnalysisSelectionService
+from jenkins_watchdog.application.types import TriageBatchResult, TriageRoute
 from jenkins_watchdog.domain.jenkins import (
     JenkinsBuildEnrichment,
     JenkinsBuildHistoryPage,
@@ -159,8 +161,27 @@ def _service(
     source: MonitorSource,
     *,
     automatic: bool = True,
+    minimum_priority: int = 1,
 ) -> JenkinsMonitorService:
     uow_factory = _uow_factory(factory)
+    queue = InvestigationQueueService(uow_factory=uow_factory, now=lambda: NOW)
+
+    class Triage:
+        async def triage_batch(self, candidates):
+            return TriageBatchResult(
+                routes=tuple(
+                    TriageRoute(candidate.incident.id, "defer", "test triage")
+                    for candidate in candidates
+                )
+            )
+
+    selection = AnalysisSelectionService(
+        uow_factory=uow_factory,
+        reasoning=Triage(),
+        queue=queue,
+        now=lambda: NOW,
+        automatic_enabled=automatic,
+    )
     return JenkinsMonitorService(
         source=source,
         uow_factory=uow_factory,
@@ -172,9 +193,9 @@ def _service(
         lease_seconds=60,
         heartbeat_seconds=15,
         incident_service=IncidentService(uow_factory),
-        investigation_queue=InvestigationQueueService(uow_factory=uow_factory, now=lambda: NOW),
+        selection_service=selection,
         automatic_investigations=automatic,
-        minimum_investigation_priority=1,
+        minimum_investigation_priority=minimum_priority,
         analysis_candidate_limit=10,
     )
 
@@ -232,6 +253,25 @@ async def test_sync_lease_prevents_overlapping_catalog_runs(
         assert await uow.jenkins.claim_sync(owner="other", now=NOW, lease_seconds=300)
         await uow.commit()
     assert await _service(postgres_session_factory, MonitorSource()).sync(owner="monitor-a") is None
+
+
+@pytest.mark.asyncio
+async def test_sync_honors_configured_automatic_investigation_priority_floor(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = _service(
+        postgres_session_factory,
+        MonitorSource(),
+        minimum_priority=100,
+    )
+
+    stats = await service.sync(owner="monitor-priority-floor")
+
+    assert stats is not None
+    assert stats.details["analysis_candidates_processed"] == 0
+    assert stats.details["investigations_queued"] == 0
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        assert await uow.incidents.active() == ()
 
 
 @pytest.mark.asyncio

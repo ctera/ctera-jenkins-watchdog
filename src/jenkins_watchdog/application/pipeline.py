@@ -9,10 +9,9 @@ from datetime import datetime
 from jenkins_watchdog.application.automation import AutomationService
 from jenkins_watchdog.application.events import EventService
 from jenkins_watchdog.application.incidents import IncidentService
-from jenkins_watchdog.application.investigations import InvestigationQueueService
 from jenkins_watchdog.application.ports import CheckRunner, UnitOfWorkFactory
-from jenkins_watchdog.application.reasoning import ReasoningService
-from jenkins_watchdog.domain.model import CheckStatus, Scan, ScanStage
+from jenkins_watchdog.application.selection import AnalysisSelectionService
+from jenkins_watchdog.domain.model import AnalysisDecisionOutcome, CheckStatus, Scan, ScanStage
 
 TERMINAL_CHECK_STATUSES = frozenset(
     {
@@ -36,28 +35,22 @@ class ScanPipeline:
         uow_factory: UnitOfWorkFactory,
         check_runner: CheckRunner,
         incident_service: IncidentService,
-        reasoning_service: ReasoningService,
+        selection_service: AnalysisSelectionService,
         automation_service: AutomationService,
         events: EventService,
         now: Callable[[], datetime],
         max_investigations: int = 12,
         max_deep_investigations: int = 20,
-        token_budget: int = 24000,
-        deep_token_budget: int = 40000,
-        investigation_queue: InvestigationQueueService | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._check_runner = check_runner
         self._incident_service = incident_service
-        self._reasoning_service = reasoning_service
+        self._selection_service = selection_service
         self._automation_service = automation_service
         self._events = events
         self._now = now
         self._max_investigations = max(0, max_investigations)
         self._max_deep_investigations = max(0, max_deep_investigations)
-        self._token_budget = max(0, token_budget)
-        self._deep_token_budget = max(0, deep_token_budget)
-        self._investigation_queue = investigation_queue
 
     async def execute(self, scan_id: str) -> Scan:
         scan = await self._get_scan(scan_id)
@@ -126,76 +119,46 @@ class ScanPipeline:
         scan = await self._advance(scan, ScanStage.INVESTIGATING)
         ranked_incidents = await self._rank_incidents(incident_ids)
         limit = self._max_deep_investigations if scan.mode.value == "deep" else self._max_investigations
-        token_budget = self._deep_token_budget if scan.mode.value == "deep" else self._token_budget
-        candidates: list[str] = []
-        needs_investigation = getattr(self._reasoning_service, "needs_investigation", None)
-        for incident_id in ranked_incidents:
-            if needs_investigation is None or await needs_investigation(incident_id):
-                candidates.append(incident_id)
-
-        completed_investigations = 0
-        used_tokens = 0
-        queued_incidents: set[str] = set()
-        if self._investigation_queue is not None:
-            for position, incident_id in enumerate(candidates):
-                await self._raise_if_cancelled(await self._get_scan(scan_id))
-                request = await self._investigation_queue.enqueue_incident(
-                    incident_id,
-                    source="deep_scan" if scan.mode.value == "deep" else "scan",
-                    mode=scan.mode,
-                    priority=max(1, 100 - position),
-                    scan_id=scan_id,
-                )
-                if request is None:
-                    continue
-                queued_incidents.add(incident_id)
-                await self._events.append(
-                    scan_id,
-                    "investigation_queued",
-                    {
-                        "incident_id": incident_id,
-                        "request_id": request.id,
-                        "status": request.status.value,
-                        "mode": request.mode.value,
-                    },
-                    now=self._now(),
-                )
-        else:
-            for incident_id in candidates[:limit]:
-                await self._raise_if_cancelled(await self._get_scan(scan_id))
-                investigation = await self._reasoning_service.investigate_if_needed(incident_id)
-                if investigation is not None:
-                    completed_investigations += 1
-                    total_tokens = investigation.usage.get("total_tokens")
-                    if isinstance(total_tokens, int):
-                        used_tokens += total_tokens
-                    await self._events.append(
-                        scan_id,
-                        "investigation_completed",
-                        {
-                            "incident_id": incident_id,
-                            "status": investigation.status.value,
-                            "confidence": investigation.confidence.value if investigation.confidence else None,
-                        },
-                        now=self._now(),
-                    )
-                    if token_budget and used_tokens >= token_budget:
-                        break
+        await self._raise_if_cancelled(await self._get_scan(scan_id))
+        selection = await self._selection_service.select(
+            ranked_incidents,
+            source="deep_scan" if scan.mode.value == "deep" else "scan",
+            mode=scan.mode,
+            limit=limit,
+            scan_id=scan_id,
+            priority_by_incident={incident_id: max(1, 100 - position) for position, incident_id in enumerate(ranked_incidents)},
+        )
+        queued_incidents = {
+            decision.incident_id
+            for decision in selection.decisions
+            if decision.outcome is AnalysisDecisionOutcome.SELECTED and decision.request_id
+        }
+        for decision in selection.decisions:
+            await self._events.append(
+                scan_id,
+                "analysis_selection_decided",
+                {
+                    "incident_id": decision.incident_id,
+                    "outcome": decision.outcome.value,
+                    "reason_code": decision.reason_code,
+                    "reason": decision.reason,
+                    "request_id": decision.request_id,
+                },
+                now=self._now(),
+            )
         await self._events.append(
             scan_id,
             "investigation_budget_applied",
             {
-                "candidate_count": len(candidates),
-                "completed_count": completed_investigations,
+                "candidate_count": len(ranked_incidents),
+                "completed_count": 0,
                 "queued_count": len(queued_incidents),
-                "skipped_count": (
-                    0
-                    if self._investigation_queue is not None
-                    else max(0, len(candidates) - completed_investigations)
+                "skipped_count": len(selection.decisions) - len(queued_incidents),
+                "max_investigations": limit,
+                "budget_deferred_count": sum(
+                    decision.outcome is AnalysisDecisionOutcome.BUDGET_DEFERRED
+                    for decision in selection.decisions
                 ),
-                "max_investigations": None if self._investigation_queue is not None else limit,
-                "token_budget": token_budget,
-                "used_tokens": used_tokens,
             },
             now=self._now(),
         )

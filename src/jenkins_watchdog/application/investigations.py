@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
 from uuid import uuid4
 
 from jenkins_watchdog.application.automation import AutomationService
 from jenkins_watchdog.application.events import EventService
-from jenkins_watchdog.application.ports import UnitOfWorkFactory
+from jenkins_watchdog.application.ports import UnitOfWork, UnitOfWorkFactory
 from jenkins_watchdog.application.reasoning import (
     ReasoningService,
     evidence_digest,
@@ -18,6 +18,7 @@ from jenkins_watchdog.application.reasoning import (
     should_reinvestigate,
 )
 from jenkins_watchdog.domain.model import (
+    InvestigationBudgetKind,
     InvestigationRequest,
     InvestigationRequestStatus,
     InvestigationStatus,
@@ -27,10 +28,49 @@ from jenkins_watchdog.domain.model import (
 logger = logging.getLogger(__name__)
 
 
+class InvestigationBudgetExceeded(RuntimeError):
+    def __init__(self, *, budget_kind: InvestigationBudgetKind, limit: int, projected: int) -> None:
+        self.budget_kind = budget_kind
+        self.limit = limit
+        self.projected = projected
+        super().__init__(
+            f"{budget_kind.value} LLM token budget exhausted: projected {projected:,} exceeds {limit:,}"
+        )
+
+
 class InvestigationQueueService:
-    def __init__(self, *, uow_factory: UnitOfWorkFactory, now: Callable[[], datetime]) -> None:
+    def __init__(
+        self,
+        *,
+        uow_factory: UnitOfWorkFactory,
+        now: Callable[[], datetime],
+        token_budget: int = 24_000,
+        deep_token_budget: int = 40_000,
+        daily_token_budget: int = 400_000,
+        manual_token_reserve: int = 100_000,
+    ) -> None:
         self._uow_factory = uow_factory
         self._now = now
+        self._token_budget = max(0, token_budget)
+        self._deep_token_budget = max(0, deep_token_budget)
+        self._daily_token_budget = max(0, daily_token_budget)
+        self._manual_token_reserve = min(self._daily_token_budget, max(0, manual_token_reserve))
+
+    async def ensure_budget_available(
+        self,
+        *,
+        budget_kind: InvestigationBudgetKind,
+        reserved_tokens: int,
+    ) -> None:
+        now = self._now()
+        async with self._uow_factory() as uow:
+            await uow.investigation_requests.lock_budget()
+            await self._enforce_budget(
+                uow,
+                budget_kind=budget_kind,
+                reserved_tokens=max(0, reserved_tokens),
+                now=now,
+            )
 
     async def enqueue_incident(
         self,
@@ -43,9 +83,17 @@ class InvestigationQueueService:
         build_id: str | None = None,
         requested_by: str | None = None,
         force: bool = False,
+        budget_kind: InvestigationBudgetKind | None = None,
     ) -> InvestigationRequest | None:
         now = self._now()
+        kind = budget_kind or (
+            InvestigationBudgetKind.MANUAL
+            if requested_by or source.startswith("manual") or source.startswith("api")
+            else InvestigationBudgetKind.AUTOMATIC
+        )
+        reserved_tokens = self._deep_token_budget if mode is ScanMode.DEEP else self._token_budget
         async with self._uow_factory() as uow:
+            await uow.investigation_requests.lock_budget()
             incident = await uow.incidents.get(incident_id)
             if incident is None:
                 raise LookupError(f"incident {incident_id} does not exist")
@@ -63,6 +111,12 @@ class InvestigationQueueService:
                 now=now,
             ):
                 return None
+            await self._enforce_budget(
+                uow,
+                budget_kind=kind,
+                reserved_tokens=reserved_tokens,
+                now=now,
+            )
             request = InvestigationRequest(
                 id=str(uuid4()),
                 incident_id=incident.id,
@@ -75,6 +129,8 @@ class InvestigationQueueService:
                 scan_id=scan_id,
                 build_id=build_id,
                 requested_by=requested_by,
+                budget_kind=kind,
+                reserved_tokens=reserved_tokens,
                 created_at=now,
                 updated_at=now,
                 next_attempt_at=now,
@@ -82,6 +138,30 @@ class InvestigationQueueService:
             persisted = await uow.investigation_requests.enqueue(request)
             await uow.commit()
             return persisted
+
+    async def _enforce_budget(
+        self,
+        uow: UnitOfWork,
+        *,
+        budget_kind: InvestigationBudgetKind,
+        reserved_tokens: int,
+        now: datetime,
+    ) -> None:
+        if not self._daily_token_budget:
+            return
+        day_start = datetime.combine(now.astimezone(timezone.utc).date(), time.min, tzinfo=timezone.utc)
+        spent = await uow.llm_calls.summary_since(day_start)
+        active_reserved = await uow.investigation_requests.active_reserved_tokens()
+        ceiling = self._daily_token_budget
+        if budget_kind is InvestigationBudgetKind.AUTOMATIC:
+            ceiling -= self._manual_token_reserve
+        projected = int(spent.get("total_tokens") or 0) + active_reserved + reserved_tokens
+        if projected > ceiling:
+            raise InvestigationBudgetExceeded(
+                budget_kind=budget_kind,
+                limit=ceiling,
+                projected=projected,
+            )
 
     async def latest_for_incident(self, incident_id: str) -> InvestigationRequest | None:
         async with self._uow_factory() as uow:
@@ -156,6 +236,8 @@ class InvestigationWorker:
                 force=True,
                 mode=request.mode,
                 on_progress=progress,
+                budget_kind=request.budget_kind,
+                scan_id=request.scan_id,
             )
             now = self._now()
             if investigation is None:

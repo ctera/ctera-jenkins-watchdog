@@ -229,6 +229,7 @@ class SqlAlchemyJenkinsRepository:
                         failure_classification="unknown",
                         failure_signature="",
                         propagated_failure=False,
+                        recovered=False,
                         novelty=JenkinsNovelty.UNCLASSIFIED.value,
                         priority_score=0,
                         priority_reasons=[],
@@ -403,6 +404,7 @@ class SqlAlchemyJenkinsRepository:
                 item.result == "SUCCESS" and item.started_at > record.started_at
                 for item in by_job[record.job_full_name]
             )
+            record.recovered = later_success
             if not later_success and record.started_at >= now - timedelta(hours=24):
                 score += 30
                 reasons.append("current blockage +30")
@@ -810,11 +812,15 @@ class SqlAlchemyJenkinsRepository:
                     JenkinsBuildRecord.incident_id.is_(None),
                     JenkinsBuildRecord.building.is_(False),
                     JenkinsBuildRecord.result.in_(_FAILURE_RESULTS),
-                    JenkinsBuildRecord.propagated_failure.is_(False),
                     JenkinsBuildRecord.enrichment_status.in_({"enriched", "log_pending", "failed"}),
                     JenkinsBuildRecord.priority_score >= min_priority,
                 )
-                .order_by(JenkinsBuildRecord.priority_score.desc(), JenkinsBuildRecord.started_at)
+                .order_by(
+                    JenkinsBuildRecord.propagated_failure.asc(),
+                    JenkinsBuildRecord.recovered.asc(),
+                    JenkinsBuildRecord.priority_score.desc(),
+                    JenkinsBuildRecord.started_at,
+                )
                 .limit(limit)
             )
         ).all()
@@ -872,6 +878,7 @@ def _build_brief(record: JenkinsBuildRecord) -> dict[str, Any]:
         "started_at": record.started_at,
         "duration_ms": record.duration_ms,
         "propagated_failure": record.propagated_failure,
+        "recovered": record.recovered,
         "failed_stage": record.failed_stage,
         "failure_summary": record.failure_summary,
         "incident_id": str(record.incident_id) if record.incident_id else None,

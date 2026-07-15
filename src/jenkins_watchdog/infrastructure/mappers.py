@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from jenkins_watchdog.domain.model import (
     Action,
     ActionStatus,
     ActionType,
+    AnalysisDecision,
+    AnalysisDecisionOutcome,
     CheckResult,
     CheckStatus,
     Confidence,
@@ -19,23 +20,28 @@ from jenkins_watchdog.domain.model import (
     IncidentOccurrence,
     IncidentStatus,
     Investigation,
+    InvestigationBudgetKind,
     InvestigationRequest,
     InvestigationRequestStatus,
     InvestigationStatus,
+    LLMCall,
     Scan,
     ScanMode,
     ScanStage,
     ScanStatus,
     Severity,
 )
+from jenkins_watchdog.domain.serialization import to_primitive
 from jenkins_watchdog.infrastructure.models import (
     ActionRecord,
+    AnalysisDecisionRecord,
     CheckExecutionRecord,
     DeliveryAttemptRecord,
     FindingRecord,
     IncidentRecord,
     InvestigationRecord,
     InvestigationRequestRecord,
+    LLMCallRecord,
     ScanRecord,
 )
 
@@ -195,6 +201,8 @@ def investigation_request_from_record(record: InvestigationRequestRecord) -> Inv
         priority=record.priority,
         evidence_hash=record.evidence_hash,
         status=InvestigationRequestStatus(record.status),
+        budget_kind=InvestigationBudgetKind(record.budget_kind),
+        reserved_tokens=record.reserved_tokens,
         scan_id=str(record.scan_id) if record.scan_id else None,
         build_id=str(record.build_id) if record.build_id else None,
         requested_by=record.requested_by,
@@ -215,6 +223,8 @@ def update_investigation_request_record(
 ) -> None:
     record.status = request.status.value
     record.priority = request.priority
+    record.budget_kind = request.budget_kind.value
+    record.reserved_tokens = request.reserved_tokens
     record.lease_owner = request.lease_owner
     record.lease_expires_at = request.lease_expires_at
     record.attempt_count = request.attempt_count
@@ -223,6 +233,47 @@ def update_investigation_request_record(
     record.error_summary = request.error_summary
     record.updated_at = request.updated_at
     record.completed_at = request.completed_at
+
+
+def llm_call_from_record(record: LLMCallRecord) -> LLMCall:
+    return LLMCall(
+        id=str(record.id),
+        purpose=record.purpose,
+        model=record.model,
+        prompt_tokens=record.prompt_tokens,
+        completion_tokens=record.completion_tokens,
+        cache_read_input_tokens=record.cache_read_input_tokens,
+        cache_creation_input_tokens=record.cache_creation_input_tokens,
+        total_tokens=record.total_tokens,
+        estimated_cost_usd=record.estimated_cost_usd,
+        cost_source=record.cost_source,
+        incident_id=str(record.incident_id) if record.incident_id else None,
+        investigation_id=str(record.investigation_id) if record.investigation_id else None,
+        scan_id=str(record.scan_id) if record.scan_id else None,
+        budget_kind=InvestigationBudgetKind(record.budget_kind) if record.budget_kind else None,
+        metadata=record.metadata_json,
+        created_at=record.created_at,
+    )
+
+
+def analysis_decision_from_record(record: AnalysisDecisionRecord) -> AnalysisDecision:
+    return AnalysisDecision(
+        id=str(record.id),
+        incident_id=str(record.incident_id),
+        occurrence_id=str(record.occurrence_id),
+        outcome=AnalysisDecisionOutcome(record.outcome),
+        reason_code=record.reason_code,
+        reason=record.reason,
+        source=record.source,
+        mode=ScanMode(record.mode),
+        priority=record.priority,
+        evidence_hash=record.evidence_hash,
+        scan_id=str(record.scan_id) if record.scan_id else None,
+        request_id=str(record.request_id) if record.request_id else None,
+        llm_call_id=str(record.llm_call_id) if record.llm_call_id else None,
+        metadata=record.metadata_json,
+        created_at=record.created_at,
+    )
 
 
 def action_from_record(record: ActionRecord) -> Action:
@@ -279,11 +330,7 @@ def delivery_attempt_from_record(record: DeliveryAttemptRecord) -> DeliveryAttem
 
 
 def jsonable(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): jsonable(nested) for key, nested in value.items()}
-    if isinstance(value, (tuple, list, set, frozenset)):
-        return [jsonable(item) for item in value]
-    return value
+    return to_primitive(value)
 
 
 def _optional_uuid(value: str | None) -> Any:

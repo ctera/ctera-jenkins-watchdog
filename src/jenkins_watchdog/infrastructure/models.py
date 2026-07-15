@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -14,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -231,6 +233,8 @@ class InvestigationRequestRecord(Base):
     scan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     build_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jenkins_builds.id", ondelete="SET NULL"))
     requested_by: Mapped[str | None] = mapped_column(String(320))
+    budget_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="automatic")
+    reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_owner: Mapped[str | None] = mapped_column(String(255))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -244,6 +248,63 @@ class InvestigationRequestRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     incident: Mapped[IncidentRecord] = relationship(back_populates="investigation_requests")
+
+
+class LLMCallRecord(Base):
+    __tablename__ = "llm_calls"
+    __table_args__ = (
+        Index("ix_llm_calls_created", "created_at"),
+        Index("ix_llm_calls_incident_created", "incident_id", "created_at"),
+        Index("ix_llm_calls_investigation", "investigation_id", "created_at"),
+        Index("ix_llm_calls_scan", "scan_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(160), nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_read_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_creation_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    estimated_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    cost_source: Mapped[str] = mapped_column(String(32), nullable=False, default="unavailable")
+    budget_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incidents.id", ondelete="SET NULL"))
+    investigation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("investigations.id", ondelete="SET NULL")
+    )
+    scan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON_TYPE, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AnalysisDecisionRecord(Base):
+    __tablename__ = "analysis_decisions"
+    __table_args__ = (
+        Index("ix_analysis_decisions_incident_created", "incident_id", "created_at"),
+        Index("ix_analysis_decisions_outcome_created", "outcome", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False)
+    occurrence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("incident_occurrences.id", ondelete="CASCADE"), nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    scan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("investigation_requests.id", ondelete="SET NULL")
+    )
+    llm_call_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("llm_calls.id", ondelete="SET NULL"))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON_TYPE, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ActionRecord(Base):
@@ -388,6 +449,7 @@ class JenkinsBuildRecord(Base):
     failure_signature: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     failure_summary: Mapped[str | None] = mapped_column(Text)
     propagated_failure: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    recovered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     novelty: Mapped[str] = mapped_column(String(32), nullable=False, default="unclassified")
     priority_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     priority_reasons: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)

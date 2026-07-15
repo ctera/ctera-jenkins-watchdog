@@ -183,6 +183,84 @@
         "title": "V2ActionResponse",
         "type": "object"
       },
+      "V2AnalysisDecisionResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "evidence_hash": {
+            "title": "Evidence Hash",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "reason_code",
+          "reason",
+          "source",
+          "mode",
+          "priority",
+          "evidence_hash",
+          "scan_id",
+          "request_id",
+          "created_at"
+        ],
+        "title": "V2AnalysisDecisionResponse",
+        "type": "object"
+      },
       "V2AnalyzeBuildRequest": {
         "properties": {
           "mode": {
@@ -510,6 +588,16 @@
             "title": "Actions",
             "type": "array"
           },
+          "analysis_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2AnalysisDecisionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "current_observations": {
             "items": {
               "$ref": "#/components/schemas/V2ObservationResponse"
@@ -800,6 +888,10 @@
             "title": "Attempt Count",
             "type": "integer"
           },
+          "budget_kind": {
+            "title": "Budget Kind",
+            "type": "string"
+          },
           "build_id": {
             "anyOf": [
               {
@@ -897,6 +989,10 @@
             ],
             "title": "Requested By"
           },
+          "reserved_tokens": {
+            "title": "Reserved Tokens",
+            "type": "integer"
+          },
           "scan_id": {
             "anyOf": [
               {
@@ -934,6 +1030,8 @@
           "scan_id",
           "build_id",
           "requested_by",
+          "budget_kind",
+          "reserved_tokens",
           "attempt_count",
           "next_attempt_at",
           "investigation_id",
@@ -1001,6 +1099,13 @@
           "model": {
             "title": "Model",
             "type": "string"
+          },
+          "model_calls": {
+            "items": {
+              "$ref": "#/components/schemas/V2LLMCallResponse"
+            },
+            "title": "Model Calls",
+            "type": "array"
           },
           "prompt_version": {
             "title": "Prompt Version",
@@ -1249,6 +1354,11 @@
             "title": "Propagated Failure",
             "type": "boolean"
           },
+          "recovered": {
+            "default": false,
+            "title": "Recovered",
+            "type": "boolean"
+          },
           "repository": {
             "anyOf": [
               {
@@ -1490,6 +1600,11 @@
           "propagated_failure": {
             "default": false,
             "title": "Propagated Failure",
+            "type": "boolean"
+          },
+          "recovered": {
+            "default": false,
+            "title": "Recovered",
             "type": "boolean"
           },
           "repository": {
@@ -1768,6 +1883,77 @@
           "last_build_at"
         ],
         "title": "V2JobFamilyResponse",
+        "type": "object"
+      },
+      "V2LLMCallResponse": {
+        "properties": {
+          "cache_creation_input_tokens": {
+            "title": "Cache Creation Input Tokens",
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "title": "Cache Read Input Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_source": {
+            "title": "Cost Source",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "purpose",
+          "model",
+          "prompt_tokens",
+          "completion_tokens",
+          "cache_read_input_tokens",
+          "cache_creation_input_tokens",
+          "total_tokens",
+          "estimated_cost_usd",
+          "cost_source",
+          "created_at"
+        ],
+        "title": "V2LLMCallResponse",
         "type": "object"
       },
       "V2LogicalExecutionResponse": {
@@ -2133,6 +2319,11 @@
               }
             ]
           },
+          "llm_usage": {
+            "additionalProperties": true,
+            "title": "Llm Usage",
+            "type": "object"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -2297,6 +2488,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "llm_usage": {
+            "additionalProperties": true,
+            "title": "Llm Usage",
+            "type": "object"
           },
           "mode": {
             "title": "Mode",

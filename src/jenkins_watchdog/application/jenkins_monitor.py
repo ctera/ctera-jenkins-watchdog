@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 from typing import TypeVar
 
 from jenkins_watchdog.application.incidents import IncidentService
-from jenkins_watchdog.application.investigations import InvestigationQueueService
 from jenkins_watchdog.application.ports import JenkinsSourcePort, UnitOfWorkFactory
+from jenkins_watchdog.application.selection import AnalysisSelectionService
 from jenkins_watchdog.domain.jenkins import (
     JenkinsBuildEnrichment,
     JenkinsBuildHistoryPage,
@@ -40,10 +40,11 @@ class JenkinsMonitorService:
         lease_seconds: int = 900,
         heartbeat_seconds: int = 60,
         incident_service: IncidentService | None = None,
-        investigation_queue: InvestigationQueueService | None = None,
+        selection_service: AnalysisSelectionService | None = None,
         automatic_investigations: bool = True,
         minimum_investigation_priority: int = 1,
         analysis_candidate_limit: int = 250,
+        automatic_selection_limit: int = 12,
     ) -> None:
         self._source = source
         self._uow_factory = uow_factory
@@ -55,10 +56,11 @@ class JenkinsMonitorService:
         self._lease_seconds = max(60, lease_seconds)
         self._heartbeat_seconds = max(15, heartbeat_seconds)
         self._incident_service = incident_service
-        self._investigation_queue = investigation_queue
+        self._selection_service = selection_service
         self._automatic_investigations = automatic_investigations
         self._minimum_investigation_priority = max(0, minimum_investigation_priority)
         self._analysis_candidate_limit = max(1, analysis_candidate_limit)
+        self._automatic_selection_limit = max(0, automatic_selection_limit)
 
     async def sync(self, *, owner: str, window_hours: int | None = None) -> JenkinsSyncStats | None:
         started_at = self._now()
@@ -261,21 +263,27 @@ class JenkinsMonitorService:
                 min_priority=minimum,
                 limit=self._analysis_candidate_limit,
             )
-        queued = 0
+        incident_ids: list[str] = []
+        priorities: dict[str, int] = {}
+        build_ids: dict[str, str] = {}
         for build in candidates:
             incident = await self._incident_service.correlate_jenkins_build(build, now=self._now())
-            if not self._automatic_investigations or self._investigation_queue is None:
-                continue
-            request = await self._investigation_queue.enqueue_incident(
-                incident.id,
-                source="jenkins_monitor",
-                mode=ScanMode.REGULAR,
-                priority=int(build.get("priority_score") or 0),
-                build_id=str(build["id"]),
-            )
-            if request is not None:
-                queued += 1
-        return len(candidates), queued
+            incident_ids.append(incident.id)
+            priority = int(build.get("priority_score") or 0)
+            if priority >= priorities.get(incident.id, -1):
+                priorities[incident.id] = priority
+                build_ids[incident.id] = str(build["id"])
+        if self._selection_service is None or not incident_ids:
+            return len(candidates), 0
+        selection = await self._selection_service.select(
+            tuple(dict.fromkeys(incident_ids)),
+            source="jenkins_monitor",
+            mode=ScanMode.REGULAR,
+            limit=self._automatic_selection_limit,
+            priority_by_incident=priorities,
+            build_id_by_incident=build_ids,
+        )
+        return len(candidates), selection.selected_count
 
     async def _map_bounded(
         self,

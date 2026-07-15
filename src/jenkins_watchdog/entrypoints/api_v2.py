@@ -11,6 +11,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from jenkins_watchdog.application.investigations import InvestigationBudgetExceeded
 from jenkins_watchdog.application.pagination import InvalidCursorError
 from jenkins_watchdog.application.reasoning import jenkins_build_observations
 from jenkins_watchdog.application.scan_service import (
@@ -21,11 +22,13 @@ from jenkins_watchdog.application.scan_service import (
 from jenkins_watchdog.application.types import ScanEvent
 from jenkins_watchdog.domain.model import (
     Action,
+    AnalysisDecision,
     CheckResult,
     FindingObservation,
     Incident,
     Investigation,
     InvestigationRequest,
+    LLMCall,
     Scan,
     ScanMode,
 )
@@ -54,6 +57,7 @@ class V2ScanResponse(BaseModel):
     urls: dict[str, str]
     coverage_status: str | None = None
     checks: list["V2CheckExecutionResponse"] = Field(default_factory=list)
+    llm_usage: dict[str, Any] = Field(default_factory=dict)
 
 
 class V2CheckExecutionResponse(BaseModel):
@@ -145,6 +149,35 @@ class V2InvestigationResponse(BaseModel):
     error_summary: str | None
     created_at: datetime
     completed_at: datetime | None
+    model_calls: list["V2LLMCallResponse"] = Field(default_factory=list)
+
+
+class V2LLMCallResponse(BaseModel):
+    id: str
+    purpose: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    total_tokens: int
+    estimated_cost_usd: float | None
+    cost_source: str
+    created_at: datetime
+
+
+class V2AnalysisDecisionResponse(BaseModel):
+    id: str
+    outcome: str
+    reason_code: str
+    reason: str
+    source: str
+    mode: str
+    priority: int
+    evidence_hash: str
+    scan_id: str | None
+    request_id: str | None
+    created_at: datetime
 
 
 class V2InvestigationRequestResponse(BaseModel):
@@ -159,6 +192,8 @@ class V2InvestigationRequestResponse(BaseModel):
     scan_id: str | None
     build_id: str | None
     requested_by: str | None
+    budget_kind: str
+    reserved_tokens: int
     attempt_count: int
     next_attempt_at: datetime | None
     investigation_id: str | None
@@ -215,6 +250,7 @@ class V2IncidentDetailResponse(BaseModel):
     occurrences: list[V2OccurrenceResponse]
     latest_investigation: V2InvestigationResponse | None
     investigation_request: V2InvestigationRequestResponse | None = None
+    analysis_decision: V2AnalysisDecisionResponse | None = None
     jenkins_builds: list[dict[str, Any]] = Field(default_factory=list)
     actions: list[V2ActionResponse]
 
@@ -249,6 +285,7 @@ class V2OverviewResponse(BaseModel):
     jenkins: dict[str, Any]
     kubernetes: dict[str, Any]
     top_incidents: list[V2IncidentResponse]
+    llm_usage: dict[str, Any] = Field(default_factory=dict)
 
 
 class V2JenkinsBuildResponse(BaseModel):
@@ -274,6 +311,7 @@ class V2JenkinsBuildResponse(BaseModel):
     root_build_number: int
     logical_run_key: str
     propagated_failure: bool = False
+    recovered: bool = False
     failed_stage: str | None = None
     failure_summary: str | None = None
     failure_classification: str = "unknown"
@@ -442,6 +480,8 @@ async def chat_stream(request: Request, body: V2ChatRequest) -> EventSourceRespo
 @router.get("/overview", response_model=V2OverviewResponse)
 async def overview(request: Request) -> V2OverviewResponse:
     container = _container(request)
+    generated_at = datetime.now(timezone.utc)
+    day_start = generated_at.replace(hour=0, minute=0, second=0, microsecond=0)
     async with container.uow_factory() as uow:
         latest_scan = await uow.scans.latest_completed()
         checks = await uow.checks.for_scan(latest_scan.id) if latest_scan else ()
@@ -451,6 +491,7 @@ async def overview(request: Request) -> V2OverviewResponse:
             observations = await uow.incidents.current_observations(incident.id)
             builds = await uow.jenkins.builds_for_incident(incident.id)
             incident_rows.append((incident, observations + jenkins_build_observations(builds)))
+        llm_usage = await uow.llm_calls.summary_since(day_start)
 
     check_summaries = {check.check_name: to_primitive(check.summary) for check in checks}
     coverage_status = _coverage_status(checks, latest_scan)
@@ -485,7 +526,7 @@ async def overview(request: Request) -> V2OverviewResponse:
     return V2OverviewResponse(
         environment=container.settings.kubernetes_environment,
         status=status,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=generated_at,
         latest_scan=_scan_response(latest_scan, checks=checks) if latest_scan else None,
         coverage_status=coverage_status,
         active_incident_count=len(incident_rows),
@@ -524,6 +565,7 @@ async def overview(request: Request) -> V2OverviewResponse:
             "meaningful_event_group_count": events.get("meaningful_event_group_count"),
         },
         top_incidents=[_incident_response(incident, current) for incident, current in incident_rows[:12]],
+        llm_usage=llm_usage,
     )
 
 
@@ -597,6 +639,7 @@ async def jenkins_build_detail(request: Request, build_id: str) -> V2JenkinsBuil
             await uow.investigation_requests.latest_for_incident(incident.id) if incident else None
         )
         investigation = await uow.investigations.latest_for_incident(incident.id) if incident else None
+        model_calls = await uow.llm_calls.for_investigation(investigation.id) if investigation else ()
     if detail is None:
         raise HTTPException(status_code=404, detail={"code": "jenkins_build_not_found"})
     if incident:
@@ -608,7 +651,9 @@ async def jenkins_build_detail(request: Request, build_id: str) -> V2JenkinsBuil
         else None
     )
     detail["latest_investigation"] = (
-        _investigation_response(investigation).model_dump(mode="python") if investigation else None
+        _investigation_response(investigation, model_calls=model_calls).model_dump(mode="python")
+        if investigation
+        else None
     )
     return V2JenkinsBuildDetailResponse.model_validate(detail)
 
@@ -635,15 +680,19 @@ async def analyze_jenkins_build(
             build,
             now=datetime.now(timezone.utc),
         )
-        queued = await container.investigation_queue.enqueue_incident(
+        queued = await container.selection_service.request_manual(
             incident.id,
             source="manual_build",
             mode=ScanMode(body.mode),
-            priority=100,
             build_id=build_id,
             requested_by=_actor_email(request),
             force=True,
         )
+    except InvestigationBudgetExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "llm_budget_exhausted", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "build_incident_conflict"}) from exc
     if queued is None:
@@ -698,9 +747,10 @@ async def get_scan(request: Request, scan_id: str) -> V2ScanResponse:
     async with _container(request).uow_factory() as uow:
         scan = await uow.scans.get(scan_id)
         checks = await uow.checks.for_scan(scan_id) if scan else ()
+        llm_usage = await uow.llm_calls.summary_for_scan(scan_id) if scan else {}
     if scan is None:
         raise HTTPException(status_code=404, detail={"code": "scan_not_found"})
-    return _scan_response(scan, checks=checks)
+    return _scan_response(scan, checks=checks, llm_usage=llm_usage)
 
 
 @router.post("/scans/{scan_id}/cancel", response_model=V2CancelResponse)
@@ -805,6 +855,8 @@ async def get_incident(request: Request, incident_id: str) -> V2IncidentDetailRe
             build_observations = jenkins_build_observations(builds)
             investigation = await uow.investigations.latest_for_incident(incident_id)
             investigation_request = await uow.investigation_requests.latest_for_incident(incident_id)
+            analysis_decision = await uow.analysis_decisions.latest_for_incident(incident_id)
+            model_calls = await uow.llm_calls.for_investigation(investigation.id) if investigation else ()
             actions = await uow.actions.for_incident(incident_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail={"code": "incident_not_found"}) from exc
@@ -824,10 +876,13 @@ async def get_incident(request: Request, incident_id: str) -> V2IncidentDetailRe
             )
             for item in incident.occurrence_history
         ],
-        latest_investigation=_investigation_response(investigation) if investigation else None,
+        latest_investigation=(
+            _investigation_response(investigation, model_calls=model_calls) if investigation else None
+        ),
         investigation_request=(
             _investigation_request_response(investigation_request) if investigation_request else None
         ),
+        analysis_decision=_analysis_decision_response(analysis_decision) if analysis_decision else None,
         jenkins_builds=[to_primitive(item) for item in builds],
         actions=[_action_response(item) for item in actions],
     )
@@ -876,14 +931,18 @@ async def unsuppress_incident(request: Request, incident_id: str) -> V2IncidentR
 )
 async def reinvestigate_incident(request: Request, incident_id: str) -> V2InvestigationRequestResponse:
     try:
-        investigation = await _container(request).investigation_queue.enqueue_incident(
+        investigation = await _container(request).selection_service.request_manual(
             incident_id,
             source="manual_incident",
             mode=ScanMode.DEEP,
-            priority=100,
             requested_by=_actor_email(request),
             force=True,
         )
+    except InvestigationBudgetExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "llm_budget_exhausted", "message": str(exc)},
+        ) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail={"code": "incident_not_found"}) from exc
     if investigation is None:
@@ -979,7 +1038,12 @@ def _actor_email(request: Request) -> str | None:
     return user.get("email") if isinstance(user, dict) else None
 
 
-def _scan_response(scan: Scan, *, checks: tuple[CheckResult, ...] = ()) -> V2ScanResponse:
+def _scan_response(
+    scan: Scan,
+    *,
+    checks: tuple[CheckResult, ...] = (),
+    llm_usage: dict[str, Any] | None = None,
+) -> V2ScanResponse:
     return V2ScanResponse(
         id=scan.id,
         status=scan.status.value,
@@ -994,6 +1058,7 @@ def _scan_response(scan: Scan, *, checks: tuple[CheckResult, ...] = ()) -> V2Sca
         failure_summary=scan.failure_summary,
         coverage_status=_coverage_status(checks, scan),
         checks=[_check_response(check) for check in checks],
+        llm_usage=llm_usage or {},
         urls={
             "detail": f"/api/v2/scans/{scan.id}",
             "events": f"/api/v2/scans/{scan.id}/events",
@@ -1136,7 +1201,11 @@ def _observation_response(observation: Any) -> V2ObservationResponse:
     )
 
 
-def _investigation_response(investigation: Investigation) -> V2InvestigationResponse:
+def _investigation_response(
+    investigation: Investigation,
+    *,
+    model_calls: tuple[LLMCall, ...] = (),
+) -> V2InvestigationResponse:
     return V2InvestigationResponse(
         id=investigation.id,
         status=investigation.status.value,
@@ -1150,6 +1219,39 @@ def _investigation_response(investigation: Investigation) -> V2InvestigationResp
         error_summary=investigation.error_summary,
         created_at=investigation.created_at,
         completed_at=investigation.completed_at,
+        model_calls=[_llm_call_response(call) for call in model_calls],
+    )
+
+
+def _llm_call_response(call: LLMCall) -> V2LLMCallResponse:
+    return V2LLMCallResponse(
+        id=call.id,
+        purpose=call.purpose,
+        model=call.model,
+        prompt_tokens=call.prompt_tokens,
+        completion_tokens=call.completion_tokens,
+        cache_read_input_tokens=call.cache_read_input_tokens,
+        cache_creation_input_tokens=call.cache_creation_input_tokens,
+        total_tokens=call.total_tokens,
+        estimated_cost_usd=float(call.estimated_cost_usd) if call.estimated_cost_usd is not None else None,
+        cost_source=call.cost_source,
+        created_at=call.created_at,
+    )
+
+
+def _analysis_decision_response(decision: AnalysisDecision) -> V2AnalysisDecisionResponse:
+    return V2AnalysisDecisionResponse(
+        id=decision.id,
+        outcome=decision.outcome.value,
+        reason_code=decision.reason_code,
+        reason=decision.reason,
+        source=decision.source,
+        mode=decision.mode.value,
+        priority=decision.priority,
+        evidence_hash=decision.evidence_hash,
+        scan_id=decision.scan_id,
+        request_id=decision.request_id,
+        created_at=decision.created_at,
     )
 
 
@@ -1166,6 +1268,8 @@ def _investigation_request_response(request: InvestigationRequest) -> V2Investig
         scan_id=request.scan_id,
         build_id=request.build_id,
         requested_by=request.requested_by,
+        budget_kind=request.budget_kind.value,
+        reserved_tokens=request.reserved_tokens,
         attempt_count=request.attempt_count,
         next_attempt_at=request.next_attempt_at,
         investigation_id=request.investigation_id,

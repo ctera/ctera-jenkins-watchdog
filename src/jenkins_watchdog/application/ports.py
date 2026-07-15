@@ -6,7 +6,14 @@ from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Any, Protocol, Self
 
-from jenkins_watchdog.application.types import CursorPage, EnqueueScan, ScanEvent
+from jenkins_watchdog.application.types import (
+    CursorPage,
+    EnqueueScan,
+    ReasoningReply,
+    ScanEvent,
+    TriageBatchResult,
+    TriageCandidate,
+)
 from jenkins_watchdog.domain.jenkins import (
     JenkinsBuildEnrichment,
     JenkinsBuildHistoryPage,
@@ -16,12 +23,15 @@ from jenkins_watchdog.domain.jenkins import (
 )
 from jenkins_watchdog.domain.model import (
     Action,
+    AnalysisDecision,
     CheckResult,
     DeliveryAttempt,
     FindingObservation,
     Incident,
     Investigation,
+    InvestigationBudgetKind,
     InvestigationRequest,
+    LLMCall,
     Scan,
     ScanMode,
 )
@@ -106,11 +116,38 @@ class InvestigationRequestRepository(Protocol):
 
     async def enqueue(self, request: InvestigationRequest) -> InvestigationRequest: ...
 
+    async def lock_budget(self) -> None: ...
+
+    async def active_reserved_tokens(self, *, budget_kind: InvestigationBudgetKind | None = None) -> int: ...
+
     async def claim(self, *, owner: str, now: datetime, lease_seconds: int) -> InvestigationRequest | None: ...
 
     async def heartbeat(self, request_id: str, *, owner: str, now: datetime, lease_seconds: int) -> bool: ...
 
     async def save(self, request: InvestigationRequest) -> None: ...
+
+
+class AnalysisDecisionRepository(Protocol):
+    async def latest_for_incident(self, incident_id: str) -> AnalysisDecision | None: ...
+
+    async def for_incident(self, incident_id: str, *, limit: int = 50) -> tuple[AnalysisDecision, ...]: ...
+
+    async def save(self, decision: AnalysisDecision) -> None: ...
+
+
+class LLMCallRepository(Protocol):
+    async def save_many(self, calls: tuple[LLMCall, ...]) -> None: ...
+
+    async def for_investigation(self, investigation_id: str) -> tuple[LLMCall, ...]: ...
+
+    async def summary_since(
+        self,
+        since: datetime,
+        *,
+        budget_kind: InvestigationBudgetKind | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def summary_for_scan(self, scan_id: str) -> dict[str, Any]: ...
 
 
 class ActionRepository(Protocol):
@@ -241,6 +278,8 @@ class UnitOfWork(AbstractAsyncContextManager["UnitOfWork"], Protocol):
     incidents: IncidentRepository
     investigations: InvestigationRepository
     investigation_requests: InvestigationRequestRepository
+    analysis_decisions: AnalysisDecisionRepository
+    llm_calls: LLMCallRepository
     actions: ActionRepository
     delivery_attempts: DeliveryAttemptRepository
     events: EventRepository
@@ -277,7 +316,7 @@ class ReasoningProgress(Protocol):
 
 
 class ReasoningPort(Protocol):
-    async def triage(self, incident: Incident, observations: tuple[FindingObservation, ...]) -> dict[str, Any]: ...
+    async def triage_batch(self, candidates: tuple[TriageCandidate, ...]) -> TriageBatchResult: ...
 
     async def investigate(
         self,
@@ -297,7 +336,7 @@ class ReasoningPort(Protocol):
         context: dict[str, Any] | None = None,
         history: tuple[dict[str, str], ...] = (),
         on_progress: ReasoningProgress | None = None,
-    ) -> str: ...
+    ) -> ReasoningReply: ...
 
 
 class ActionDeliveryPort(Protocol):

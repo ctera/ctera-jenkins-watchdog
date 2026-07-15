@@ -24,7 +24,7 @@ import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
 import { useScanEvents } from "../hooks/useScanEvents";
 import { cancelScan, getScan, type Scan } from "../services/api";
-import { formatDate, titleCase } from "../utils/format";
+import { formatDate, formatTokens, formatUsd, titleCase } from "../utils/format";
 
 const STAGES = ["queued", "detecting", "findings_stored", "correlating", "reconciling", "investigating", "planning_actions", "completed"];
 
@@ -74,6 +74,7 @@ export default function ScanDetailPage() {
 
   const active = scan.status === "queued" || scan.status === "running";
   const progress = ((STAGES.indexOf(scan.stage) + 1) / STAGES.length) * 100;
+  const llmUsage = scan.llm_usage ?? {};
 
   return (
     <Box>
@@ -137,6 +138,19 @@ export default function ScanDetailPage() {
           </Stack>
         </Box>
       </Paper>
+
+      {Number(llmUsage.call_count ?? 0) > 0 && (
+        <Box sx={{ mb: 2.5, py: 1.5, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
+          <Typography variant="h6" sx={{ mb: 1 }}>Agent analysis cost</Typography>
+          <Stack direction={{ xs: "column", sm: "row" }} gap={{ xs: 1, sm: 4 }}>
+            <Meta label="Model calls" value={String(llmUsage.call_count ?? 0)} />
+            <Meta label="Input" value={formatTokens(llmUsage.prompt_tokens)} />
+            <Meta label="Output" value={formatTokens(llmUsage.completion_tokens)} />
+            <Meta label="Cache read" value={formatTokens(llmUsage.cache_read_input_tokens)} />
+            <Meta label="Estimated cost" value={formatUsd(llmUsage.estimated_cost_usd)} />
+          </Stack>
+        </Box>
+      )}
 
       <Typography variant="h6" sx={{ mb: 1.25 }}>Detector coverage</Typography>
       <TableContainer component={Paper} variant="outlined" sx={{ mb: 2.5 }}>

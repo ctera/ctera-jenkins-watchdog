@@ -5,26 +5,38 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from jenkins_watchdog.application.ports import ReasoningProgress
 from jenkins_watchdog.application.reasoning import evidence_digest
+from jenkins_watchdog.application.types import (
+    ReasoningReply,
+    TriageBatchResult,
+    TriageCandidate,
+    TriageRoute,
+)
 from jenkins_watchdog.domain.model import (
     Confidence,
     FindingObservation,
     Incident,
     Investigation,
     InvestigationStatus,
+    LLMCall,
     ScanMode,
 )
 from jenkins_watchdog.domain.serialization import to_primitive
 from jenkins_watchdog.infrastructure.tools import ReadOnlyToolRegistry, ToolExecution
 
 INPUT_VERSION = "v2"
-PROMPT_VERSION = "tool-agent-v2"
+PROMPT_VERSION = "tool-agent-v3"
 Completion = Callable[..., Awaitable[Any]]
+CostCalculator = Callable[..., Any]
 
 _PIPELINE_CATEGORIES = frozenset({"jenkins_failed_build", "jenkins_pipeline_pattern", "jenkins_build"})
 _LOG_TOOLS = frozenset({"jenkins_get_build_log", "jenkins_analyze_build_failure"})
@@ -52,6 +64,7 @@ class LiteLLMReasoningAdapter:
         deep_token_budget: int = 40_000,
         tools: ReadOnlyToolRegistry | None = None,
         completion: Completion | None = None,
+        cost_calculator: CostCalculator | None = None,
     ) -> None:
         self._models = (model, *fallback_models)
         self._api_key = api_key
@@ -64,10 +77,57 @@ class LiteLLMReasoningAdapter:
         self._deep_token_budget = max(0, deep_token_budget)
         self._tools = tools
         self._completion = completion
+        self._cost_calculator = cost_calculator
 
-    async def triage(self, incident: Incident, observations: tuple[FindingObservation, ...]) -> dict[str, Any]:
-        assessment, _, _ = await self._complete(incident, observations, concise=True)
-        return {key: assessment[key] for key in ("actionability", "classification", "priority", "confidence")}
+    async def triage_batch(self, candidates: tuple[TriageCandidate, ...]) -> TriageBatchResult:
+        if not candidates:
+            return TriageBatchResult(routes=())
+        calls: list[LLMCall] = []
+        payload = [
+            {
+                "incident_id": candidate.incident.id,
+                "title": candidate.incident.title,
+                "severity": candidate.incident.severity.value,
+                "source": to_primitive(candidate.incident.source),
+                "observations": [
+                    {
+                        "result": item.evidence.get("result"),
+                        "novelty": item.evidence.get("novelty"),
+                        "summary": item.summary,
+                        "category": item.category,
+                    }
+                    for item in candidate.observations[:8]
+                ],
+            }
+            for candidate in candidates
+        ]
+        response, _ = await self._call_with_fallback(
+            messages=[
+                {
+                    "role": "system",
+                    "content": _with_platform_prompt(
+                        "Route uncertain Jenkins incidents for investigation. Return exactly one JSON object. "
+                        "Select only incidents where live root-cause analysis is likely actionable; defer recovered, "
+                        "expected, low-value, or non-blocking UNSTABLE results."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Return decisions as an array with incident_id, action (investigate or defer), and a short "
+                        "reason. Provide one decision for every input. Input: "
+                        f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}"
+                    ),
+                },
+            ],
+            tools=None,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            purpose="triage",
+            model_calls=calls,
+        )
+        parsed = _extract_triage_routes(response.choices[0].message.content, candidates)
+        return TriageBatchResult(routes=parsed, model_calls=tuple(calls))
 
     async def investigate(
         self,
@@ -80,9 +140,17 @@ class LiteLLMReasoningAdapter:
     ) -> Investigation:
         created_at = datetime.now(timezone.utc)
         evidence_hash = evidence_digest(observations)
+        investigation_id = str(uuid4())
+        calls: list[LLMCall] = []
         try:
             if self._tools is None:
-                result, model, usage = await self._complete(incident, observations, concise=False)
+                result, model, usage = await self._complete(
+                    incident,
+                    observations,
+                    concise=False,
+                    purpose="investigation",
+                    model_calls=calls,
+                )
                 trace: list[dict[str, Any]] = []
                 raw_reasoning = ""
             else:
@@ -93,8 +161,14 @@ class LiteLLMReasoningAdapter:
                     on_progress=on_progress,
                     final_only=True,
                     initial_tool_calls=_required_pipeline_tool_calls(observations, context=context, mode=mode),
+                    purpose="investigation",
+                    model_calls=calls,
                 )
-                result, extraction_model, extraction_usage = await self._extract(raw_reasoning, mode=mode)
+                result, extraction_model, extraction_usage = await self._extract(
+                    raw_reasoning,
+                    mode=mode,
+                    model_calls=calls,
+                )
                 model = extraction_model or model
                 usage = _merge_usage(usage, extraction_usage)
                 result["tool_trace"] = trace
@@ -104,8 +178,9 @@ class LiteLLMReasoningAdapter:
                 _apply_quality_gates(result, observations, trace, context=context)
             confidence = Confidence(str(result["confidence"]).lower())
             result["deterministic_severity"] = incident.severity.value
+            associated_calls = _associate_calls(calls, incident_id=incident.id, investigation_id=investigation_id)
             return Investigation(
-                id=str(uuid4()),
+                id=investigation_id,
                 incident_id=incident.id,
                 occurrence_id=incident.current_occurrence.id,
                 status=InvestigationStatus.SUCCEEDED,
@@ -114,14 +189,16 @@ class LiteLLMReasoningAdapter:
                 prompt_version=PROMPT_VERSION,
                 model=model,
                 confidence=confidence,
-                usage=usage,
+                usage=_aggregate_calls(associated_calls) or usage,
                 result=result,
+                model_calls=associated_calls,
                 created_at=created_at,
                 completed_at=datetime.now(timezone.utc),
             )
         except Exception as exc:
+            associated_calls = _associate_calls(calls, incident_id=incident.id, investigation_id=investigation_id)
             return Investigation(
-                id=str(uuid4()),
+                id=investigation_id,
                 incident_id=incident.id,
                 occurrence_id=incident.current_occurrence.id,
                 status=InvestigationStatus.FAILED,
@@ -130,8 +207,9 @@ class LiteLLMReasoningAdapter:
                 prompt_version=PROMPT_VERSION,
                 model=self._models[0],
                 confidence=Confidence.LOW,
-                usage={},
+                usage=_aggregate_calls(associated_calls),
                 result={"deterministic_severity": incident.severity.value, "mode": mode.value},
+                model_calls=associated_calls,
                 error_summary=f"{type(exc).__name__}: {exc}"[:500],
                 created_at=created_at,
                 completed_at=datetime.now(timezone.utc),
@@ -145,7 +223,7 @@ class LiteLLMReasoningAdapter:
         context: dict[str, Any] | None = None,
         history: tuple[dict[str, str], ...] = (),
         on_progress: ReasoningProgress | None = None,
-    ) -> str:
+    ) -> ReasoningReply:
         if not self._api_key:
             raise RuntimeError("reasoning integration is disabled")
         operational_context = context or {}
@@ -160,9 +238,9 @@ class LiteLLMReasoningAdapter:
                     "classification": incident.classification or "unknown",
                 },
             }
+        calls: list[LLMCall] = []
         if self._tools is None:
-            response = await self._acompletion(
-                model=self._models[0],
+            response, _ = await self._call_with_fallback(
                 messages=[
                     {"role": "system", "content": _chat_system_prompt()},
                     {
@@ -173,15 +251,18 @@ class LiteLLMReasoningAdapter:
                         ),
                     },
                 ],
-                api_key=self._api_key,
                 temperature=0.0,
-                max_tokens=self._max_tokens,
-                num_retries=self._max_retries,
+                tools=None,
+                purpose="chat",
+                model_calls=calls,
             )
             content = response.choices[0].message.content
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("reasoning response was empty")
-            return content
+            return ReasoningReply(
+                content=content,
+                model_calls=_associate_calls(calls, incident_id=incident.id if incident else None),
+            )
 
         history_messages = [
             {"role": item["role"], "content": item["content"]}
@@ -203,10 +284,15 @@ class LiteLLMReasoningAdapter:
                 "separate verified facts from inference, state unavailable coverage, and complete the answer."
             ),
             final_only=True,
+            purpose="chat",
+            model_calls=calls,
         )
         if not content.strip():
             raise ValueError("reasoning response was empty")
-        return content
+        return ReasoningReply(
+            content=content,
+            model_calls=_associate_calls(calls, incident_id=incident.id if incident else None),
+        )
 
     async def _run_tool_loop(
         self,
@@ -219,6 +305,8 @@ class LiteLLMReasoningAdapter:
         summary_prompt: str | None = None,
         final_only: bool = False,
         initial_tool_calls: tuple[tuple[str, dict[str, Any]], ...] = (),
+        purpose: str,
+        model_calls: list[LLMCall],
     ) -> tuple[str, list[dict[str, Any]], str, dict[str, int]]:
         if not self._api_key:
             raise RuntimeError("reasoning integration is disabled")
@@ -271,14 +359,16 @@ class LiteLLMReasoningAdapter:
                 messages=messages,
                 tools=list(self._tools.definitions),
                 temperature=self._temperature,
+                purpose=purpose,
+                model_calls=model_calls,
             )
             total_usage = _merge_usage(total_usage, _usage(response))
             message = response.choices[0].message
             content = getattr(message, "content", None)
-            calls = _tool_calls(message)
-            if calls:
+            tool_calls = _tool_calls(message)
+            if tool_calls:
                 _compact_tool_messages(messages, mode=mode)
-            if calls and token_budget and total_usage.get("total_tokens", 0) >= token_budget:
+            if tool_calls and token_budget and total_usage.get("total_tokens", 0) >= token_budget:
                 if isinstance(content, str) and content.strip():
                     raw_parts.append(content.strip())
                 await _emit(
@@ -291,18 +381,18 @@ class LiteLLMReasoningAdapter:
                 )
                 break
             assistant: dict[str, Any] = {"role": "assistant", "content": content or None}
-            if calls:
-                assistant["tool_calls"] = calls
+            if tool_calls:
+                assistant["tool_calls"] = tool_calls
             messages.append(assistant)
             if isinstance(content, str) and content.strip():
                 raw_parts.append(content.strip())
                 await _emit(on_progress, {"type": "reasoning", "round": round_number, "content": content[:1000]})
-            if not calls:
+            if not tool_calls:
                 final_content = content.strip() if isinstance(content, str) else ""
                 output = final_content if final_only else "\n\n".join(raw_parts)
                 return output, trace, last_model, total_usage
 
-            for call in calls:
+            for call in tool_calls:
                 name = str(call["function"]["name"])
                 arguments = _tool_arguments(call["function"].get("arguments"))
                 await _emit(
@@ -337,6 +427,8 @@ class LiteLLMReasoningAdapter:
             messages=messages,
             tools=None,
             temperature=0.0,
+            purpose=purpose,
+            model_calls=model_calls,
         )
         total_usage = _merge_usage(total_usage, _usage(response))
         content = response.choices[0].message.content
@@ -345,7 +437,13 @@ class LiteLLMReasoningAdapter:
         output = content.strip() if final_only and isinstance(content, str) else "\n\n".join(raw_parts)
         return output, trace, last_model, total_usage
 
-    async def _extract(self, raw_reasoning: str, *, mode: ScanMode) -> tuple[dict[str, Any], str, dict[str, int]]:
+    async def _extract(
+        self,
+        raw_reasoning: str,
+        *,
+        mode: ScanMode,
+        model_calls: list[LLMCall],
+    ) -> tuple[dict[str, Any], str, dict[str, int]]:
         try:
             return _extract_assessment(raw_reasoning), "", {}
         except (ValueError, json.JSONDecodeError):
@@ -370,6 +468,8 @@ class LiteLLMReasoningAdapter:
                 tools=None,
                 temperature=0.0,
                 response_format={"type": "json_object"},
+                purpose="extraction",
+                model_calls=model_calls,
             )
             usage = _merge_usage(usage, _usage(response))
             try:
@@ -389,6 +489,8 @@ class LiteLLMReasoningAdapter:
         observations: tuple[FindingObservation, ...],
         *,
         concise: bool,
+        purpose: str,
+        model_calls: list[LLMCall],
     ) -> tuple[dict[str, Any], str, dict[str, int]]:
         if not self._api_key:
             raise RuntimeError("reasoning integration is disabled")
@@ -396,13 +498,18 @@ class LiteLLMReasoningAdapter:
             messages=[
                 {
                     "role": "system",
-                    "content": "Return exactly one JSON object. Triage is advisory and cannot change deterministic state.",
+                    "content": _with_platform_prompt(
+                        "Return exactly one JSON object. Agent conclusions are advisory and cannot change "
+                        "deterministic incident state."
+                    ),
                 },
                 {"role": "user", "content": _snapshot_prompt(incident, observations, concise=concise)},
             ],
             tools=None,
             temperature=self._temperature,
             response_format={"type": "json_object"},
+            purpose=purpose,
+            model_calls=model_calls,
         )
         return _extract_assessment(response.choices[0].message.content), model, _usage(response)
 
@@ -413,6 +520,8 @@ class LiteLLMReasoningAdapter:
         tools: list[dict[str, Any]] | None,
         temperature: float,
         response_format: dict[str, str] | None = None,
+        purpose: str,
+        model_calls: list[LLMCall],
     ) -> tuple[Any, str]:
         last_error: Exception | None = None
         for model in self._models:
@@ -429,10 +538,47 @@ class LiteLLMReasoningAdapter:
                     kwargs["tools"] = tools
                 if response_format:
                     kwargs["response_format"] = response_format
-                return await self._acompletion(**kwargs), model
+                response = await self._acompletion(**kwargs)
+                model_calls.append(self._record_call(response, model=model, purpose=purpose))
+                return response, model
             except Exception as exc:
                 last_error = exc
         raise RuntimeError("all reasoning models failed") from last_error
+
+    def _record_call(self, response: Any, *, model: str, purpose: str) -> LLMCall:
+        usage = _usage(response)
+        cost, source = self._estimated_cost(response, model=model)
+        return LLMCall(
+            id=str(uuid4()),
+            purpose=purpose,
+            model=model,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
+            cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            estimated_cost_usd=cost,
+            cost_source=source,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    def _estimated_cost(self, response: Any, *, model: str) -> tuple[Decimal | None, str]:
+        try:
+            calculator = self._cost_calculator
+            if calculator is None:
+                if getattr(response, "model", None) is None and not getattr(response, "_hidden_params", None):
+                    return None, "unavailable"
+                from litellm import completion_cost
+
+                calculator = completion_cost
+                self._cost_calculator = calculator
+            value = calculator(completion_response=response, model=model)
+            cost = Decimal(str(value))
+            if not cost.is_finite() or cost < 0:
+                raise InvalidOperation
+            return cost, "litellm"
+        except Exception:
+            return None, "unavailable"
 
     async def _acompletion(self, **kwargs: Any) -> Any:
         if self._completion is None:
@@ -449,7 +595,7 @@ def _investigation_system_prompt(mode: ScanMode) -> str:
         if mode is ScanMode.DEEP
         else "Regular mode: gather enough direct evidence to identify the mechanism without unnecessary calls."
     )
-    return (
+    return _with_platform_prompt(
         "You are a senior Jenkins and Kubernetes incident investigator. You have read-only tools. "
         "Actively gather current evidence; do not infer causality from names or labels. For pipeline failures, read "
         "the build log, inspect stages/tests/parameters, and compare job history before concluding. If an MR/PR is "
@@ -460,7 +606,7 @@ def _investigation_system_prompt(mode: ScanMode) -> str:
 
 
 def _chat_system_prompt() -> str:
-    return (
+    return _with_platform_prompt(
         "You are the live Jenkins Watchdog operator assistant with read-only Jenkins, Kubernetes, Prometheus, and "
         "SCM tools. Use tools whenever the question asks about current state or needs evidence not in the durable "
         "snapshot. Explain which evidence supports the answer, distinguish observations from prior agent assessments, "
@@ -564,6 +710,54 @@ def _extract_assessment(content: Any) -> dict[str, Any]:
     value.setdefault("fix_location", None)
     value.setdefault("fix_verification", None)
     return value
+
+
+def _extract_triage_routes(
+    content: Any,
+    candidates: tuple[TriageCandidate, ...],
+) -> tuple[TriageRoute, ...]:
+    expected = {candidate.incident.id for candidate in candidates}
+    try:
+        value = json.loads(str(content or ""))
+    except json.JSONDecodeError as exc:
+        raise ValueError("triage response was not valid JSON") from exc
+    decisions = value.get("decisions") if isinstance(value, dict) else None
+    if not isinstance(decisions, list):
+        raise ValueError("triage response is missing decisions")
+    routes: dict[str, TriageRoute] = {}
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        incident_id = str(item.get("incident_id") or "")
+        action = str(item.get("action") or "").lower()
+        if incident_id not in expected or action not in {"investigate", "defer"}:
+            continue
+        routes[incident_id] = TriageRoute(
+            incident_id=incident_id,
+            action=action,
+            reason=str(item.get("reason") or "No triage explanation was provided.")[:500],
+        )
+    return tuple(
+        routes.get(
+            candidate.incident.id,
+            TriageRoute(
+                incident_id=candidate.incident.id,
+                action="defer",
+                reason="Batch triage returned no valid decision for this incident.",
+            ),
+        )
+        for candidate in candidates
+    )
+
+
+@lru_cache(maxsize=1)
+def _platform_prompt() -> str:
+    path = Path(__file__).resolve().parents[3] / "prompts" / "system.md"
+    return path.read_text(encoding="utf-8").strip()
+
+
+def _with_platform_prompt(instruction: str) -> str:
+    return f"{_platform_prompt()}\n\n## Current task\n\n{instruction}"
 
 
 def _tool_calls(message: Any) -> list[dict[str, Any]]:
@@ -758,10 +952,22 @@ def _usage(response: Any) -> dict[str, int]:
     if usage is None:
         return {}
     result: dict[str, int] = {}
-    for target in ("prompt_tokens", "completion_tokens", "total_tokens"):
-        value = getattr(usage, target, None)
+    for target in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ):
+        value = _field(usage, target)
         if isinstance(value, int):
             result[target] = value
+    details = _field(usage, "prompt_tokens_details")
+    cached = _field(details, "cached_tokens") if details is not None else None
+    if isinstance(cached, int) and "cache_read_input_tokens" not in result:
+        result["cache_read_input_tokens"] = cached
+    if "total_tokens" not in result:
+        result["total_tokens"] = result.get("prompt_tokens", 0) + result.get("completion_tokens", 0)
     return result
 
 
@@ -770,3 +976,37 @@ def _merge_usage(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
     for key, value in right.items():
         result[key] = result.get(key, 0) + value
     return result
+
+
+def _field(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _associate_calls(
+    calls: list[LLMCall],
+    *,
+    incident_id: str | None,
+    investigation_id: str | None = None,
+) -> tuple[LLMCall, ...]:
+    return tuple(
+        replace(call, incident_id=incident_id, investigation_id=investigation_id)
+        for call in calls
+    )
+
+
+def _aggregate_calls(calls: tuple[LLMCall, ...]) -> dict[str, Any]:
+    if not calls:
+        return {}
+    costs = [call.estimated_cost_usd for call in calls if call.estimated_cost_usd is not None]
+    return {
+        "call_count": len(calls),
+        "prompt_tokens": sum(call.prompt_tokens for call in calls),
+        "completion_tokens": sum(call.completion_tokens for call in calls),
+        "cache_read_input_tokens": sum(call.cache_read_input_tokens for call in calls),
+        "cache_creation_input_tokens": sum(call.cache_creation_input_tokens for call in calls),
+        "total_tokens": sum(call.total_tokens for call in calls),
+        "estimated_cost_usd": float(sum(costs, Decimal("0"))) if costs else None,
+        "priced_call_count": len(costs),
+    }

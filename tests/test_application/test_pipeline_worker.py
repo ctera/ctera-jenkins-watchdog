@@ -14,6 +14,7 @@ from jenkins_watchdog.application.pipeline import ScanCancelled, ScanPipeline
 from jenkins_watchdog.application.types import EnqueueScan
 from jenkins_watchdog.application.worker import ScanWorker
 from jenkins_watchdog.domain.model import (
+    AnalysisDecisionOutcome,
     CheckResult,
     CheckStatus,
     FindingObservation,
@@ -152,6 +153,55 @@ class RecordingInvestigationQueue:
         )
 
 
+class RecordingSelectionService:
+    def __init__(self, *, queue=None, reasoning=None) -> None:
+        self.queue = queue
+        self.reasoning = reasoning
+
+    async def select(
+        self,
+        incident_ids,
+        *,
+        source,
+        mode,
+        limit,
+        scan_id=None,
+        priority_by_incident=None,
+        **kwargs,
+    ):
+        del kwargs
+        if isinstance(self.reasoning, FailingReasoning):
+            await self.reasoning.investigate_if_needed(incident_ids[0])
+        decisions = []
+        request_ids = []
+        for incident_id in incident_ids[:limit]:
+            request = None
+            if self.queue is not None:
+                request = await self.queue.enqueue_incident(
+                    incident_id,
+                    source=source,
+                    mode=mode,
+                    priority=(priority_by_incident or {}).get(incident_id, 0),
+                    scan_id=scan_id,
+                )
+            if request is not None:
+                request_ids.append(request.id)
+            decisions.append(
+                SimpleNamespace(
+                    incident_id=incident_id,
+                    outcome=(
+                        AnalysisDecisionOutcome.SELECTED
+                        if request is not None
+                        else AnalysisDecisionOutcome.REUSED
+                    ),
+                    request_id=request.id if request else None,
+                    reason_code="test_route",
+                    reason="test selection route",
+                )
+            )
+        return SimpleNamespace(decisions=tuple(decisions), request_ids=tuple(request_ids))
+
+
 class FailingPipeline:
     def __init__(self) -> None:
         self.calls = 0
@@ -197,11 +247,10 @@ def pipeline(
         uow_factory=factory_port,
         check_runner=runner,
         incident_service=IncidentService(factory_port),
-        reasoning_service=reasoning,
+        selection_service=RecordingSelectionService(queue=investigation_queue, reasoning=reasoning),
         automation_service=automation or NoAutomation(),
         events=EventService(factory_port, NullEventNotifier()),
         now=lambda: datetime.now(timezone.utc),
-        investigation_queue=investigation_queue,
     )
 
 

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from jenkins_watchdog.application.investigations import InvestigationQueueService, InvestigationWorker
 from jenkins_watchdog.application.reasoning import ReasoningService, evidence_digest
-from jenkins_watchdog.application.types import EnqueueScan
+from jenkins_watchdog.application.types import EnqueueScan, ReasoningReply, TriageBatchResult
 from jenkins_watchdog.domain.jenkins import JenkinsBuildEnrichment, JenkinsBuildSnapshot, JenkinsJobSnapshot
 from jenkins_watchdog.domain.model import (
     CheckResult,
@@ -70,9 +70,9 @@ async def seed_incident(factory: async_sessionmaker[AsyncSession]) -> Incident:
 
 
 class AgentReasoning:
-    async def triage(self, incident, observations):
-        del incident, observations
-        return {}
+    async def triage_batch(self, candidates):
+        del candidates
+        return TriageBatchResult(routes=())
 
     async def investigate(self, incident, observations, *, context=None, mode=ScanMode.REGULAR, on_progress=None):
         del context, mode
@@ -103,7 +103,7 @@ class AgentReasoning:
 
     async def chat(self, *, message, incident=None, context=None, history=(), on_progress=None):
         del incident, context, history, on_progress
-        return message
+        return ReasoningReply(content=message)
 
 
 class Automation:
@@ -134,7 +134,17 @@ class FailedInvestigationReasoning:
         self.incident = incident
         self.return_none = return_none
 
-    async def investigate_if_needed(self, incident_id, *, force, mode, on_progress):
+    async def investigate_if_needed(
+        self,
+        incident_id,
+        *,
+        force,
+        mode,
+        on_progress,
+        budget_kind,
+        scan_id,
+    ):
+        del budget_kind, scan_id
         assert incident_id == self.incident.id
         assert force is True and mode is ScanMode.DEEP
         await on_progress({"type": "tool_call", "tool": "jenkins_get_build_log"})

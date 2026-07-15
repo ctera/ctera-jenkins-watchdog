@@ -40,6 +40,8 @@ def test_schema_contains_expected_business_tables() -> None:
         "jenkins_build_edges",
         "jenkins_sync_state",
         "investigation_requests",
+        "llm_calls",
+        "analysis_decisions",
     }
 
 
