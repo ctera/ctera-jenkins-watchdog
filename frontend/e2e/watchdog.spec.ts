@@ -74,11 +74,15 @@ function action(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function installApi(page: Page) {
+async function installApi(
+  page: Page,
+  options: { buildOverrides?: Record<string, unknown>; incidentDetailOverrides?: Record<string, unknown> } = {},
+) {
   let currentScan = scan();
   let currentIncident = incident();
   let currentAction = action();
-  let currentBuild = jenkinsBuildDetail();
+  let currentBuild = jenkinsBuildDetail(options.buildOverrides);
+  let currentIncidentDetailOverrides = options.incidentDetailOverrides;
   const eventHeaders: string[] = [];
 
   await page.route("**/auth/me", (route) => route.fulfill({ json: { authenticated: true, email: "operator@example.com" } }));
@@ -134,11 +138,16 @@ async function installApi(page: Page) {
       return;
     }
     if (path === "/api/v2/incidents/incident-1/reinvestigate") {
-      await route.fulfill({ status: 202, json: investigationRequest({ source: "manual_incident", mode: "deep" }) });
+      const queued = investigationRequest({ source: "manual_incident", mode: "deep" });
+      currentIncidentDetailOverrides = {
+        ...currentIncidentDetailOverrides,
+        investigation_request: queued,
+      };
+      await route.fulfill({ status: 202, json: queued });
       return;
     }
     if (path === "/api/v2/incidents/incident-1") {
-      await route.fulfill({ json: incidentDetail(currentIncident, currentAction) });
+      await route.fulfill({ json: incidentDetail(currentIncident, currentAction, currentIncidentDetailOverrides) });
       return;
     }
     if (path === "/api/v2/actions/action-1/retry") {
@@ -188,7 +197,7 @@ async function installApi(page: Page) {
   return { eventHeaders: () => eventHeaders };
 }
 
-function investigation() {
+function investigation(overrides: Record<string, unknown> = {}) {
   return {
     id: "investigation-1",
     status: "succeeded",
@@ -207,6 +216,7 @@ function investigation() {
     error_summary: null,
     created_at: now,
     completed_at: now,
+    ...overrides,
   };
 }
 
@@ -278,13 +288,18 @@ function jenkinsBuildDetail(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function incidentDetail(currentIncident: ReturnType<typeof incident>, currentAction: ReturnType<typeof action>) {
+function incidentDetail(
+  currentIncident: ReturnType<typeof incident>,
+  currentAction: ReturnType<typeof action>,
+  overrides: Record<string, unknown> = {},
+) {
   return {
     incident: currentIncident,
     observations: [{ scan_id: "scan-active", check_name: "jenkins_failed_builds", stable_identity: "stable", rule_id: "jenkins.failed.v1", resource_id: "job/app", category: "jenkins_failed_build", severity: "critical", summary: "Compile failed", observed_at: now, identity_dimensions: { error_signature: "compiler-error" }, evidence: { build_number: 42 } }],
     occurrences: [{ id: "occurrence-1", number: 1, opened_at: now, last_observed_at: now, resolved_at: null, responsible_checks: ["jenkins_failed_builds"], observation_identities: ["stable"] }],
     latest_investigation: investigation(),
     actions: [currentAction],
+    ...overrides,
   };
 }
 
@@ -325,6 +340,56 @@ test("operator can queue a deep build analysis", async ({ page }, testInfo) => {
 
   expect(request.postDataJSON()).toEqual({ mode: "deep" });
   await expect(page.getByText("Agent analysis is queued.")).toBeVisible();
+});
+
+test("failed agent run is distinct from a root-cause assessment", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  const diagnostic = "TypeError: Object of type datetime is not JSON serializable";
+  const failedRequest = investigationRequest({
+    status: "failed",
+    attempt_count: 3,
+    next_attempt_at: null,
+    error_summary: diagnostic,
+    completed_at: now,
+  });
+  const failedInvestigation = investigation({
+    status: "failed",
+    confidence: "low",
+    result: { mode: "regular", deterministic_severity: "critical" },
+    error_summary: diagnostic,
+  });
+  await installApi(page, {
+    buildOverrides: {
+      incident_id: "incident-1",
+      investigation_request: failedRequest,
+      latest_investigation: failedInvestigation,
+    },
+    incidentDetailOverrides: {
+      investigation_request: failedRequest,
+      latest_investigation: failedInvestigation,
+    },
+  });
+
+  await page.goto("/jenkins/builds/build-1");
+  await expect(page.getByText(/Watchdog agent error, not the Jenkins failure/)).toBeVisible();
+  await expect(page.getByText(`Diagnostic: ${diagnostic}`)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry analysis" })).toBeVisible();
+  await expect(page.getByText("Root cause", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Not available", { exact: true })).toHaveCount(0);
+
+  await page.goto("/incidents/incident-1");
+  await expect(page.getByText("Not available", { exact: true })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Investigation" }).click();
+  await expect(page.getByText(/Watchdog agent error, not the incident root cause/)).toBeVisible();
+  await expect(page.getByText(`Diagnostic: ${diagnostic}`)).toBeVisible();
+  await expect(page.getByText("Root cause", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Not available", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Reinvestigate" }).click();
+  await expect(page.getByText("Agent analysis is queued.")).toBeVisible();
+  await expect(page.getByText(/Watchdog agent error/)).toHaveCount(0);
+  await expect(page.getByText(`Diagnostic: ${diagnostic}`)).toHaveCount(0);
+  await expect(page.getByText("Low confidence", { exact: true })).toHaveCount(0);
 });
 
 test("operator can browse, suppress, inspect retry, and chat", async ({ page }, testInfo) => {

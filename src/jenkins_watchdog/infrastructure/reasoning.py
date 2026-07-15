@@ -317,22 +317,38 @@ class LiteLLMReasoningAdapter:
             return _extract_assessment(raw_reasoning), "", {}
         except (ValueError, json.JSONDecodeError):
             pass
-        response, model = await self._call_with_fallback(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Extract only evidence supported by the agent trace. Return exactly one JSON object.",
-                },
-                {
-                    "role": "user",
-                    "content": f"{_extraction_prompt(mode)}\n\nAgent trace:\n{raw_reasoning[:24_000]}",
-                },
-            ],
-            tools=None,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        return _extract_assessment(response.choices[0].message.content), model, _usage(response)
+        usage: dict[str, int] = {}
+        feedback = ""
+        last_error: ValueError | json.JSONDecodeError | None = None
+        for _ in range(2):
+            response, model = await self._call_with_fallback(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Extract only evidence supported by the agent trace. Return exactly one JSON object.",
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{_extraction_prompt(mode)}{feedback}\n\nAgent trace:\n{raw_reasoning[:24_000]}"
+                        ),
+                    },
+                ],
+                tools=None,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            usage = _merge_usage(usage, _usage(response))
+            try:
+                return _extract_assessment(response.choices[0].message.content), model, usage
+            except (ValueError, json.JSONDecodeError) as exc:
+                last_error = exc
+                feedback = (
+                    "\nThe previous extraction was invalid. Ensure every required field is present, evidence is "
+                    "an array, and confidence is low, medium, or high."
+                )
+        assert last_error is not None
+        raise last_error
 
     async def _complete(
         self,
@@ -504,8 +520,14 @@ def _extract_assessment(content: Any) -> dict[str, Any]:
         raise ValueError("reasoning response is missing required fields")
     if not isinstance(value["evidence"], list):
         raise ValueError("reasoning evidence must be an array")
-    if str(value["confidence"]).lower() not in {item.value for item in Confidence}:
-        raise ValueError("reasoning confidence is invalid")
+    confidence = str(value["confidence"]).strip().lower()
+    if confidence not in {item.value for item in Confidence}:
+        value["confidence"] = Confidence.LOW.value
+        warning = "Agent returned an unrecognized confidence value; confidence was downgraded to low."
+        existing_gate = str(value.get("quality_gate") or "").strip()
+        value["quality_gate"] = f"{existing_gate} {warning}".strip()
+    else:
+        value["confidence"] = confidence
     value.setdefault("fix_location", None)
     value.setdefault("fix_verification", None)
     return value

@@ -214,6 +214,9 @@ function AgentAnalysis({
   const investigation = build.latest_investigation;
   const result = asRecord(investigation?.result);
   const trace = asRecords(result.tool_trace);
+  const hasAssessment = investigation?.status === "succeeded";
+  const analysisFailed = request?.status === "failed" || (!active && investigation?.status === "failed");
+  const failureDetail = request?.error_summary || investigation?.error_summary;
   const status = request?.status ?? (investigation?.status === "succeeded" ? "succeeded" : "not_started");
 
   return (
@@ -241,7 +244,7 @@ function AgentAnalysis({
             onClick={onAnalyze}
             disabled={active || working}
           >
-            {active ? "Analysis in progress" : investigation ? "Analyze again" : "Analyze build"}
+            {active ? "Analysis in progress" : analysisFailed ? "Retry analysis" : hasAssessment ? "Analyze again" : "Analyze build"}
           </Button>
           {build.incident_id && (
             <Button variant="outlined" onClick={() => onOpenIncident(build.incident_id!)}>Open incident</Button>
@@ -250,11 +253,15 @@ function AgentAnalysis({
 
         {request?.status === "queued" && <Alert severity="info" sx={{ mt: 2 }}>Agent analysis is queued.</Alert>}
         {request?.status === "running" && <Alert severity="info" sx={{ mt: 2 }}>Agent is gathering live evidence.</Alert>}
-        {request?.status === "failed" && <Alert severity="error" sx={{ mt: 2 }}>{request.error_summary || "Agent analysis failed."}</Alert>}
+        {analysisFailed && (
+          <Alert severity="error" sx={{ mt: 2 }}>
+            Agent analysis failed before producing a root-cause assessment. This is a Watchdog agent error, not the Jenkins failure. Retry the analysis.
+            {failureDetail && <Typography variant="caption" component="div" sx={{ mt: 0.5 }}>Diagnostic: {failureDetail}</Typography>}
+          </Alert>
+        )}
 
-        {investigation ? (
+        {hasAssessment ? (
           <Stack gap={2.25} sx={{ mt: 2.5 }}>
-            {investigation.error_summary && <Alert severity="error">{investigation.error_summary}</Alert>}
             {stringValue(result.quality_gate) && <Alert severity="warning">{stringValue(result.quality_gate)}</Alert>}
             <ReportField label="Root cause" value={result.root_cause} />
             <Divider />
@@ -293,10 +300,10 @@ function AgentAnalysis({
               </>
             )}
             <Typography variant="caption" color="text.secondary">
-              {investigation.model} · {formatDate(investigation.completed_at)}
+              {investigation!.model} · {formatDate(investigation!.completed_at)}
             </Typography>
           </Stack>
-        ) : !active && request?.status !== "failed" ? (
+        ) : !active && !analysisFailed ? (
           <Typography color="text.secondary" sx={{ mt: 2 }}>No agent assessment recorded.</Typography>
         ) : null}
       </Box>

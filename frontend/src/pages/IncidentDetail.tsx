@@ -241,7 +241,10 @@ export default function IncidentDetailPage() {
 function Overview({ detail }: { detail: IncidentDetail }) {
   const incident = detail.incident;
   const investigation = detail.latest_investigation;
-  const result = investigation?.result ?? {};
+  const hasAssessment = investigation?.status === "succeeded";
+  const result = hasAssessment ? investigation.result : {};
+  const requestActive = ["queued", "running"].includes(detail.investigation_request?.status ?? "");
+  const analysisFailed = detail.investigation_request?.status === "failed" || (!requestActive && investigation?.status === "failed");
   return (
     <Stack gap={3}>
       <Box>
@@ -250,7 +253,12 @@ function Overview({ detail }: { detail: IncidentDetail }) {
           This condition currently affects <strong>{incident.affected_resource_count}</strong> resource{incident.affected_resource_count === 1 ? "" : "s"}. It was first seen {formatDate(incident.first_seen_at ?? incident.created_at)} and last confirmed {formatDate(incident.last_seen_at ?? incident.updated_at)}.
         </Typography>
       </Box>
-      {textValue(result.quality_gate) && <Alert severity="warning">{textValue(result.quality_gate)}</Alert>}
+      {analysisFailed && (
+        <Alert severity="error">
+          Agent analysis failed before producing a root-cause assessment. This is a Watchdog agent error, not an explanation of the incident. Use Reinvestigate to retry it.
+        </Alert>
+      )}
+      {textValue(result.quality_gate, "") && <Alert severity="warning">{textValue(result.quality_gate, "")}</Alert>}
       <Divider />
       <Box>
         <Typography variant="h6" sx={{ mb: 1.25 }}>Likely cause</Typography>
@@ -334,22 +342,30 @@ function InvestigationView({ detail }: { detail: IncidentDetail }) {
   const investigation = detail.latest_investigation;
   const request = detail.investigation_request;
   if (!investigation && !request) return <Typography color="text.secondary">No investigation recorded</Typography>;
+  const hasAssessment = investigation?.status === "succeeded";
+  const requestActive = ["queued", "running"].includes(request?.status ?? "");
+  const analysisFailed = request?.status === "failed" || (!requestActive && investigation?.status === "failed");
+  const failureDetail = request?.error_summary || investigation?.error_summary;
   return (
     <Stack gap={2.5}>
       <Stack direction="row" gap={1} flexWrap="wrap">
         {request && <StatusChip value={request.status} />}
         {request && <Chip size="small" label={`${titleCase(request.mode)} mode`} variant="outlined" />}
         {investigation && !request && <StatusChip value={investigation.status} />}
-        {investigation?.confidence && <Chip size="small" label={`${titleCase(investigation.confidence)} confidence`} variant="outlined" />}
-        {investigation && <Chip size="small" label={investigation.model} variant="outlined" />}
+        {hasAssessment && investigation.confidence && <Chip size="small" label={`${titleCase(investigation.confidence)} confidence`} variant="outlined" />}
+        {hasAssessment && <Chip size="small" label={investigation.model} variant="outlined" />}
       </Stack>
       {request?.status === "queued" && <Alert severity="info">Agent analysis is queued.</Alert>}
       {request?.status === "running" && <Alert severity="info">Agent is gathering live evidence.</Alert>}
-      {request?.status === "failed" && <Alert severity="error">{request.error_summary || "Agent analysis failed."}</Alert>}
-      {investigation?.error_summary && <Alert severity="error">{investigation.error_summary}</Alert>}
-      {textValue(investigation?.result.quality_gate) && <Alert severity="warning">{textValue(investigation?.result.quality_gate)}</Alert>}
-      {!investigation && <Typography color="text.secondary">No completed agent assessment recorded.</Typography>}
-      {investigation && <>
+      {analysisFailed && (
+        <Alert severity="error">
+          Agent analysis failed before producing a root-cause assessment. This is a Watchdog agent error, not the incident root cause. Use Reinvestigate to retry it.
+          {failureDetail && <Typography variant="caption" component="div" sx={{ mt: 0.5 }}>Diagnostic: {failureDetail}</Typography>}
+        </Alert>
+      )}
+      {hasAssessment && textValue(investigation.result.quality_gate, "") && <Alert severity="warning">{textValue(investigation.result.quality_gate, "")}</Alert>}
+      {!hasAssessment && !analysisFailed && <Typography color="text.secondary">No completed agent assessment recorded.</Typography>}
+      {hasAssessment && <>
       <Box>
         <Typography variant="h6" sx={{ mb: 1 }}>Root cause</Typography>
         <MarkdownContent content={textValue(investigation.result.root_cause)} />

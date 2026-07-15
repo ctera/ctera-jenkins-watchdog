@@ -37,7 +37,7 @@ def observation() -> FindingObservation:
     )
 
 
-def test_structured_extraction_accepts_json_fence_and_rejects_malformed() -> None:
+def test_structured_extraction_accepts_json_fence_and_handles_malformed_values() -> None:
     payload = (
         '{"root_cause":"x","evidence":[],"impact":"y","suggested_fix":"z",'
         '"actionability":"actionable","classification":"infrastructure",'
@@ -46,8 +46,9 @@ def test_structured_extraction_accepts_json_fence_and_rejects_malformed() -> Non
     assert _extract_assessment(f"```json\n{payload}\n```")["confidence"] == "medium"
     with pytest.raises(ValueError):
         _extract_assessment('{"root_cause":"missing fields"}')
-    with pytest.raises(ValueError):
-        _extract_assessment(payload.replace('"medium"', '"certain"'))
+    conservative = _extract_assessment(payload.replace('"medium"', '"certain"'))
+    assert conservative["confidence"] == "low"
+    assert "unrecognized confidence" in conservative["quality_gate"]
 
 
 @pytest.mark.asyncio
@@ -152,6 +153,53 @@ async def test_reasoning_chat_rejects_empty_response() -> None:
 
     with pytest.raises(ValueError, match="empty"):
         await adapter.chat(message="why")
+
+
+@pytest.mark.asyncio
+async def test_investigation_repairs_malformed_extraction_without_repeating_tools() -> None:
+    payload = (
+        '{"root_cause":"compiler","evidence":["line"],"impact":"blocked",'
+        '"suggested_fix":"fix type","actionability":"actionable",'
+        '"classification":"merge_request","priority":"warning","confidence":"medium"}'
+    )
+    calls = 0
+
+    async def complete(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return response("Assessment follows in an unsupported format.")
+        if calls == 2:
+            return response("")
+        return response(payload)
+
+    item = observation()
+    target = Incident.open_new(
+        id="repair-incident",
+        correlation_rule_id="stable_finding",
+        correlation_key=item.stable_identity,
+        observation=item,
+        opened_at=NOW,
+    )
+    tools = Tools("jenkins_get_build_log")
+    adapter = LiteLLMReasoningAdapter(
+        model="model",
+        fallback_models=(),
+        api_key="key",
+        temperature=0.1,
+        max_tokens=100,
+        max_retries=0,
+        tools=tools,
+        completion=complete,
+    )
+
+    result = await adapter.investigate(target, (item,))
+
+    assert result.status is InvestigationStatus.SUCCEEDED
+    assert result.result["root_cause"] == "compiler"
+    assert result.usage["total_tokens"] == 36
+    assert calls == 3
+    assert tools.calls == 0
 
 
 class Tools:
