@@ -380,7 +380,7 @@ async def test_pipeline_investigation_requires_representative_log_before_model_c
 
 
 @pytest.mark.asyncio
-async def test_tool_loop_stops_calling_tools_at_per_investigation_token_budget() -> None:
+async def test_tool_loop_refuses_a_model_call_when_the_prompt_cannot_fit_the_token_limit() -> None:
     payload = (
         '{"root_cause":"bounded evidence","evidence":[],"impact":"unknown",'
         '"suggested_fix":"inspect manually","actionability":"unknown",'
@@ -428,10 +428,68 @@ async def test_tool_loop_stops_calling_tools_at_per_investigation_token_budget()
 
     result = await adapter.investigate(incident, (item,))
 
-    assert result.status is InvestigationStatus.SUCCEEDED
+    assert result.status is InvestigationStatus.FAILED
     assert tools.calls == 0
-    assert completions == 2
-    assert result.usage["total_tokens"] == 20
+    assert completions == 0
+    assert "token limit reached" in (result.error_summary or "")
+    assert result.usage == {}
+
+
+@pytest.mark.asyncio
+async def test_tool_loop_reserves_a_final_answer_within_the_investigation_token_limit() -> None:
+    payload = (
+        '{"root_cause":"bounded evidence","evidence":[],"impact":"unknown",'
+        '"suggested_fix":"inspect manually","actionability":"unknown",'
+        '"classification":"unknown","priority":"warning","confidence":"medium"}'
+    )
+    max_token_requests = []
+
+    async def complete(**kwargs):
+        max_token_requests.append(kwargs["max_tokens"])
+        if kwargs.get("tools"):
+            return response(
+                "",
+                total_tokens=100,
+                tool_calls=[
+                    {
+                        "id": "bounded-call",
+                        "function": {"name": "jenkins_get_build_log", "arguments": "{}"},
+                    }
+                ],
+            )
+        return response(payload, total_tokens=80)
+
+    item = replace(observation(), category="jenkins_build")
+    incident = Incident.open_new(
+        id="bounded-budget-incident",
+        correlation_rule_id="jenkins_failure",
+        correlation_key="bounded-signature",
+        observation=item,
+        opened_at=NOW,
+    )
+    tools = Tools("jenkins_get_build_log")
+    adapter = LiteLLMReasoningAdapter(
+        model="model",
+        fallback_models=(),
+        api_key="key",
+        temperature=0.1,
+        max_tokens=200,
+        max_retries=0,
+        token_budget=300,
+        deep_token_budget=300,
+        tools=tools,
+        completion=complete,
+        token_counter=lambda **_: 10,
+    )
+
+    result = await adapter.investigate(incident, (item,))
+
+    assert result.status is InvestigationStatus.SUCCEEDED
+    assert tools.calls == 1
+    assert len(max_token_requests) == 2
+    assert all(value < 200 for value in max_token_requests)
+    assert result.usage["total_tokens"] == 180
+    assert result.usage["total_tokens"] <= 300
 
 
 def test_tool_history_compaction_and_failed_test_report_cap_confidence() -> None:

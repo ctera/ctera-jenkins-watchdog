@@ -29,12 +29,27 @@ logger = logging.getLogger(__name__)
 
 
 class InvestigationBudgetExceeded(RuntimeError):
-    def __init__(self, *, budget_kind: InvestigationBudgetKind, limit: int, projected: int) -> None:
+    def __init__(
+        self,
+        *,
+        budget_kind: InvestigationBudgetKind,
+        limit: int,
+        projected: int,
+        spent: int,
+        active_reserved: int,
+        requested: int,
+        reset_at: datetime,
+    ) -> None:
         self.budget_kind = budget_kind
         self.limit = limit
         self.projected = projected
+        self.spent = spent
+        self.active_reserved = active_reserved
+        self.requested = requested
+        self.reset_at = reset_at
         super().__init__(
-            f"{budget_kind.value} LLM token budget exhausted: projected {projected:,} exceeds {limit:,}"
+            f"{budget_kind.value} daily LLM token budget exhausted: "
+            f"{projected:,} used or reserved exceeds {limit:,}; resets at {reset_at.isoformat()}"
         )
 
 
@@ -161,6 +176,10 @@ class InvestigationQueueService:
                 budget_kind=budget_kind,
                 limit=ceiling,
                 projected=projected,
+                spent=int(spent.get("total_tokens") or 0),
+                active_reserved=active_reserved,
+                requested=reserved_tokens,
+                reset_at=day_start + timedelta(days=1),
             )
 
     async def latest_for_incident(self, incident_id: str) -> InvestigationRequest | None:
@@ -206,6 +225,36 @@ class InvestigationWorker:
             await uow.commit()
         if request is None:
             return None
+
+        try:
+            await self._queue.ensure_budget_available(
+                budget_kind=request.budget_kind,
+                reserved_tokens=0,
+            )
+        except InvestigationBudgetExceeded as exc:
+            deferred = request.defer_for_budget(
+                str(exc),
+                now=self._now(),
+                retry_at=exc.reset_at,
+            )
+            async with self._uow_factory() as uow:
+                await uow.investigation_requests.save(deferred)
+                await uow.commit()
+            if request.scan_id:
+                await self._events.append(
+                    request.scan_id,
+                    "investigation_budget_deferred",
+                    {
+                        "incident_id": request.incident_id,
+                        "request_id": request.id,
+                        "budget_kind": request.budget_kind.value,
+                        "limit_tokens": exc.limit,
+                        "projected_tokens": exc.projected,
+                        "retry_at": exc.reset_at.isoformat(),
+                    },
+                    now=self._now(),
+                )
+            return deferred
 
         heartbeat = asyncio.create_task(self._heartbeat(request.id))
 

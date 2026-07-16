@@ -2886,6 +2886,51 @@
             "title": "Budget Deferred Count",
             "type": "integer"
           },
+          "budget_limit_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Limit Tokens"
+          },
+          "budget_projected_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Projected Tokens"
+          },
+          "budget_reset_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Reset At"
+          },
+          "budget_spent_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Spent Tokens"
+          },
           "candidate_count": {
             "default": 0,
             "title": "Candidate Count",
@@ -2941,7 +2986,8 @@
               "queued",
               "running",
               "complete",
-              "complete_with_issues"
+              "complete_with_issues",
+              "budget_deferred"
             ],
             "title": "Status",
             "type": "string"

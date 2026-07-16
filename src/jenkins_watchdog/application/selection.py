@@ -47,6 +47,7 @@ class _Route:
     reason_code: str
     reason: str
     llm_call_id: str | None = None
+    metadata: Mapping[str, Any] | None = None
 
 
 class AnalysisSelectionService:
@@ -148,6 +149,7 @@ class AnalysisSelectionService:
                         outcome=AnalysisDecisionOutcome.BUDGET_DEFERRED,
                         reason_code="daily_budget_exhausted",
                         reason=str(exc),
+                        metadata=_budget_metadata(exc),
                     )
                 )
                 continue
@@ -311,6 +313,7 @@ class AnalysisSelectionService:
                     AnalysisDecisionOutcome.BUDGET_DEFERRED,
                     "daily_budget_exhausted",
                     str(exc),
+                    metadata=_budget_metadata(exc),
                 )
                 for candidate in batch
             ]
@@ -376,7 +379,7 @@ class AnalysisSelectionService:
             scan_id=scan_id,
             llm_call_id=route.llm_call_id,
             created_at=self._now(),
-            metadata={"build_count": len(route.candidate.builds)},
+            metadata={"build_count": len(route.candidate.builds), **dict(route.metadata or {})},
         )
 
 
@@ -387,8 +390,21 @@ def _route(
     reason: str,
     *,
     llm_call_id: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> _Route:
-    return _Route(candidate, outcome, reason_code, reason, llm_call_id)
+    return _Route(candidate, outcome, reason_code, reason, llm_call_id, metadata)
+
+
+def _budget_metadata(exc: InvestigationBudgetExceeded) -> dict[str, Any]:
+    return {
+        "budget_kind": exc.budget_kind.value,
+        "budget_limit_tokens": exc.limit,
+        "budget_spent_tokens": exc.spent,
+        "budget_active_reserved_tokens": exc.active_reserved,
+        "budget_requested_tokens": exc.requested,
+        "budget_projected_tokens": exc.projected,
+        "budget_reset_at": exc.reset_at.isoformat(),
+    }
 
 
 def _severity_rank(severity: Severity) -> int:

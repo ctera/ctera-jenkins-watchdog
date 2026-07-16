@@ -622,6 +622,20 @@ class InvestigationRequest:
             completed_at=None if retry_at is not None else now,
         )
 
+    def defer_for_budget(self, summary: str, *, now: datetime, retry_at: datetime) -> "InvestigationRequest":
+        """Return a claimed request to the queue without consuming an execution attempt."""
+        return replace(
+            self,
+            status=InvestigationRequestStatus.QUEUED,
+            lease_owner=None,
+            lease_expires_at=None,
+            attempt_count=max(0, self.attempt_count - 1),
+            next_attempt_at=retry_at,
+            error_summary=summary[:500],
+            updated_at=now,
+            completed_at=None,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class Action:

@@ -355,6 +355,51 @@ async def test_terminal_scan_reports_linked_agent_analysis_until_request_finishe
 
 
 @pytest.mark.asyncio
+async def test_terminal_scan_reports_all_budget_deferred_as_a_distinct_analysis_outcome(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    incident, _, _ = await seed_incident(postgres_session_factory)
+    scan_id = await seed_terminal_scan(postgres_session_factory)
+    reset_at = NOW + timedelta(hours=12)
+    decision = AnalysisDecision(
+        id=str(uuid.uuid4()),
+        incident_id=incident.id,
+        occurrence_id=incident.current_occurrence.id,
+        outcome=AnalysisDecisionOutcome.BUDGET_DEFERRED,
+        reason_code="daily_budget_exhausted",
+        reason="automatic daily LLM token budget exhausted",
+        source="scan",
+        mode=ScanMode.REGULAR,
+        priority=100,
+        evidence_hash="analysis-evidence",
+        scan_id=scan_id,
+        created_at=NOW,
+        metadata={
+            "budget_limit_tokens": 300_000,
+            "budget_spent_tokens": 989_116,
+            "budget_projected_tokens": 1_013_116,
+        },
+    )
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        await uow.analysis_decisions.save(decision)
+        await uow.commit()
+
+    app, _ = make_app(postgres_session_factory)
+    async with client(app) as api:
+        response = await api.get(f"/api/v2/scans/{scan_id}")
+
+    analysis = response.json()["analysis"]
+    assert analysis["status"] == "budget_deferred"
+    assert analysis["candidate_count"] == 1
+    assert analysis["selected_count"] == 0
+    assert analysis["budget_deferred_count"] == 1
+    assert analysis["budget_reset_at"] == reset_at.isoformat().replace("+00:00", "Z")
+    assert analysis["budget_limit_tokens"] == 300_000
+    assert analysis["budget_spent_tokens"] == 989_116
+    assert analysis["budget_projected_tokens"] == 1_013_116
+
+
+@pytest.mark.asyncio
 async def test_sse_replays_after_last_event_id_for_multiple_viewers(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

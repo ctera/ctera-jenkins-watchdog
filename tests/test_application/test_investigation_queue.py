@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,6 +25,7 @@ from jenkins_watchdog.domain.model import (
     Investigation,
     InvestigationRequestStatus,
     InvestigationStatus,
+    LLMCall,
     ScanMode,
     Severity,
 )
@@ -375,6 +377,60 @@ async def test_worker_exception_requeues_with_backoff_then_has_no_immediate_work
     stop = __import__("asyncio").Event()
     stop.set()
     await worker.run_forever(stop)
+
+
+@pytest.mark.asyncio
+async def test_worker_rechecks_daily_budget_and_defers_without_consuming_an_attempt(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    incident = await seed_incident(postgres_session_factory)
+    factory = uow_factory(postgres_session_factory)
+    queue = InvestigationQueueService(
+        uow_factory=factory,
+        now=lambda: NOW,
+        token_budget=40,
+        daily_token_budget=100,
+        manual_token_reserve=0,
+    )
+    request = await queue.enqueue_incident(incident.id, source="automatic", force=True)
+    assert request is not None
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        await uow.llm_calls.save_many(
+            (
+                LLMCall(
+                    id=str(uuid.uuid4()),
+                    purpose="investigation",
+                    model="test-model",
+                    prompt_tokens=60,
+                    completion_tokens=10,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                    total_tokens=70,
+                    created_at=NOW,
+                ),
+            )
+        )
+        await uow.commit()
+
+    worker = InvestigationWorker(
+        owner="worker-budget",
+        uow_factory=factory,
+        reasoning=SimpleNamespace(),  # type: ignore[arg-type]
+        queue=queue,
+        automation=Automation(),  # type: ignore[arg-type]
+        events=Events(),  # type: ignore[arg-type]
+        now=lambda: NOW,
+        lease_seconds=60,
+        heartbeat_seconds=5,
+    )
+
+    deferred = await worker.run_once()
+
+    assert deferred is not None
+    assert deferred.status is InvestigationRequestStatus.QUEUED
+    assert deferred.attempt_count == 0
+    assert deferred.next_attempt_at == datetime(2026, 7, 16, tzinfo=timezone.utc)
+    assert "daily LLM token budget exhausted" in (deferred.error_summary or "")
 
 
 @pytest.mark.asyncio

@@ -45,6 +45,7 @@ ScanAnalysisStatus = Literal[
     "running",
     "complete",
     "complete_with_issues",
+    "budget_deferred",
 ]
 
 
@@ -80,6 +81,10 @@ class V2ScanAnalysisResponse(BaseModel):
     manual_only_count: int = 0
     budget_deferred_count: int = 0
     active_count: int = 0
+    budget_reset_at: datetime | None = None
+    budget_limit_tokens: int | None = None
+    budget_spent_tokens: int | None = None
+    budget_projected_tokens: int | None = None
     items: list[V2ScanAnalysisItemResponse] = Field(default_factory=list)
 
 
@@ -1186,6 +1191,7 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
         item.outcome is AnalysisDecisionOutcome.BUDGET_DEFERRED for item in decisions
     )
     active_count = queued_count + running_count
+    all_budget_deferred = bool(decisions) and budget_deferred_count == len(decisions) and not requests
 
     status: ScanAnalysisStatus
     if running_count:
@@ -1198,6 +1204,8 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
         "completed",
     }:
         status = "selecting"
+    elif scan.terminal and all_budget_deferred:
+        status = "budget_deferred"
     elif scan.terminal and (failed_count or budget_deferred_count or scan.status.value != "succeeded"):
         status = "complete_with_issues"
     elif scan.terminal:
@@ -1241,8 +1249,44 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
         manual_only_count=manual_only_count,
         budget_deferred_count=budget_deferred_count,
         active_count=active_count,
+        budget_reset_at=_decision_budget_reset_at(decisions),
+        budget_limit_tokens=_decision_budget_int(decisions, "budget_limit_tokens"),
+        budget_spent_tokens=_decision_budget_int(decisions, "budget_spent_tokens"),
+        budget_projected_tokens=_decision_budget_int(decisions, "budget_projected_tokens"),
         items=items,
     )
+
+
+def _decision_budget_reset_at(decisions: tuple[AnalysisDecision, ...]) -> datetime | None:
+    values = []
+    for decision in decisions:
+        value = decision.metadata.get("budget_reset_at")
+        if isinstance(value, datetime):
+            values.append(value)
+            continue
+        if isinstance(value, str):
+            try:
+                values.append(datetime.fromisoformat(value.replace("Z", "+00:00")))
+            except ValueError:
+                continue
+    if values:
+        return min(values)
+    legacy_budget_decisions = [
+        decision for decision in decisions if decision.reason_code == "daily_budget_exhausted"
+    ]
+    if not legacy_budget_decisions:
+        return None
+    earliest = min(decision.created_at for decision in legacy_budget_decisions).astimezone(timezone.utc)
+    return datetime.combine(earliest.date(), datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1)
+
+
+def _decision_budget_int(decisions: tuple[AnalysisDecision, ...], key: str) -> int | None:
+    values = [
+        int(value)
+        for decision in decisions
+        if isinstance((value := decision.metadata.get(key)), int)
+    ]
+    return max(values) if values else None
 
 
 def _scan_response(

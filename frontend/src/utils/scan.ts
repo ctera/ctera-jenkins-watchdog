@@ -27,6 +27,7 @@ export function scanWorkflowStatus(scan: Scan): ScanWorkflowStatus {
     scan.status === "failed"
     || scan.status === "cancelled"
     || scan.analysis?.status === "complete_with_issues"
+    || scan.analysis?.status === "budget_deferred"
   ) {
     return { value: "complete_with_issues", label: "Complete with issues" };
   }

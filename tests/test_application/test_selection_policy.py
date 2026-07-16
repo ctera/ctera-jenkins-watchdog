@@ -220,6 +220,10 @@ async def test_daily_budget_protects_manual_reserve_and_records_reservations(
     with pytest.raises(InvestigationBudgetExceeded) as error:
         await queue.enqueue_incident(incidents[1].id, source="jenkins_monitor")
     assert error.value.limit == 20_000
+    assert error.value.spent == 0
+    assert error.value.active_reserved == 12_000
+    assert error.value.requested == 12_000
+    assert error.value.reset_at == datetime(2026, 7, 16, tzinfo=timezone.utc)
 
     manual = await queue.enqueue_incident(
         incidents[2].id,

@@ -255,6 +255,7 @@ def build_container(settings: Settings) -> Container:
         max_deep_tool_rounds=settings.max_deep_tool_rounds,
         token_budget=settings.llm_scan_token_budget,
         deep_token_budget=settings.llm_deep_scan_token_budget,
+        triage_token_budget=settings.llm_triage_token_budget,
         tools=tool_registry,
     )
     reasoning_service = ReasoningService(uow_factory=uow_factory, reasoning=reasoning_adapter, now=_utcnow)
@@ -264,7 +265,7 @@ def build_container(settings: Settings) -> Container:
         queue=investigation_queue,
         now=_utcnow,
         triage_batch_size=settings.llm_triage_batch_size,
-        triage_token_reservation=settings.llm_max_tokens,
+        triage_token_reservation=settings.llm_triage_token_budget,
         automatic_enabled=settings.automatic_investigations_enabled,
     )
     source_profiles = load_source_profiles(settings.jenkins_source_profiles_path)

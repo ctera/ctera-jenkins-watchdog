@@ -1506,6 +1506,14 @@ export interface components {
              * @default 0
              */
             budget_deferred_count: number;
+            /** Budget Limit Tokens */
+            budget_limit_tokens?: number | null;
+            /** Budget Projected Tokens */
+            budget_projected_tokens?: number | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Budget Spent Tokens */
+            budget_spent_tokens?: number | null;
             /**
              * Candidate Count
              * @default 0
@@ -1553,7 +1561,7 @@ export interface components {
              * @default not_started
              * @enum {string}
              */
-            status: "not_started" | "selecting" | "queued" | "running" | "complete" | "complete_with_issues";
+            status: "not_started" | "selecting" | "queued" | "running" | "complete" | "complete_with_issues" | "budget_deferred";
             /**
              * Succeeded Count
              * @default 0

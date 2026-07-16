@@ -16,6 +16,10 @@ function scanAnalysis(overrides: Record<string, unknown> = {}) {
     manual_only_count: 0,
     budget_deferred_count: 0,
     active_count: 0,
+    budget_reset_at: null,
+    budget_limit_tokens: null,
+    budget_spent_tokens: null,
+    budget_projected_tokens: null,
     items: [],
     ...overrides,
   };
@@ -127,9 +131,13 @@ function action(overrides: Record<string, unknown> = {}) {
 
 async function installApi(
   page: Page,
-  options: { buildOverrides?: Record<string, unknown>; incidentDetailOverrides?: Record<string, unknown> } = {},
+  options: {
+    buildOverrides?: Record<string, unknown>;
+    incidentDetailOverrides?: Record<string, unknown>;
+    scanOverrides?: Record<string, unknown>;
+  } = {},
 ) {
-  let currentScan = scan();
+  let currentScan = scan(options.scanOverrides);
   let currentIncident = incident();
   let currentAction = action();
   let currentBuild = jenkinsBuildDetail(options.buildOverrides);
@@ -145,6 +153,10 @@ async function installApi(
     if (path.endsWith("/events")) {
       const lastEventId = request.headers()["last-event-id"] ?? "";
       eventHeaders.push(lastEventId);
+      if (currentScan.analysis.status === "budget_deferred") {
+        await route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+        return;
+      }
       const sequence = Number(lastEventId || 0) + 1;
       if (sequence === 2) {
         currentScan = scan({
@@ -431,9 +443,54 @@ test("scan detail replays and reconnects with Last-Event-ID", async ({ page }, t
   await expect.poll(() => api.eventHeaders().find(Boolean), { timeout: 20_000 }).toBe("1");
   await expect(page.getByText("Analyzing", { exact: true })).toBeVisible();
   await expect(page.getByText("Complete", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("1 incident candidates evaluated; 1 selected for agent investigation.")).toBeVisible();
+  await expect(page.getByText("1 incident candidates considered; 1 admitted for agent investigation.")).toBeVisible();
   await expect(page.getByText("$0.0040")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("scan-detail.png"), fullPage: true });
+});
+
+test("scan detail explains when every candidate is budget deferred", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  const items = Array.from({ length: 8 }, (_, index) => ({
+    incident_id: `budget-incident-${index + 1}`,
+    incident_title: `Budget deferred incident ${index + 1}`,
+    severity: "critical",
+    outcome: "budget_deferred",
+    reason_code: "daily_budget_exhausted",
+    reason: "Automatic daily LLM token budget exhausted.",
+    request_id: null,
+    request_status: null,
+    investigation_id: null,
+    error_summary: null,
+    completed_at: null,
+  }));
+  await installApi(page, {
+    scanOverrides: {
+      id: "scan-budget",
+      status: "succeeded",
+      stage: "completed",
+      completed_at: now,
+      llm_usage: { call_count: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, estimated_cost_usd: 0 },
+      analysis: scanAnalysis({
+        status: "budget_deferred",
+        candidate_count: 8,
+        budget_deferred_count: 8,
+        budget_reset_at: "2026-07-17T00:00:00Z",
+        budget_limit_tokens: 300_000,
+        budget_spent_tokens: 989_116,
+        budget_projected_tokens: 1_013_116,
+        items,
+      }),
+    },
+  });
+
+  await page.goto("/scans/scan-budget");
+
+  await expect(page.getByText("Agent analysis was skipped: daily automatic token budget exhausted.")).toBeVisible();
+  await expect(page.getByText("8 incident candidates considered; all were deferred before agent investigation.")).toBeVisible();
+  await expect(page.getByText(/This scan used 0 model calls and \$0\.0000\./)).toBeVisible();
+  await expect(page.getByText("Not run · 8 budget deferred")).toBeVisible();
+  await expect(page.getByText("Budget deferred", { exact: true }).first()).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("scan-budget-deferred.png"), fullPage: true });
 });
 
 test("operator can enqueue a regular scan", async ({ page }, testInfo) => {

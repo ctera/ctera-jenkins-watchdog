@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
+from math import ceil
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
@@ -37,6 +38,7 @@ INPUT_VERSION = "v2"
 PROMPT_VERSION = "tool-agent-v3"
 Completion = Callable[..., Awaitable[Any]]
 CostCalculator = Callable[..., Any]
+TokenCounter = Callable[..., int]
 
 _PIPELINE_CATEGORIES = frozenset({"jenkins_failed_build", "jenkins_pipeline_pattern", "jenkins_build"})
 _LOG_TOOLS = frozenset({"jenkins_get_build_log", "jenkins_analyze_build_failure"})
@@ -46,6 +48,39 @@ _TEST_FAILURE_CLAIM = re.compile(
     r"\btest(?:ing)?[_ -]?failure\b)",
     re.IGNORECASE,
 )
+_MIN_COMPLETION_TOKENS = 64
+
+
+class ReasoningTokenBudgetExceeded(RuntimeError):
+    def __init__(self, *, limit: int, used: int, required: int) -> None:
+        self.limit = limit
+        self.used = used
+        self.required = required
+        super().__init__(
+            f"investigation token limit reached: {used:,} used and at least {required:,} more required "
+            f"against a {limit:,} token limit"
+        )
+
+
+@dataclass(slots=True)
+class _TokenAllowance:
+    limit: int
+    used: int = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+    def consume(self, tokens: int) -> None:
+        tokens = max(0, tokens)
+        projected = self.used + tokens
+        self.used = projected
+        if projected > self.limit:
+            raise ReasoningTokenBudgetExceeded(
+                limit=self.limit,
+                used=projected,
+                required=0,
+            )
 
 
 class LiteLLMReasoningAdapter:
@@ -62,9 +97,11 @@ class LiteLLMReasoningAdapter:
         max_deep_tool_rounds: int = 25,
         token_budget: int = 24_000,
         deep_token_budget: int = 40_000,
+        triage_token_budget: int = 8_000,
         tools: ReadOnlyToolRegistry | None = None,
         completion: Completion | None = None,
         cost_calculator: CostCalculator | None = None,
+        token_counter: TokenCounter | None = None,
     ) -> None:
         self._models = (model, *fallback_models)
         self._api_key = api_key
@@ -75,14 +112,17 @@ class LiteLLMReasoningAdapter:
         self._max_deep_tool_rounds = max_deep_tool_rounds
         self._token_budget = max(0, token_budget)
         self._deep_token_budget = max(0, deep_token_budget)
+        self._triage_token_budget = max(0, triage_token_budget)
         self._tools = tools
         self._completion = completion
         self._cost_calculator = cost_calculator
+        self._token_counter = token_counter
 
     async def triage_batch(self, candidates: tuple[TriageCandidate, ...]) -> TriageBatchResult:
         if not candidates:
             return TriageBatchResult(routes=())
         calls: list[LLMCall] = []
+        allowance = _TokenAllowance(self._triage_token_budget)
         payload = [
             {
                 "incident_id": candidate.incident.id,
@@ -125,6 +165,7 @@ class LiteLLMReasoningAdapter:
             response_format={"type": "json_object"},
             purpose="triage",
             model_calls=calls,
+            allowance=allowance,
         )
         parsed = _extract_triage_routes(response.choices[0].message.content, candidates)
         return TriageBatchResult(routes=parsed, model_calls=tuple(calls))
@@ -142,6 +183,9 @@ class LiteLLMReasoningAdapter:
         evidence_hash = evidence_digest(observations)
         investigation_id = str(uuid4())
         calls: list[LLMCall] = []
+        allowance = _TokenAllowance(
+            self._deep_token_budget if mode is ScanMode.DEEP else self._token_budget
+        )
         try:
             if self._tools is None:
                 result, model, usage = await self._complete(
@@ -150,6 +194,7 @@ class LiteLLMReasoningAdapter:
                     concise=False,
                     purpose="investigation",
                     model_calls=calls,
+                    allowance=allowance,
                 )
                 trace: list[dict[str, Any]] = []
                 raw_reasoning = ""
@@ -163,11 +208,13 @@ class LiteLLMReasoningAdapter:
                     initial_tool_calls=_required_pipeline_tool_calls(observations, context=context, mode=mode),
                     purpose="investigation",
                     model_calls=calls,
+                    allowance=allowance,
                 )
                 result, extraction_model, extraction_usage = await self._extract(
                     raw_reasoning,
                     mode=mode,
                     model_calls=calls,
+                    allowance=allowance,
                 )
                 model = extraction_model or model
                 usage = _merge_usage(usage, extraction_usage)
@@ -239,6 +286,7 @@ class LiteLLMReasoningAdapter:
                 },
             }
         calls: list[LLMCall] = []
+        allowance = _TokenAllowance(self._token_budget)
         if self._tools is None:
             response, _ = await self._call_with_fallback(
                 messages=[
@@ -255,6 +303,7 @@ class LiteLLMReasoningAdapter:
                 tools=None,
                 purpose="chat",
                 model_calls=calls,
+                allowance=allowance,
             )
             content = response.choices[0].message.content
             if not isinstance(content, str) or not content.strip():
@@ -286,6 +335,7 @@ class LiteLLMReasoningAdapter:
             final_only=True,
             purpose="chat",
             model_calls=calls,
+            allowance=allowance,
         )
         if not content.strip():
             raise ValueError("reasoning response was empty")
@@ -307,6 +357,7 @@ class LiteLLMReasoningAdapter:
         initial_tool_calls: tuple[tuple[str, dict[str, Any]], ...] = (),
         purpose: str,
         model_calls: list[LLMCall],
+        allowance: _TokenAllowance,
     ) -> tuple[str, list[dict[str, Any]], str, dict[str, int]]:
         if not self._api_key:
             raise RuntimeError("reasoning integration is disabled")
@@ -322,7 +373,7 @@ class LiteLLMReasoningAdapter:
         total_usage: dict[str, int] = {}
         last_model = self._models[0]
         max_rounds = self._max_deep_tool_rounds if mode is ScanMode.DEEP else self._max_tool_rounds
-        token_budget = self._deep_token_budget if mode is ScanMode.DEEP else self._token_budget
+        final_reserve = _final_call_reserve(allowance.limit, mode=mode)
 
         for name, arguments in initial_tool_calls:
             await _emit(
@@ -355,31 +406,35 @@ class LiteLLMReasoningAdapter:
             )
 
         for round_number in range(1, max_rounds + 1):
-            response, last_model = await self._call_with_fallback(
-                messages=messages,
-                tools=list(self._tools.definitions),
-                temperature=self._temperature,
-                purpose=purpose,
-                model_calls=model_calls,
-            )
+            try:
+                response, last_model = await self._call_with_fallback(
+                    messages=messages,
+                    tools=list(self._tools.definitions),
+                    temperature=self._temperature,
+                    purpose=purpose,
+                    model_calls=model_calls,
+                    allowance=allowance,
+                    reserve_tokens=final_reserve,
+                )
+            except ReasoningTokenBudgetExceeded:
+                await _emit(
+                    on_progress,
+                    {
+                        "type": "reasoning",
+                        "round": round_number,
+                        "content": (
+                            f"Investigation token limit reached ({allowance.limit}); "
+                            "producing the final assessment."
+                        ),
+                    },
+                )
+                break
             total_usage = _merge_usage(total_usage, _usage(response))
             message = response.choices[0].message
             content = getattr(message, "content", None)
             tool_calls = _tool_calls(message)
             if tool_calls:
                 _compact_tool_messages(messages, mode=mode)
-            if tool_calls and token_budget and total_usage.get("total_tokens", 0) >= token_budget:
-                if isinstance(content, str) and content.strip():
-                    raw_parts.append(content.strip())
-                await _emit(
-                    on_progress,
-                    {
-                        "type": "reasoning",
-                        "round": round_number,
-                        "content": f"Token budget reached ({token_budget}); producing the final assessment.",
-                    },
-                )
-                break
             assistant: dict[str, Any] = {"role": "assistant", "content": content or None}
             if tool_calls:
                 assistant["tool_calls"] = tool_calls
@@ -416,19 +471,24 @@ class LiteLLMReasoningAdapter:
                     {"role": "tool", "tool_call_id": call["id"], "content": execution.output}
                 )
 
-        messages.append(
-            {
-                "role": "user",
-                "content": summary_prompt
-                or "Stop calling tools. Return the final structured investigation JSON using the evidence gathered.",
-            }
+        final_messages = _final_assessment_messages(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            trace=trace,
+            raw_parts=raw_parts,
+            instruction=(
+                summary_prompt
+                or "Stop calling tools. Return the final structured investigation JSON using the evidence gathered."
+            ),
+            mode=mode,
         )
         response, last_model = await self._call_with_fallback(
-            messages=messages,
+            messages=final_messages,
             tools=None,
             temperature=0.0,
             purpose=purpose,
             model_calls=model_calls,
+            allowance=allowance,
         )
         total_usage = _merge_usage(total_usage, _usage(response))
         content = response.choices[0].message.content
@@ -443,6 +503,7 @@ class LiteLLMReasoningAdapter:
         *,
         mode: ScanMode,
         model_calls: list[LLMCall],
+        allowance: _TokenAllowance,
     ) -> tuple[dict[str, Any], str, dict[str, int]]:
         try:
             return _extract_assessment(raw_reasoning), "", {}
@@ -470,6 +531,7 @@ class LiteLLMReasoningAdapter:
                 response_format={"type": "json_object"},
                 purpose="extraction",
                 model_calls=model_calls,
+                allowance=allowance,
             )
             usage = _merge_usage(usage, _usage(response))
             try:
@@ -491,6 +553,7 @@ class LiteLLMReasoningAdapter:
         concise: bool,
         purpose: str,
         model_calls: list[LLMCall],
+        allowance: _TokenAllowance,
     ) -> tuple[dict[str, Any], str, dict[str, int]]:
         if not self._api_key:
             raise RuntimeError("reasoning integration is disabled")
@@ -510,6 +573,7 @@ class LiteLLMReasoningAdapter:
             response_format={"type": "json_object"},
             purpose=purpose,
             model_calls=model_calls,
+            allowance=allowance,
         )
         return _extract_assessment(response.choices[0].message.content), model, _usage(response)
 
@@ -522,16 +586,27 @@ class LiteLLMReasoningAdapter:
         response_format: dict[str, str] | None = None,
         purpose: str,
         model_calls: list[LLMCall],
+        allowance: _TokenAllowance | None = None,
+        reserve_tokens: int = 0,
     ) -> tuple[Any, str]:
         last_error: Exception | None = None
         for model in self._models:
+            max_tokens = self._max_tokens
+            if allowance is not None:
+                max_tokens = self._bounded_max_tokens(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    allowance=allowance,
+                    reserve_tokens=reserve_tokens,
+                )
             try:
                 kwargs: dict[str, Any] = {
                     "model": model,
                     "messages": messages,
                     "api_key": self._api_key,
                     "temperature": temperature,
-                    "max_tokens": self._max_tokens,
+                    "max_tokens": max_tokens,
                     "num_retries": self._max_retries,
                 }
                 if tools:
@@ -539,11 +614,62 @@ class LiteLLMReasoningAdapter:
                 if response_format:
                     kwargs["response_format"] = response_format
                 response = await self._acompletion(**kwargs)
-                model_calls.append(self._record_call(response, model=model, purpose=purpose))
-                return response, model
             except Exception as exc:
                 last_error = exc
+                continue
+            call = self._record_call(response, model=model, purpose=purpose)
+            model_calls.append(call)
+            if allowance is not None:
+                allowance.consume(call.total_tokens)
+            return response, model
         raise RuntimeError("all reasoning models failed") from last_error
+
+    def _bounded_max_tokens(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        allowance: _TokenAllowance,
+        reserve_tokens: int,
+    ) -> int:
+        prompt_tokens = self._count_input_tokens(model=model, messages=messages, tools=tools)
+        safety_margin = min(512, max(32, ceil(prompt_tokens * 0.05)))
+        required = prompt_tokens + safety_margin + max(0, reserve_tokens) + _MIN_COMPLETION_TOKENS
+        if allowance.remaining < required:
+            raise ReasoningTokenBudgetExceeded(
+                limit=allowance.limit,
+                used=allowance.used,
+                required=required,
+            )
+        return min(
+            self._max_tokens,
+            allowance.remaining - prompt_tokens - safety_margin - max(0, reserve_tokens),
+        )
+
+    def _count_input_tokens(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> int:
+        try:
+            counter = self._token_counter
+            if counter is None:
+                from litellm import token_counter
+
+                counter = token_counter
+                self._token_counter = counter
+            return max(1, int(counter(model=model, messages=messages, tools=tools)))
+        except Exception:
+            serialized = json.dumps(
+                {"messages": messages, "tools": tools or []},
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            )
+            return max(1, ceil(len(serialized) / 3))
 
     def _record_call(self, response: Any, *, model: str, purpose: str) -> LLMCall:
         usage = _usage(response)
@@ -940,6 +1066,48 @@ def _compact_tool_messages(messages: list[dict[str, Any]], *, mode: ScanMode) ->
         message["content"] = (
             f"{content[:half]}\n... [prior tool result compacted to {limit} characters] ...\n{content[-half:]}"
         )
+
+
+def _final_call_reserve(limit: int, *, mode: ScanMode) -> int:
+    if not limit:
+        return 0
+    target = 14_000 if mode is ScanMode.DEEP else 10_000
+    return min(limit, target, max(96, limit // 2))
+
+
+def _final_assessment_messages(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    trace: list[dict[str, Any]],
+    raw_parts: list[str],
+    instruction: str,
+    mode: ScanMode,
+) -> list[dict[str, Any]]:
+    if mode is ScanMode.DEEP:
+        user_limit, evidence_limit, notes_limit = 10_000, 18_000, 4_000
+    else:
+        user_limit, evidence_limit, notes_limit = 6_000, 10_000, 2_000
+    evidence = json.dumps(trace, separators=(",", ":"), ensure_ascii=False, default=str)
+    notes = "\n\n".join(raw_parts)
+    return [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": (
+                f"Original incident request:\n{_bounded_prompt_text(user_prompt, user_limit)}\n\n"
+                f"Read-only tool evidence:\n{_bounded_prompt_text(evidence, evidence_limit)}\n\n"
+                f"Agent notes:\n{_bounded_prompt_text(notes, notes_limit)}\n\n{instruction}"
+            ),
+        },
+    ]
+
+
+def _bounded_prompt_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    half = limit // 2
+    return f"{value[:half]}\n... [prompt context compacted] ...\n{value[-half:]}"
 
 
 async def _emit(callback: ReasoningProgress | None, event: dict[str, Any]) -> None:

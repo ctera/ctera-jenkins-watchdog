@@ -273,7 +273,9 @@ export default function Scans() {
                         : <Typography variant="body2" color="text.secondary">No candidates</Typography>}
                       {Boolean(scan.analysis?.candidate_count) && (
                         <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
-                          {scan.analysis?.selected_count ?? 0} selected of {scan.analysis?.candidate_count ?? 0}
+                          {scan.analysis?.status === "budget_deferred"
+                            ? `${scan.analysis.budget_deferred_count} of ${scan.analysis.candidate_count} budget deferred`
+                            : `${scan.analysis?.selected_count ?? 0} admitted of ${scan.analysis?.candidate_count ?? 0}`}
                         </Typography>
                       )}
                     </TableCell>

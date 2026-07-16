@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     llm_daily_token_budget: int = 400000
     llm_manual_token_reserve: int = 100000
     llm_triage_batch_size: int = 50
+    llm_triage_token_budget: int = 8000
 
     # OIDC (DEX)
     oidc_issuer: str = ""

@@ -92,6 +92,14 @@ export default function ScanDetailPage() {
   const progress = ((STAGES.indexOf(scan.stage) + 1) / STAGES.length) * 100;
   const llmUsage = scan.llm_usage ?? {};
   const analysis = scan.analysis;
+  const allBudgetDeferred = Boolean(
+    analysis?.status === "budget_deferred"
+    || (
+      analysis?.candidate_count
+      && analysis.budget_deferred_count === analysis.candidate_count
+      && analysis.selected_count === 0
+    ),
+  );
   const showAnalysis = Boolean(
     analysis?.candidate_count
     || analysis?.selected_count
@@ -134,6 +142,18 @@ export default function ScanDetailPage() {
           Collection is complete. Agent analysis is still running for {analysis?.active_count ?? 0} selected investigation{analysis?.active_count === 1 ? "" : "s"}.
         </Alert>
       )}
+      {allBudgetDeferred && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <Typography variant="body2" fontWeight={700}>Agent analysis was skipped: daily automatic token budget exhausted.</Typography>
+          <Typography variant="body2">
+            {analysis?.budget_deferred_count ?? 0} of {analysis?.candidate_count ?? 0} candidates were deferred before an investigation was queued.
+            {` This scan used ${Number(llmUsage.call_count ?? 0).toLocaleString()} model calls and ${formatUsd(llmUsage.estimated_cost_usd)}.`}
+            {analysis?.budget_reset_at
+              ? ` A later scan after ${formatDate(analysis.budget_reset_at)} can reconsider them.`
+              : " A later scan can reconsider them when budget is available."}
+          </Typography>
+        </Alert>
+      )}
 
       <Paper variant="outlined" sx={{ mb: 2.5, overflow: "hidden" }}>
         <Box sx={{ p: { xs: 2, md: 2.5 } }}>
@@ -166,7 +186,9 @@ export default function ScanDetailPage() {
                 <Stack direction="row" justifyContent="space-between" gap={2} sx={{ mb: 0.75 }}>
                   <Typography variant="caption" color="text.secondary">Agent analysis</Typography>
                   <Typography variant="caption" color="text.secondary">
-                    {analysis?.succeeded_count ?? 0} succeeded · {analysis?.failed_count ?? 0} failed · {analysis?.active_count ?? 0} active
+                    {allBudgetDeferred
+                      ? `Not run · ${analysis?.budget_deferred_count ?? 0} budget deferred`
+                      : `${analysis?.succeeded_count ?? 0} succeeded · ${analysis?.failed_count ?? 0} failed · ${analysis?.active_count ?? 0} active`}
                   </Typography>
                 </Stack>
                 <LinearProgress
@@ -193,7 +215,9 @@ export default function ScanDetailPage() {
             <Box>
               <Typography variant="h6">Agent selection and analysis</Typography>
               <Typography variant="body2" color="text.secondary">
-                {analysis?.candidate_count ?? 0} incident candidates evaluated; {analysis?.selected_count ?? 0} selected for agent investigation.
+                {allBudgetDeferred
+                  ? `${analysis?.candidate_count ?? 0} incident candidates considered; all were deferred before agent investigation.`
+                  : `${analysis?.candidate_count ?? 0} incident candidates considered; ${analysis?.selected_count ?? 0} admitted for agent investigation.`}
               </Typography>
             </Box>
             <StatusChip value={analysis?.status ?? "not_started"} />
@@ -210,16 +234,26 @@ export default function ScanDetailPage() {
               mb: 1.5,
             }}
           >
-            <AnalysisMetric label="Candidates" value={analysis?.candidate_count ?? 0} />
-            <AnalysisMetric label="Selected" value={analysis?.selected_count ?? 0} />
-            <AnalysisMetric label="Queued" value={analysis?.queued_count ?? 0} />
-            <AnalysisMetric label="Running" value={analysis?.running_count ?? 0} />
-            <AnalysisMetric label="Succeeded" value={analysis?.succeeded_count ?? 0} />
-            <AnalysisMetric label="Failed" value={analysis?.failed_count ?? 0} tone="danger" />
-            <AnalysisMetric label="Reused" value={analysis?.reused_count ?? 0} />
-            <AnalysisMetric label="Deferred" value={analysis?.deferred_count ?? 0} />
-            <AnalysisMetric label="Manual only" value={analysis?.manual_only_count ?? 0} />
-            <AnalysisMetric label="Budget deferred" value={analysis?.budget_deferred_count ?? 0} tone="warning" />
+            {allBudgetDeferred ? (
+              <>
+                <AnalysisMetric label="Considered" value={analysis?.candidate_count ?? 0} />
+                <AnalysisMetric label="Queued" value={analysis?.queued_count ?? 0} />
+                <AnalysisMetric label="Budget deferred" value={analysis?.budget_deferred_count ?? 0} tone="warning" />
+              </>
+            ) : (
+              <>
+                <AnalysisMetric label="Considered" value={analysis?.candidate_count ?? 0} />
+                <AnalysisMetric label="Admitted" value={analysis?.selected_count ?? 0} />
+                <AnalysisMetric label="Queued" value={analysis?.queued_count ?? 0} />
+                <AnalysisMetric label="Running" value={analysis?.running_count ?? 0} />
+                <AnalysisMetric label="Succeeded" value={analysis?.succeeded_count ?? 0} />
+                <AnalysisMetric label="Failed" value={analysis?.failed_count ?? 0} tone="danger" />
+                <AnalysisMetric label="Reused" value={analysis?.reused_count ?? 0} />
+                <AnalysisMetric label="Deferred" value={analysis?.deferred_count ?? 0} />
+                <AnalysisMetric label="Manual only" value={analysis?.manual_only_count ?? 0} />
+                <AnalysisMetric label="Budget deferred" value={analysis?.budget_deferred_count ?? 0} tone="warning" />
+              </>
+            )}
           </Box>
 
           <TableContainer component={Paper} variant="outlined">
@@ -255,7 +289,7 @@ export default function ScanDetailPage() {
 
       {showAnalysis && (
         <Box sx={{ mb: 2.5, py: 1.5, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
-          <Typography variant="h6" sx={{ mb: 1 }}>Live agent cost</Typography>
+          <Typography variant="h6" sx={{ mb: 1 }}>Agent cost for this scan</Typography>
           <Stack direction={{ xs: "column", sm: "row" }} gap={{ xs: 1, sm: 4 }}>
             <Meta label="Model calls" value={String(llmUsage.call_count ?? 0)} />
             <Meta label="Input" value={formatTokens(llmUsage.prompt_tokens)} />
