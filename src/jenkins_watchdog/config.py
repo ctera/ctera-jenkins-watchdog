@@ -1,5 +1,6 @@
 """Application configuration via pydantic-settings."""
 
+from decimal import Decimal
 from urllib.parse import quote_plus
 
 from pydantic import model_validator
@@ -74,8 +75,11 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_scan_token_budget: int = 24000
     llm_deep_scan_token_budget: int = 40000
-    llm_daily_token_budget: int = 400000
-    llm_manual_token_reserve: int = 100000
+    llm_daily_token_budget: int = 4000000
+    llm_manual_token_reserve: int = 1000000
+    llm_daily_cost_budget_usd: Decimal = Decimal("14.00")
+    llm_manual_cost_reserve_usd: Decimal = Decimal("3.50")
+    llm_max_token_cost_usd_per_million: Decimal = Decimal("25.00")
     llm_triage_batch_size: int = 50
     llm_triage_token_budget: int = 8000
 

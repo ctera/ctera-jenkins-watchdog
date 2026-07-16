@@ -243,6 +243,9 @@ def build_container(settings: Settings) -> Container:
         deep_token_budget=settings.llm_deep_scan_token_budget,
         daily_token_budget=settings.llm_daily_token_budget,
         manual_token_reserve=settings.llm_manual_token_reserve,
+        daily_cost_budget_usd=settings.llm_daily_cost_budget_usd,
+        manual_cost_reserve_usd=settings.llm_manual_cost_reserve_usd,
+        max_token_cost_usd_per_million=settings.llm_max_token_cost_usd_per_million,
     )
     reasoning_adapter = LiteLLMReasoningAdapter(
         model=settings.llm_model,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import httpx
@@ -40,6 +41,7 @@ from jenkins_watchdog.domain.model import (
     InvestigationRequest,
     InvestigationRequestStatus,
     InvestigationStatus,
+    LLMCall,
     ScanMode,
     Severity,
 )
@@ -375,9 +377,13 @@ async def test_terminal_scan_reports_all_budget_deferred_as_a_distinct_analysis_
         scan_id=scan_id,
         created_at=NOW,
         metadata={
+            "budget_metric": "cost_usd",
             "budget_limit_tokens": 300_000,
             "budget_spent_tokens": 989_116,
             "budget_projected_tokens": 1_013_116,
+            "budget_limit_usd": 10.50,
+            "budget_spent_usd": 10.42,
+            "budget_projected_usd": 11.02,
         },
     )
     async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
@@ -393,10 +399,14 @@ async def test_terminal_scan_reports_all_budget_deferred_as_a_distinct_analysis_
     assert analysis["candidate_count"] == 1
     assert analysis["selected_count"] == 0
     assert analysis["budget_deferred_count"] == 1
+    assert analysis["budget_metric"] == "cost_usd"
     assert analysis["budget_reset_at"] == reset_at.isoformat().replace("+00:00", "Z")
     assert analysis["budget_limit_tokens"] == 300_000
     assert analysis["budget_spent_tokens"] == 989_116
     assert analysis["budget_projected_tokens"] == 1_013_116
+    assert analysis["budget_limit_usd"] == 10.50
+    assert analysis["budget_spent_usd"] == 10.42
+    assert analysis["budget_projected_usd"] == 11.02
 
 
 @pytest.mark.asyncio
@@ -483,6 +493,39 @@ async def test_chat_stream_exposes_tool_activity_and_final_answer(
     assert "event: tool_result" in response.text
     assert "event: message" in response.text
     assert "global:inspect build" in response.text
+
+
+@pytest.mark.asyncio
+async def test_chat_rejects_calls_when_daily_cost_budget_is_exhausted(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        await uow.llm_calls.save_many(
+            (
+                LLMCall(
+                    id=str(uuid.uuid4()),
+                    purpose="chat",
+                    model="test-model",
+                    prompt_tokens=100,
+                    completion_tokens=25,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                    total_tokens=125,
+                    estimated_cost_usd=Decimal("14.00"),
+                    cost_source="test",
+                    created_at=NOW,
+                ),
+            )
+        )
+        await uow.commit()
+    app, _ = make_app(postgres_session_factory)
+
+    async with client(app) as api:
+        response = await api.post("/api/v2/chat", json={"message": "status"})
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "llm_budget_exhausted"
+    assert "daily LLM cost budget exhausted" in response.json()["detail"]["message"]
 
 
 @pytest.mark.asyncio

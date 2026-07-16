@@ -1508,12 +1508,20 @@ export interface components {
             budget_deferred_count: number;
             /** Budget Limit Tokens */
             budget_limit_tokens?: number | null;
+            /** Budget Limit Usd */
+            budget_limit_usd?: number | null;
+            /** Budget Metric */
+            budget_metric?: string | null;
             /** Budget Projected Tokens */
             budget_projected_tokens?: number | null;
+            /** Budget Projected Usd */
+            budget_projected_usd?: number | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Budget Spent Tokens */
             budget_spent_tokens?: number | null;
+            /** Budget Spent Usd */
+            budget_spent_usd?: number | null;
             /**
              * Candidate Count
              * @default 0

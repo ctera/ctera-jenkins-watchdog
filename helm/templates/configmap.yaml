@@ -43,7 +43,11 @@ data:
   WATCHDOG_LLM_DEEP_SCAN_TOKEN_BUDGET: {{ .Values.config.llmDeepScanTokenBudget | quote }}
   WATCHDOG_LLM_DAILY_TOKEN_BUDGET: {{ .Values.config.llmDailyTokenBudget | quote }}
   WATCHDOG_LLM_MANUAL_TOKEN_RESERVE: {{ .Values.config.llmManualTokenReserve | quote }}
+  WATCHDOG_LLM_DAILY_COST_BUDGET_USD: {{ .Values.config.llmDailyCostBudgetUsd | quote }}
+  WATCHDOG_LLM_MANUAL_COST_RESERVE_USD: {{ .Values.config.llmManualCostReserveUsd | quote }}
+  WATCHDOG_LLM_MAX_TOKEN_COST_USD_PER_MILLION: {{ .Values.config.llmMaxTokenCostUsdPerMillion | quote }}
   WATCHDOG_LLM_TRIAGE_BATCH_SIZE: {{ .Values.config.llmTriageBatchSize | quote }}
+  WATCHDOG_LLM_TRIAGE_TOKEN_BUDGET: {{ .Values.config.llmTriageTokenBudget | quote }}
   WATCHDOG_MAX_TOOL_ROUNDS: {{ .Values.config.maxToolRounds | quote }}
   WATCHDOG_MAX_DEEP_TOOL_ROUNDS: {{ .Values.config.maxDeepToolRounds | quote }}
   WATCHDOG_MAX_INVESTIGATIONS_PER_SCAN: {{ .Values.config.maxInvestigationsPerScan | quote }}

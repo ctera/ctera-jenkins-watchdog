@@ -16,10 +16,14 @@ function scanAnalysis(overrides: Record<string, unknown> = {}) {
     manual_only_count: 0,
     budget_deferred_count: 0,
     active_count: 0,
+    budget_metric: null,
     budget_reset_at: null,
     budget_limit_tokens: null,
     budget_spent_tokens: null,
     budget_projected_tokens: null,
+    budget_limit_usd: null,
+    budget_spent_usd: null,
+    budget_projected_usd: null,
     items: [],
     ...overrides,
   };
@@ -456,7 +460,7 @@ test("scan detail explains when every candidate is budget deferred", async ({ pa
     severity: "critical",
     outcome: "budget_deferred",
     reason_code: "daily_budget_exhausted",
-    reason: "Automatic daily LLM token budget exhausted.",
+    reason: "Automatic daily LLM cost budget exhausted.",
     request_id: null,
     request_status: null,
     investigation_id: null,
@@ -474,10 +478,11 @@ test("scan detail explains when every candidate is budget deferred", async ({ pa
         status: "budget_deferred",
         candidate_count: 8,
         budget_deferred_count: 8,
+        budget_metric: "cost_usd",
         budget_reset_at: "2026-07-17T00:00:00Z",
-        budget_limit_tokens: 300_000,
-        budget_spent_tokens: 989_116,
-        budget_projected_tokens: 1_013_116,
+        budget_limit_usd: 10.50,
+        budget_spent_usd: 10.42,
+        budget_projected_usd: 11.02,
         items,
       }),
     },
@@ -485,7 +490,8 @@ test("scan detail explains when every candidate is budget deferred", async ({ pa
 
   await page.goto("/scans/scan-budget");
 
-  await expect(page.getByText("Agent analysis was skipped: daily automatic token budget exhausted.")).toBeVisible();
+  await expect(page.getByText("Agent analysis was skipped: daily automatic cost budget exhausted.")).toBeVisible();
+  await expect(page.getByText(/Projected usage was \$11\.02 against the \$10\.50 automatic allowance\./)).toBeVisible();
   await expect(page.getByText("8 incident candidates considered; all were deferred before agent investigation.")).toBeVisible();
   await expect(page.getByText(/This scan used 0 model calls and \$0\.0000\./)).toBeVisible();
   await expect(page.getByText("Not run · 8 budget deferred")).toBeVisible();

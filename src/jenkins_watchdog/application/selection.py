@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from jenkins_watchdog.application.investigations import (
-    InvestigationBudgetExceeded,
+    DailyLLMBudgetExceeded,
     InvestigationQueueService,
 )
 from jenkins_watchdog.application.ports import ReasoningPort, UnitOfWorkFactory
@@ -142,7 +142,7 @@ class AnalysisSelectionService:
                     build_id=route.candidate.build_id,
                     budget_kind=InvestigationBudgetKind.AUTOMATIC,
                 )
-            except InvestigationBudgetExceeded as exc:
+            except DailyLLMBudgetExceeded as exc:
                 final_routes.append(
                     replace(
                         route,
@@ -306,7 +306,7 @@ class AnalysisSelectionService:
             result = await self._reasoning.triage_batch(
                 tuple(TriageCandidate(candidate.incident, candidate.observations) for candidate in batch)
             )
-        except InvestigationBudgetExceeded as exc:
+        except DailyLLMBudgetExceeded as exc:
             return [
                 _route(
                     candidate,
@@ -395,16 +395,8 @@ def _route(
     return _Route(candidate, outcome, reason_code, reason, llm_call_id, metadata)
 
 
-def _budget_metadata(exc: InvestigationBudgetExceeded) -> dict[str, Any]:
-    return {
-        "budget_kind": exc.budget_kind.value,
-        "budget_limit_tokens": exc.limit,
-        "budget_spent_tokens": exc.spent,
-        "budget_active_reserved_tokens": exc.active_reserved,
-        "budget_requested_tokens": exc.requested,
-        "budget_projected_tokens": exc.projected,
-        "budget_reset_at": exc.reset_at.isoformat(),
-    }
+def _budget_metadata(exc: DailyLLMBudgetExceeded) -> dict[str, Any]:
+    return exc.metadata()
 
 
 def _severity_rank(severity: Severity) -> int:

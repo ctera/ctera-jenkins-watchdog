@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from jenkins_watchdog.application.investigations import InvestigationBudgetExceeded
+from jenkins_watchdog.application.investigations import DailyLLMBudgetExceeded
 from jenkins_watchdog.application.pagination import InvalidCursorError
 from jenkins_watchdog.application.reasoning import jenkins_build_observations
 from jenkins_watchdog.application.scan_service import (
@@ -81,10 +82,14 @@ class V2ScanAnalysisResponse(BaseModel):
     manual_only_count: int = 0
     budget_deferred_count: int = 0
     active_count: int = 0
+    budget_metric: str | None = None
     budget_reset_at: datetime | None = None
     budget_limit_tokens: int | None = None
     budget_spent_tokens: int | None = None
     budget_projected_tokens: int | None = None
+    budget_limit_usd: float | None = None
+    budget_spent_usd: float | None = None
+    budget_projected_usd: float | None = None
     items: list[V2ScanAnalysisItemResponse] = Field(default_factory=list)
 
 
@@ -502,11 +507,18 @@ class V2AnalyzeBuildRequest(BaseModel):
 @router.post("/chat", response_model=V2ChatResponse)
 async def chat(request: Request, body: V2ChatRequest) -> V2ChatResponse:
     try:
-        result = await _container(request).reasoning_service.chat(
+        container = _container(request)
+        await container.investigation_queue.ensure_chat_budget_available()
+        result = await container.reasoning_service.chat(
             message=body.message,
             incident_id=body.incident_id,
             history=tuple(body.history),
         )
+    except DailyLLMBudgetExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "llm_budget_exhausted", "message": str(exc)},
+        ) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail={"code": "incident_not_found"}) from exc
     except RuntimeError as exc:
@@ -516,6 +528,15 @@ async def chat(request: Request, body: V2ChatRequest) -> V2ChatResponse:
 
 @router.post("/chat/stream")
 async def chat_stream(request: Request, body: V2ChatRequest) -> EventSourceResponse:
+    container = _container(request)
+    try:
+        await container.investigation_queue.ensure_chat_budget_available()
+    except DailyLLMBudgetExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "llm_budget_exhausted", "message": str(exc)},
+        ) from exc
+
     async def stream():
         progress: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
@@ -523,7 +544,7 @@ async def chat_stream(request: Request, body: V2ChatRequest) -> EventSourceRespo
             await progress.put(event)
 
         task = asyncio.create_task(
-            _container(request).reasoning_service.chat(
+            container.reasoning_service.chat(
                 message=body.message,
                 incident_id=body.incident_id,
                 history=tuple(body.history),
@@ -778,7 +799,7 @@ async def analyze_jenkins_build(
             requested_by=_actor_email(request),
             force=True,
         )
-    except InvestigationBudgetExceeded as exc:
+    except DailyLLMBudgetExceeded as exc:
         raise HTTPException(
             status_code=429,
             detail={"code": "llm_budget_exhausted", "message": str(exc)},
@@ -1052,7 +1073,7 @@ async def reinvestigate_incident(request: Request, incident_id: str) -> V2Invest
             requested_by=_actor_email(request),
             force=True,
         )
-    except InvestigationBudgetExceeded as exc:
+    except DailyLLMBudgetExceeded as exc:
         raise HTTPException(
             status_code=429,
             detail={"code": "llm_budget_exhausted", "message": str(exc)},
@@ -1067,7 +1088,14 @@ async def reinvestigate_incident(request: Request, incident_id: str) -> V2Invest
 @router.post("/incidents/{incident_id}/chat", response_model=V2ChatResponse)
 async def incident_chat(request: Request, incident_id: str, body: V2ChatRequest) -> V2ChatResponse:
     try:
-        result = await _container(request).reasoning_service.chat(message=body.message, incident_id=incident_id)
+        container = _container(request)
+        await container.investigation_queue.ensure_chat_budget_available()
+        result = await container.reasoning_service.chat(message=body.message, incident_id=incident_id)
+    except DailyLLMBudgetExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "llm_budget_exhausted", "message": str(exc)},
+        ) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail={"code": "incident_not_found"}) from exc
     except RuntimeError as exc:
@@ -1249,10 +1277,14 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
         manual_only_count=manual_only_count,
         budget_deferred_count=budget_deferred_count,
         active_count=active_count,
+        budget_metric=_decision_budget_metric(decisions),
         budget_reset_at=_decision_budget_reset_at(decisions),
         budget_limit_tokens=_decision_budget_int(decisions, "budget_limit_tokens"),
         budget_spent_tokens=_decision_budget_int(decisions, "budget_spent_tokens"),
         budget_projected_tokens=_decision_budget_int(decisions, "budget_projected_tokens"),
+        budget_limit_usd=_decision_budget_float(decisions, "budget_limit_usd"),
+        budget_spent_usd=_decision_budget_float(decisions, "budget_spent_usd"),
+        budget_projected_usd=_decision_budget_float(decisions, "budget_projected_usd"),
         items=items,
     )
 
@@ -1287,6 +1319,26 @@ def _decision_budget_int(decisions: tuple[AnalysisDecision, ...], key: str) -> i
         if isinstance((value := decision.metadata.get(key)), int)
     ]
     return max(values) if values else None
+
+
+def _decision_budget_float(decisions: tuple[AnalysisDecision, ...], key: str) -> float | None:
+    values = [
+        float(value)
+        for decision in decisions
+        if isinstance((value := decision.metadata.get(key)), (int, float, Decimal)) and not isinstance(value, bool)
+    ]
+    return max(values) if values else None
+
+
+def _decision_budget_metric(decisions: tuple[AnalysisDecision, ...]) -> str | None:
+    values = {
+        value
+        for decision in decisions
+        if isinstance((value := decision.metadata.get("budget_metric")), str)
+    }
+    if "cost_usd" in values:
+        return "cost_usd"
+    return "tokens" if "tokens" in values else None
 
 
 def _scan_response(

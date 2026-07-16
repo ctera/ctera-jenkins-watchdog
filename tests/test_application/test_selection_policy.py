@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from jenkins_watchdog.application.investigations import (
     InvestigationBudgetExceeded,
+    InvestigationCostBudgetExceeded,
     InvestigationQueueService,
 )
 from jenkins_watchdog.application.selection import AnalysisSelectionService
@@ -234,3 +235,86 @@ async def test_daily_budget_protects_manual_reserve_and_records_reservations(
     assert manual is not None
     assert manual.budget_kind is InvestigationBudgetKind.MANUAL
     assert manual.reserved_tokens == 12_000
+
+
+@pytest.mark.asyncio
+async def test_daily_cost_budget_protects_manual_reserve_with_conservative_reservations(
+    sqlite_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _, incidents = await seed_incidents(
+        sqlite_factory,
+        (Severity.CRITICAL, Severity.CRITICAL, Severity.CRITICAL, Severity.CRITICAL),
+    )
+    queue = InvestigationQueueService(
+        uow_factory=factory_port(sqlite_factory),
+        now=lambda: NOW,
+        token_budget=10_000,
+        daily_token_budget=1_000_000,
+        manual_token_reserve=0,
+        daily_cost_budget_usd=Decimal("1.00"),
+        manual_cost_reserve_usd=Decimal("0.25"),
+        max_token_cost_usd_per_million=Decimal("25.00"),
+    )
+
+    for incident in incidents[:3]:
+        request = await queue.enqueue_incident(incident.id, source="scan")
+        assert request is not None
+
+    with pytest.raises(InvestigationCostBudgetExceeded) as error:
+        await queue.enqueue_incident(incidents[3].id, source="scan")
+    assert error.value.limit_usd == Decimal("0.75")
+    assert error.value.spent_usd == Decimal("0")
+    assert error.value.active_reserved_usd == Decimal("0.75")
+    assert error.value.requested_usd == Decimal("0.25")
+    assert error.value.projected_usd == Decimal("1.00")
+    assert error.value.metadata()["budget_metric"] == "cost_usd"
+
+    manual = await queue.enqueue_incident(
+        incidents[3].id,
+        source="manual_incident",
+        requested_by="operator@example.com",
+        force=True,
+    )
+    assert manual is not None
+    assert manual.budget_kind is InvestigationBudgetKind.MANUAL
+
+
+@pytest.mark.asyncio
+async def test_daily_cost_budget_conservatively_prices_calls_without_a_cost_estimate(
+    sqlite_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _, incidents = await seed_incidents(sqlite_factory, (Severity.CRITICAL,))
+    async with SqlAlchemyUnitOfWork(sqlite_factory) as uow:
+        await uow.llm_calls.save_many(
+            (
+                LLMCall(
+                    id=str(uuid.uuid4()),
+                    purpose="investigation",
+                    model="unpriced-model",
+                    prompt_tokens=8_000,
+                    completion_tokens=2_000,
+                    cache_read_input_tokens=1_000,
+                    cache_creation_input_tokens=0,
+                    total_tokens=10_000,
+                    created_at=NOW,
+                ),
+            )
+        )
+        await uow.commit()
+    queue = InvestigationQueueService(
+        uow_factory=factory_port(sqlite_factory),
+        now=lambda: NOW,
+        token_budget=10_000,
+        daily_token_budget=1_000_000,
+        manual_token_reserve=0,
+        daily_cost_budget_usd=Decimal("0.50"),
+        manual_cost_reserve_usd=Decimal("0"),
+        max_token_cost_usd_per_million=Decimal("25.00"),
+    )
+
+    with pytest.raises(InvestigationCostBudgetExceeded) as error:
+        await queue.enqueue_incident(incidents[0].id, source="scan")
+
+    assert error.value.spent_usd == Decimal("0.275")
+    assert error.value.requested_usd == Decimal("0.25")
+    assert error.value.projected_usd == Decimal("0.525")

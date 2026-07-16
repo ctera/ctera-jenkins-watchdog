@@ -84,6 +84,9 @@ def main() -> None:
     config = one(items, "ConfigMap", f"{args.release}-config")["data"]
     for flag in ("WATCHDOG_JIRA_ENABLED", "WATCHDOG_GITHUB_ENABLED", "WATCHDOG_GITLAB_ENABLED", "WATCHDOG_EMAIL_ENABLED"):
         assert config[flag] == "false"
+    assert config["WATCHDOG_LLM_DAILY_COST_BUDGET_USD"] == "14.00"
+    assert config["WATCHDOG_LLM_MANUAL_COST_RESERVE_USD"] == "3.50"
+    assert config["WATCHDOG_LLM_MAX_TOKEN_COST_USD_PER_MILLION"] == "25.00"
 
     if args.image_tag:
         own_workloads = [api, worker, migration]

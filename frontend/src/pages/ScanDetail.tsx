@@ -92,6 +92,7 @@ export default function ScanDetailPage() {
   const progress = ((STAGES.indexOf(scan.stage) + 1) / STAGES.length) * 100;
   const llmUsage = scan.llm_usage ?? {};
   const analysis = scan.analysis;
+  const costBudgetDeferred = analysis?.budget_metric === "cost_usd";
   const allBudgetDeferred = Boolean(
     analysis?.status === "budget_deferred"
     || (
@@ -144,9 +145,14 @@ export default function ScanDetailPage() {
       )}
       {allBudgetDeferred && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          <Typography variant="body2" fontWeight={700}>Agent analysis was skipped: daily automatic token budget exhausted.</Typography>
+          <Typography variant="body2" fontWeight={700}>
+            Agent analysis was skipped: daily automatic {costBudgetDeferred ? "cost" : "token"} budget exhausted.
+          </Typography>
           <Typography variant="body2">
             {analysis?.budget_deferred_count ?? 0} of {analysis?.candidate_count ?? 0} candidates were deferred before an investigation was queued.
+            {costBudgetDeferred && analysis?.budget_limit_usd != null
+              ? ` Projected usage was ${formatUsd(analysis.budget_projected_usd)} against the ${formatUsd(analysis.budget_limit_usd)} automatic allowance.`
+              : ""}
             {` This scan used ${Number(llmUsage.call_count ?? 0).toLocaleString()} model calls and ${formatUsd(llmUsage.estimated_cost_usd)}.`}
             {analysis?.budget_reset_at
               ? ` A later scan after ${formatDate(analysis.budget_reset_at)} can reconsider them.`

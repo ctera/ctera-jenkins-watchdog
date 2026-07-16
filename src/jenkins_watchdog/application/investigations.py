@@ -6,6 +6,8 @@ import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
 from jenkins_watchdog.application.automation import AutomationService
@@ -28,7 +30,21 @@ from jenkins_watchdog.domain.model import (
 logger = logging.getLogger(__name__)
 
 
-class InvestigationBudgetExceeded(RuntimeError):
+class DailyLLMBudgetExceeded(RuntimeError):
+    metric: str
+
+    def __init__(self, *, budget_kind: InvestigationBudgetKind, reset_at: datetime, message: str) -> None:
+        self.budget_kind = budget_kind
+        self.reset_at = reset_at
+        super().__init__(message)
+
+    def metadata(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class InvestigationBudgetExceeded(DailyLLMBudgetExceeded):
+    metric = "tokens"
+
     def __init__(
         self,
         *,
@@ -40,17 +56,73 @@ class InvestigationBudgetExceeded(RuntimeError):
         requested: int,
         reset_at: datetime,
     ) -> None:
-        self.budget_kind = budget_kind
         self.limit = limit
         self.projected = projected
         self.spent = spent
         self.active_reserved = active_reserved
         self.requested = requested
-        self.reset_at = reset_at
         super().__init__(
-            f"{budget_kind.value} daily LLM token budget exhausted: "
-            f"{projected:,} used or reserved exceeds {limit:,}; resets at {reset_at.isoformat()}"
+            budget_kind=budget_kind,
+            reset_at=reset_at,
+            message=(
+                f"{budget_kind.value} daily LLM token budget exhausted: "
+                f"{projected:,} used or reserved exceeds {limit:,}; resets at {reset_at.isoformat()}"
+            ),
         )
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "budget_metric": self.metric,
+            "budget_kind": self.budget_kind.value,
+            "budget_limit_tokens": self.limit,
+            "budget_spent_tokens": self.spent,
+            "budget_active_reserved_tokens": self.active_reserved,
+            "budget_requested_tokens": self.requested,
+            "budget_projected_tokens": self.projected,
+            "budget_reset_at": self.reset_at.isoformat(),
+        }
+
+
+class InvestigationCostBudgetExceeded(DailyLLMBudgetExceeded):
+    metric = "cost_usd"
+
+    def __init__(
+        self,
+        *,
+        budget_kind: InvestigationBudgetKind,
+        limit_usd: Decimal,
+        projected_usd: Decimal,
+        spent_usd: Decimal,
+        active_reserved_usd: Decimal,
+        requested_usd: Decimal,
+        reset_at: datetime,
+    ) -> None:
+        self.limit_usd = limit_usd
+        self.projected_usd = projected_usd
+        self.spent_usd = spent_usd
+        self.active_reserved_usd = active_reserved_usd
+        self.requested_usd = requested_usd
+        super().__init__(
+            budget_kind=budget_kind,
+            reset_at=reset_at,
+            message=(
+                f"{budget_kind.value} daily LLM cost budget exhausted: "
+                f"${projected_usd:.4f} used or reserved exceeds ${limit_usd:.2f}; "
+                f"resets at {reset_at.isoformat()}"
+            ),
+        )
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "budget_metric": self.metric,
+            "budget_kind": self.budget_kind.value,
+            "budget_limit_usd": float(self.limit_usd),
+            "budget_spent_usd": float(self.spent_usd),
+            "budget_active_reserved_usd": float(self.active_reserved_usd),
+            "budget_requested_usd": float(self.requested_usd),
+            "budget_projected_usd": float(self.projected_usd),
+            "budget_reset_at": self.reset_at.isoformat(),
+        }
 
 
 class InvestigationQueueService:
@@ -61,8 +133,11 @@ class InvestigationQueueService:
         now: Callable[[], datetime],
         token_budget: int = 24_000,
         deep_token_budget: int = 40_000,
-        daily_token_budget: int = 400_000,
-        manual_token_reserve: int = 100_000,
+        daily_token_budget: int = 4_000_000,
+        manual_token_reserve: int = 1_000_000,
+        daily_cost_budget_usd: Decimal = Decimal("14.00"),
+        manual_cost_reserve_usd: Decimal = Decimal("3.50"),
+        max_token_cost_usd_per_million: Decimal = Decimal("25.00"),
     ) -> None:
         self._uow_factory = uow_factory
         self._now = now
@@ -70,6 +145,15 @@ class InvestigationQueueService:
         self._deep_token_budget = max(0, deep_token_budget)
         self._daily_token_budget = max(0, daily_token_budget)
         self._manual_token_reserve = min(self._daily_token_budget, max(0, manual_token_reserve))
+        self._daily_cost_budget_usd = max(Decimal("0"), Decimal(str(daily_cost_budget_usd)))
+        self._manual_cost_reserve_usd = min(
+            self._daily_cost_budget_usd,
+            max(Decimal("0"), Decimal(str(manual_cost_reserve_usd))),
+        )
+        self._max_token_cost_usd_per_million = max(
+            Decimal("0"),
+            Decimal(str(max_token_cost_usd_per_million)),
+        )
 
     async def ensure_budget_available(
         self,
@@ -86,6 +170,12 @@ class InvestigationQueueService:
                 reserved_tokens=max(0, reserved_tokens),
                 now=now,
             )
+
+    async def ensure_chat_budget_available(self) -> None:
+        await self.ensure_budget_available(
+            budget_kind=InvestigationBudgetKind.MANUAL,
+            reserved_tokens=self._token_budget,
+        )
 
     async def enqueue_incident(
         self,
@@ -162,25 +252,51 @@ class InvestigationQueueService:
         reserved_tokens: int,
         now: datetime,
     ) -> None:
-        if not self._daily_token_budget:
+        if not self._daily_token_budget and not self._daily_cost_budget_usd:
             return
         day_start = datetime.combine(now.astimezone(timezone.utc).date(), time.min, tzinfo=timezone.utc)
         spent = await uow.llm_calls.summary_since(day_start)
         active_reserved = await uow.investigation_requests.active_reserved_tokens()
-        ceiling = self._daily_token_budget
-        if budget_kind is InvestigationBudgetKind.AUTOMATIC:
-            ceiling -= self._manual_token_reserve
-        projected = int(spent.get("total_tokens") or 0) + active_reserved + reserved_tokens
-        if projected > ceiling:
-            raise InvestigationBudgetExceeded(
-                budget_kind=budget_kind,
-                limit=ceiling,
-                projected=projected,
-                spent=int(spent.get("total_tokens") or 0),
-                active_reserved=active_reserved,
-                requested=reserved_tokens,
-                reset_at=day_start + timedelta(days=1),
-            )
+        reset_at = day_start + timedelta(days=1)
+        if self._daily_token_budget:
+            ceiling = self._daily_token_budget
+            if budget_kind is InvestigationBudgetKind.AUTOMATIC:
+                ceiling -= self._manual_token_reserve
+            spent_tokens = int(spent.get("total_tokens") or 0)
+            projected = spent_tokens + active_reserved + reserved_tokens
+            if projected > ceiling:
+                raise InvestigationBudgetExceeded(
+                    budget_kind=budget_kind,
+                    limit=ceiling,
+                    projected=projected,
+                    spent=spent_tokens,
+                    active_reserved=active_reserved,
+                    requested=reserved_tokens,
+                    reset_at=reset_at,
+                )
+
+        if self._daily_cost_budget_usd:
+            cost_ceiling = self._daily_cost_budget_usd
+            if budget_kind is InvestigationBudgetKind.AUTOMATIC:
+                cost_ceiling -= self._manual_cost_reserve_usd
+            spent_cost = Decimal(str(spent.get("estimated_cost_usd") or 0))
+            spent_cost += self._reserved_cost(int(spent.get("unpriced_chargeable_tokens") or 0))
+            active_reserved_cost = self._reserved_cost(active_reserved)
+            requested_cost = self._reserved_cost(reserved_tokens)
+            projected_cost = spent_cost + active_reserved_cost + requested_cost
+            if projected_cost > cost_ceiling:
+                raise InvestigationCostBudgetExceeded(
+                    budget_kind=budget_kind,
+                    limit_usd=cost_ceiling,
+                    projected_usd=projected_cost,
+                    spent_usd=spent_cost,
+                    active_reserved_usd=active_reserved_cost,
+                    requested_usd=requested_cost,
+                    reset_at=reset_at,
+                )
+
+    def _reserved_cost(self, tokens: int) -> Decimal:
+        return Decimal(max(0, tokens)) * self._max_token_cost_usd_per_million / Decimal(1_000_000)
 
     async def latest_for_incident(self, incident_id: str) -> InvestigationRequest | None:
         async with self._uow_factory() as uow:
@@ -231,7 +347,7 @@ class InvestigationWorker:
                 budget_kind=request.budget_kind,
                 reserved_tokens=0,
             )
-        except InvestigationBudgetExceeded as exc:
+        except DailyLLMBudgetExceeded as exc:
             deferred = request.defer_for_budget(
                 str(exc),
                 now=self._now(),
@@ -247,9 +363,7 @@ class InvestigationWorker:
                     {
                         "incident_id": request.incident_id,
                         "request_id": request.id,
-                        "budget_kind": request.budget_kind.value,
-                        "limit_tokens": exc.limit,
-                        "projected_tokens": exc.projected,
+                        **exc.metadata(),
                         "retry_at": exc.reset_at.isoformat(),
                     },
                     now=self._now(),

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -819,6 +819,12 @@ class SqlAlchemyLLMCallRepository:
         return await self._summary(LLMCallRecord.scan_id == _uuid(scan_id))
 
     async def _summary(self, *conditions: Any) -> dict[str, Any]:
+        chargeable_tokens = (
+            LLMCallRecord.prompt_tokens
+            + LLMCallRecord.completion_tokens
+            + LLMCallRecord.cache_read_input_tokens
+            + LLMCallRecord.cache_creation_input_tokens
+        )
         columns = (
             func.count(LLMCallRecord.id),
             func.coalesce(func.sum(LLMCallRecord.prompt_tokens), 0),
@@ -827,6 +833,10 @@ class SqlAlchemyLLMCallRepository:
             func.coalesce(func.sum(LLMCallRecord.cache_creation_input_tokens), 0),
             func.coalesce(func.sum(LLMCallRecord.total_tokens), 0),
             func.coalesce(func.sum(LLMCallRecord.estimated_cost_usd), 0),
+            func.coalesce(
+                func.sum(case((LLMCallRecord.estimated_cost_usd.is_(None), chargeable_tokens), else_=0)),
+                0,
+            ),
         )
         row = (await self._session.execute(select(*columns).where(*conditions))).one()
         purpose_rows = (
@@ -850,6 +860,7 @@ class SqlAlchemyLLMCallRepository:
             "cache_creation_input_tokens": int(row[4] or 0),
             "total_tokens": int(row[5] or 0),
             "estimated_cost_usd": float(row[6] or 0),
+            "unpriced_chargeable_tokens": int(row[7] or 0),
             "by_purpose": {
                 purpose: {
                     "call_count": int(count),

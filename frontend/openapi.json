@@ -2897,6 +2897,28 @@
             ],
             "title": "Budget Limit Tokens"
           },
+          "budget_limit_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Limit Usd"
+          },
+          "budget_metric": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Metric"
+          },
           "budget_projected_tokens": {
             "anyOf": [
               {
@@ -2907,6 +2929,17 @@
               }
             ],
             "title": "Budget Projected Tokens"
+          },
+          "budget_projected_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Projected Usd"
           },
           "budget_reset_at": {
             "anyOf": [
@@ -2930,6 +2963,17 @@
               }
             ],
             "title": "Budget Spent Tokens"
+          },
+          "budget_spent_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Spent Usd"
           },
           "candidate_count": {
             "default": 0,
