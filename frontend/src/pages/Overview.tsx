@@ -32,7 +32,7 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SearchIcon from "@mui/icons-material/Search";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { SourceSummary } from "../components/SourceAttribution";
 import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
@@ -55,6 +55,14 @@ type JenkinsView = "new" | "executions" | "recurring" | "all" | "jobs" | "multib
 type FailureResult = "FAILURE" | "UNSTABLE" | "ABORTED";
 type UnknownRecord = Record<string, unknown>;
 
+interface JenkinsDataset {
+  workspace: JenkinsWorkspace;
+  operational: OperationalOverview;
+  failures: JenkinsBuild[];
+  failureCursor: string | null;
+  failureTotal: number;
+}
+
 const windows = [
   { label: "4h", value: 4 },
   { label: "24h", value: 24 },
@@ -64,90 +72,132 @@ const windows = [
 
 export default function OverviewPage() {
   const navigate = useNavigate();
-  const [windowHours, setWindowHours] = useState(168);
-  const [view, setView] = useState<JenkinsView>("new");
-  const [workspace, setWorkspace] = useState<JenkinsWorkspace | null>(null);
-  const [operational, setOperational] = useState<OperationalOverview | null>(null);
-  const [failures, setFailures] = useState<JenkinsBuild[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const windowHours = parseWindow(searchParams.get("window"));
+  const view = parseView(searchParams.get("view"));
+  const [dataset, setDataset] = useState<JenkinsDataset | null>(null);
   const [queryText, setQueryText] = useState("");
   const [jobQuery, setJobQuery] = useState("");
   const [result, setResult] = useState<FailureResult | "">("");
-  const [loading, setLoading] = useState(true);
-  const [failureLoading, setFailureLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [transitioning, setTransitioning] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [failureLoadingMore, setFailureLoadingMore] = useState(false);
-  const [failureCursor, setFailureCursor] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [expandedFamily, setExpandedFamily] = useState<string | null>(null);
-  const refreshSequence = useRef(0);
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const requestSequence = useRef(0);
+  const cache = useRef(new Map<string, JenkinsDataset>());
+  const datasetRef = useRef<JenkinsDataset | null>(null);
+  const currentKey = useRef("");
 
-  const refresh = useCallback(async () => {
-    const sequence = ++refreshSequence.current;
-    try {
-      const [next, status] = await Promise.all([getJenkinsWorkspace(windowHours, 100), getOverview()]);
-      if (sequence !== refreshSequence.current) return;
-      setWorkspace(next);
-      setOperational(status);
-      setError(null);
-    } catch (requestError) {
-      if (sequence === refreshSequence.current) setError(requestError);
-    } finally {
-      if (sequence === refreshSequence.current) setLoading(false);
+  const updateLocation = useCallback((updates: Record<string, string>) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      Object.entries(updates).forEach(([name, value]) => next.set(name, value));
+      return next;
+    });
+  }, [setSearchParams]);
+
+  useEffect(() => {
+    if (searchParams.get("window") === String(windowHours) && searchParams.get("view") === view) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("window", String(windowHours));
+    next.set("view", view);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, view, windowHours]);
+
+  const failureFilters = useMemo(
+    () => view === "new"
+      ? { view: "new" as const }
+      : {
+          view: "all" as const,
+          job: view === "all" ? jobQuery || undefined : undefined,
+          result: view === "all" ? result || undefined : undefined,
+        },
+    [jobQuery, result, view],
+  );
+  const datasetKey = `${windowHours}:${view}:${failureFilters.job ?? ""}:${failureFilters.result ?? ""}`;
+
+  useEffect(() => {
+    void reloadVersion;
+    const sequence = ++requestSequence.current;
+    const controller = new AbortController();
+    currentKey.current = datasetKey;
+    const cached = cache.current.get(datasetKey);
+    if (cached) {
+      datasetRef.current = cached;
+      setDataset(cached);
+      setInitialLoading(false);
+      setTransitioning(false);
+    } else {
+      setTransitioning(datasetRef.current !== null);
+      setInitialLoading(datasetRef.current === null);
     }
-  }, [windowHours]);
+    setRefreshing(true);
+    setFailureLoadingMore(false);
+    setError(null);
 
-  useEffect(() => {
-    setLoading(true);
-    void refresh();
-    return () => {
-      refreshSequence.current += 1;
-    };
-  }, [refresh]);
-
-  useEffect(() => {
-    if (view !== "all" && view !== "new") return;
-    let active = true;
-    setFailureLoading(true);
-    void listJenkinsFailures(
-      windowHours,
-      view === "new"
-        ? { view: "new" }
-        : { view: "all", job: jobQuery || undefined, result: result || undefined },
-      100,
-    )
-      .then((page) => {
-        if (active) {
-          setFailures(page.items);
-          setFailureCursor(page.next_cursor);
-        }
+    void Promise.all([
+      getJenkinsWorkspace(windowHours, 100, controller.signal),
+      listJenkinsFailures(windowHours, failureFilters, 100, undefined, controller.signal),
+      getOverview(controller.signal),
+    ])
+      .then(([workspace, failurePage, operational]) => {
+        if (sequence !== requestSequence.current) return;
+        const next: JenkinsDataset = {
+          workspace,
+          operational,
+          failures: failurePage.items,
+          failureCursor: failurePage.next_cursor,
+          failureTotal: failurePage.total_count,
+        };
+        cache.current.set(datasetKey, next);
+        datasetRef.current = next;
+        setDataset(next);
+        setInitialLoading(false);
+        setTransitioning(false);
+        setError(null);
       })
       .catch((requestError) => {
-        if (active) setError(requestError);
+        if (sequence === requestSequence.current && (!(requestError instanceof DOMException) || requestError.name !== "AbortError")) {
+          setError(requestError);
+          setInitialLoading(false);
+          setTransitioning(!cached && datasetRef.current !== null);
+        }
       })
       .finally(() => {
-        if (active) setFailureLoading(false);
+        if (sequence === requestSequence.current) setRefreshing(false);
       });
-    return () => {
-      active = false;
-    };
-  }, [jobQuery, result, view, windowHours]);
+    return () => controller.abort();
+  }, [datasetKey, failureFilters, reloadVersion, windowHours]);
+
+  const refresh = useCallback(() => setReloadVersion((current) => current + 1), []);
 
   async function loadMoreFailures() {
-    if (!failureCursor || failureLoadingMore) return;
+    if (!dataset?.failureCursor || failureLoadingMore) return;
+    const requestKey = datasetKey;
     setFailureLoadingMore(true);
     try {
       const page = await listJenkinsFailures(
         windowHours,
-        view === "new"
-          ? { view: "new" }
-          : { view: "all", job: jobQuery || undefined, result: result || undefined },
+        failureFilters,
         100,
-        failureCursor,
+        dataset.failureCursor,
       );
-      setFailures((current) => {
-        const known = new Set(current.map((item) => item.id));
-        return [...current, ...page.items.filter((item) => !known.has(item.id))];
+      if (requestKey !== currentKey.current) return;
+      setDataset((current) => {
+        if (!current) return current;
+        const known = new Set(current.failures.map((item) => item.id));
+        const next = {
+          ...current,
+          failures: [...current.failures, ...page.items.filter((item) => !known.has(item.id))],
+          failureCursor: page.next_cursor,
+          failureTotal: page.total_count,
+        };
+        datasetRef.current = next;
+        return next;
       });
-      setFailureCursor(page.next_cursor);
       setError(null);
     } catch (requestError) {
       setError(requestError);
@@ -156,6 +206,11 @@ export default function OverviewPage() {
     }
   }
 
+  const workspace = dataset?.workspace ?? null;
+  const operational = dataset?.operational ?? null;
+  const failures = dataset?.failures ?? [];
+  const failureCursor = dataset?.failureCursor ?? null;
+  const failureTotal = dataset?.failureTotal ?? 0;
   const summary = asRecord(workspace?.summary);
   const dailyUsage = asRecord(operational?.llm_usage);
   const sync = asRecord(summary.sync);
@@ -182,11 +237,11 @@ export default function OverviewPage() {
     [newFailureTotal, workspace],
   );
 
-  if (loading && !workspace) return <LoadingPanel label="Loading Jenkins build history" />;
+  if (initialLoading && !workspace) return <LoadingPanel label="Loading Jenkins build history" />;
   if (error && !workspace) return <ErrorPanel error={error} />;
   if (!workspace) return null;
 
-  const failureResults = failureLoading ? <LoadingPanel label="Loading failed builds" /> : (
+  const failureResults = (
     <>
       <BuildTable
         builds={failures}
@@ -195,7 +250,7 @@ export default function OverviewPage() {
       />
       <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "stretch", sm: "center" }} justifyContent="space-between" gap={1} sx={{ p: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
         <Typography variant="caption" color="text.secondary">
-          {failures.length.toLocaleString()} {view === "new" ? "new " : ""}failed builds loaded
+          {failures.length.toLocaleString()} of {failureTotal.toLocaleString()} {view === "new" ? "new " : ""}failures
         </Typography>
         {failureCursor && <Button onClick={() => void loadMoreFailures()} disabled={failureLoadingMore}>{failureLoadingMore ? "Loading" : "Load more failures"}</Button>}
       </Stack>
@@ -212,21 +267,19 @@ export default function OverviewPage() {
             <ToggleButtonGroup
               exclusive
               size="small"
-              value={loading && workspace ? workspace.window_hours : windowHours}
+              value={windowHours}
               onChange={(_, next: number | null) => {
                 if (!next) return;
-                refreshSequence.current += 1;
-                setLoading(true);
-                setWindowHours(next);
+                updateLocation({ window: String(next) });
               }}
               aria-label="Build history window"
             >
               {windows.map((item) => <ToggleButton key={item.value} value={item.value}>{item.label}</ToggleButton>)}
             </ToggleButtonGroup>
-            {loading && <CircularProgress size={18} aria-label="Loading build history" />}
+            {refreshing && <CircularProgress size={18} aria-label="Loading build history" />}
             <Tooltip title="Refresh Jenkins data">
               <span>
-                <IconButton onClick={() => void refresh()} disabled={loading} aria-label="Refresh Jenkins data">
+                <IconButton onClick={refresh} disabled={refreshing} aria-label="Refresh Jenkins data">
                   <RefreshIcon />
                 </IconButton>
               </span>
@@ -235,19 +288,50 @@ export default function OverviewPage() {
         }
       />
 
-      {Boolean(error) && <Box sx={{ mb: 2 }}><ErrorPanel error={error} /></Box>}
-      {retentionLimited > 0 && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {retentionLimited.toLocaleString()} jobs have retention-limited history in this window.
-        </Alert>
-      )}
-      {sync.status === "partial" && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          Latest catalog sync completed with {syncErrors || "some"} enrichment error{syncErrors === 1 ? "" : "s"}.
-        </Alert>
-      )}
+      <Box sx={{ position: "relative", minHeight: 360 }} aria-busy={transitioning && refreshing}>
+        {transitioning && (
+          <Box
+            sx={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 3,
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "center",
+              pt: 8,
+              bgcolor: "rgba(255, 255, 255, 0.78)",
+              backdropFilter: "blur(1px)",
+            }}
+          >
+            {error ? (
+              <Stack gap={1.25} sx={{ width: "min(460px, calc(100% - 32px))" }}>
+                <ErrorPanel error={error} />
+                <Button variant="contained" startIcon={<RefreshIcon />} onClick={refresh} sx={{ alignSelf: "center" }}>
+                  Retry {windowLabel(windowHours)} history
+                </Button>
+              </Stack>
+            ) : (
+              <Stack direction="row" alignItems="center" gap={1.25}>
+                <CircularProgress size={22} />
+                <Typography variant="body2" fontWeight={650}>Loading {windowLabel(windowHours)} history</Typography>
+              </Stack>
+            )}
+          </Box>
+        )}
 
-      <Paper variant="outlined" sx={{ mb: 2.5, overflow: "hidden" }}>
+        {Boolean(error) && !transitioning && <Box sx={{ mb: 2 }}><ErrorPanel error={error} /></Box>}
+        {retentionLimited > 0 && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {retentionLimited.toLocaleString()} jobs have retention-limited history in this window.
+          </Alert>
+        )}
+        {sync.status === "partial" && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Latest catalog sync completed with {syncErrors || "some"} enrichment error{syncErrors === 1 ? "" : "s"}.
+          </Alert>
+        )}
+
+        <Paper variant="outlined" sx={{ mb: 2.5, overflow: "hidden" }}>
         <Box
           sx={{
             display: "grid",
@@ -278,12 +362,12 @@ export default function OverviewPage() {
             {numberValue(summary.running_build_count).toLocaleString()} running · {formatTokens(dailyUsage.total_tokens)} · {formatUsd(dailyUsage.estimated_cost_usd)} today
           </Typography>
         </Stack>
-      </Paper>
+        </Paper>
 
-      <Paper variant="outlined" sx={{ overflow: "hidden" }}>
+        <Paper variant="outlined" sx={{ overflow: "hidden" }}>
         <Tabs
           value={view}
-          onChange={(_, next: JenkinsView) => setView(next)}
+          onChange={(_, next: JenkinsView) => updateLocation({ view: next })}
           variant="scrollable"
           scrollButtons="auto"
           sx={{ px: 1, minHeight: 48, borderBottom: "1px solid", borderColor: "divider" }}
@@ -345,7 +429,8 @@ export default function OverviewPage() {
             onToggle={(name) => setExpandedFamily((current) => current === name ? null : name)}
           />
         )}
-      </Paper>
+        </Paper>
+      </Box>
     </Box>
   );
 }
@@ -561,4 +646,18 @@ function numberValue(value: unknown): number {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function parseWindow(value: string | null): number {
+  const parsed = Number(value);
+  return windows.some((item) => item.value === parsed) ? parsed : 168;
+}
+
+function parseView(value: string | null): JenkinsView {
+  const views: JenkinsView[] = ["new", "executions", "recurring", "all", "jobs", "multibranch"];
+  return views.includes(value as JenkinsView) ? value as JenkinsView : "new";
+}
+
+function windowLabel(hours: number): string {
+  return windows.find((item) => item.value === hours)?.label ?? `${hours}h`;
 }

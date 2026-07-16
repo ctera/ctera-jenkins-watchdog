@@ -1150,6 +1150,8 @@ export interface components {
             items: components["schemas"]["V2JenkinsBuildResponse"][];
             /** Next Cursor */
             next_cursor: string | null;
+            /** Total Count */
+            total_count: number;
         };
         /** V2JenkinsWorkspaceResponse */
         V2JenkinsWorkspaceResponse: {
@@ -1467,6 +1469,97 @@ export interface components {
             /** Warning Incident Count */
             warning_incident_count: number;
         };
+        /** V2ScanAnalysisItemResponse */
+        V2ScanAnalysisItemResponse: {
+            /** Completed At */
+            completed_at?: string | null;
+            /** Error Summary */
+            error_summary?: string | null;
+            /** Incident Id */
+            incident_id: string;
+            /** Incident Title */
+            incident_title: string;
+            /** Investigation Id */
+            investigation_id?: string | null;
+            /** Outcome */
+            outcome: string;
+            /** Reason */
+            reason: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Request Id */
+            request_id?: string | null;
+            /** Request Status */
+            request_status?: string | null;
+            /** Severity */
+            severity: string;
+        };
+        /** V2ScanAnalysisResponse */
+        V2ScanAnalysisResponse: {
+            /**
+             * Active Count
+             * @default 0
+             */
+            active_count: number;
+            /**
+             * Budget Deferred Count
+             * @default 0
+             */
+            budget_deferred_count: number;
+            /**
+             * Candidate Count
+             * @default 0
+             */
+            candidate_count: number;
+            /**
+             * Deferred Count
+             * @default 0
+             */
+            deferred_count: number;
+            /**
+             * Failed Count
+             * @default 0
+             */
+            failed_count: number;
+            /** Items */
+            items?: components["schemas"]["V2ScanAnalysisItemResponse"][];
+            /**
+             * Manual Only Count
+             * @default 0
+             */
+            manual_only_count: number;
+            /**
+             * Queued Count
+             * @default 0
+             */
+            queued_count: number;
+            /**
+             * Reused Count
+             * @default 0
+             */
+            reused_count: number;
+            /**
+             * Running Count
+             * @default 0
+             */
+            running_count: number;
+            /**
+             * Selected Count
+             * @default 0
+             */
+            selected_count: number;
+            /**
+             * Status
+             * @default not_started
+             * @enum {string}
+             */
+            status: "not_started" | "selecting" | "queued" | "running" | "complete" | "complete_with_issues";
+            /**
+             * Succeeded Count
+             * @default 0
+             */
+            succeeded_count: number;
+        };
         /** V2ScanPage */
         V2ScanPage: {
             /** Items */
@@ -1487,6 +1580,7 @@ export interface components {
         };
         /** V2ScanResponse */
         V2ScanResponse: {
+            analysis?: components["schemas"]["V2ScanAnalysisResponse"];
             /** Attempt Count */
             attempt_count: number;
             /** Cancel Requested At */

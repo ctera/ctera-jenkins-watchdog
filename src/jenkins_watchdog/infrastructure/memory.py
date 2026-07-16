@@ -73,10 +73,25 @@ class InMemoryEventRepository:
         return tuple(event for event in self._store.events.get(scan_id, []) if event.sequence > sequence)[:limit]
 
 
+class InMemoryScanAnalysisRepository:
+    async def for_scan(self, scan_id: str) -> tuple[Any, ...]:
+        del scan_id
+        return ()
+
+
+class InMemoryIncidentRepository:
+    async def get(self, incident_id: str) -> None:
+        del incident_id
+        return None
+
+
 class InMemoryUnitOfWork:
     def __init__(self, store: InMemoryStore) -> None:
         self.scans = InMemoryScanRepository(store)
         self.events = InMemoryEventRepository(store)
+        self.analysis_decisions = InMemoryScanAnalysisRepository()
+        self.investigation_requests = InMemoryScanAnalysisRepository()
+        self.incidents = InMemoryIncidentRepository()
 
     async def __aenter__(self) -> "InMemoryUnitOfWork":
         return self

@@ -587,6 +587,16 @@ class SqlAlchemyInvestigationRequestRepository:
         )
         return investigation_request_from_record(record) if record else None
 
+    async def for_scan(self, scan_id: str) -> tuple[InvestigationRequest, ...]:
+        records = (
+            await self._session.scalars(
+                select(InvestigationRequestRecord)
+                .where(InvestigationRequestRecord.scan_id == _uuid(scan_id))
+                .order_by(InvestigationRequestRecord.created_at, InvestigationRequestRecord.id)
+            )
+        ).all()
+        return tuple(investigation_request_from_record(record) for record in records)
+
     async def enqueue(self, request: InvestigationRequest) -> InvestigationRequest:
         await self._session.scalar(
             select(IncidentRecord.id).where(IncidentRecord.id == _uuid(request.incident_id)).with_for_update()
@@ -718,6 +728,16 @@ class SqlAlchemyAnalysisDecisionRepository:
                 .where(AnalysisDecisionRecord.incident_id == _uuid(incident_id))
                 .order_by(AnalysisDecisionRecord.created_at.desc(), AnalysisDecisionRecord.id.desc())
                 .limit(limit)
+            )
+        ).all()
+        return tuple(analysis_decision_from_record(record) for record in records)
+
+    async def for_scan(self, scan_id: str) -> tuple[AnalysisDecision, ...]:
+        records = (
+            await self._session.scalars(
+                select(AnalysisDecisionRecord)
+                .where(AnalysisDecisionRecord.scan_id == _uuid(scan_id))
+                .order_by(AnalysisDecisionRecord.priority.desc(), AnalysisDecisionRecord.created_at)
             )
         ).all()
         return tuple(analysis_decision_from_record(record) for record in records)

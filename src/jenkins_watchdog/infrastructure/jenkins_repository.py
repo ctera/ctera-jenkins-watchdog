@@ -9,7 +9,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, case, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jenkins_watchdog.application.pagination import decode_cursor, encode_cursor
@@ -604,20 +604,27 @@ class SqlAlchemyJenkinsRepository:
         job: str | None = None,
         result: str | None = None,
     ) -> CursorPage:
+        conditions = [
+            JenkinsBuildRecord.started_at >= since,
+            JenkinsBuildRecord.result.in_(_FAILURE_RESULTS),
+        ]
+        if novelty:
+            conditions.append(JenkinsBuildRecord.novelty.in_(novelty))
+        if job:
+            conditions.append(JenkinsBuildRecord.job_full_name.ilike(f"%{job}%"))
+        if result:
+            conditions.append(JenkinsBuildRecord.result == result)
+        total_count = int(
+            await self._session.scalar(
+                select(func.count(JenkinsBuildRecord.id)).where(*conditions)
+            )
+            or 0
+        )
         statement = (
             select(JenkinsBuildRecord, JenkinsJobRecord)
             .join(JenkinsJobRecord, JenkinsJobRecord.full_name == JenkinsBuildRecord.job_full_name)
-            .where(
-                JenkinsBuildRecord.started_at >= since,
-                JenkinsBuildRecord.result.in_(_FAILURE_RESULTS),
-            )
+            .where(*conditions)
         )
-        if novelty:
-            statement = statement.where(JenkinsBuildRecord.novelty.in_(novelty))
-        if job:
-            statement = statement.where(JenkinsBuildRecord.job_full_name.ilike(f"%{job}%"))
-        if result:
-            statement = statement.where(JenkinsBuildRecord.result == result)
         if cursor:
             started_at, item_id = decode_cursor(cursor)
             build_id = uuid.UUID(item_id)
@@ -643,7 +650,11 @@ class SqlAlchemyJenkinsRepository:
         if len(rows) > limit:
             last = page[-1][0]
             next_cursor = encode_cursor(last.started_at, str(last.id))
-        return CursorPage(tuple(_build_dict(build, job_record) for build, job_record in page), next_cursor)
+        return CursorPage(
+            tuple(_build_dict(build, job_record) for build, job_record in page),
+            next_cursor,
+            total_count,
+        )
 
     async def logical_executions(self, *, since: datetime, limit: int) -> tuple[dict[str, Any], ...]:
         records = list(

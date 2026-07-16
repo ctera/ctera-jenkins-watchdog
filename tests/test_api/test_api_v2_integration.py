@@ -27,6 +27,8 @@ from jenkins_watchdog.domain.model import (
     Action,
     ActionStatus,
     ActionType,
+    AnalysisDecision,
+    AnalysisDecisionOutcome,
     CheckResult,
     CheckStatus,
     Confidence,
@@ -35,6 +37,8 @@ from jenkins_watchdog.domain.model import (
     FindingObservation,
     Incident,
     Investigation,
+    InvestigationRequest,
+    InvestigationRequestStatus,
     InvestigationStatus,
     ScanMode,
     Severity,
@@ -269,6 +273,88 @@ async def test_scan_collection_detail_cancel_and_cursor_validation(
 
 
 @pytest.mark.asyncio
+async def test_terminal_scan_reports_linked_agent_analysis_until_request_finishes(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    incident, _, _ = await seed_incident(postgres_session_factory)
+    scan_id = await seed_terminal_scan(postgres_session_factory)
+    request = InvestigationRequest(
+        id=str(uuid.uuid4()),
+        incident_id=incident.id,
+        occurrence_id=incident.current_occurrence.id,
+        mode=ScanMode.REGULAR,
+        source="scan",
+        priority=100,
+        evidence_hash="analysis-evidence",
+        status=InvestigationRequestStatus.QUEUED,
+        scan_id=scan_id,
+        created_at=NOW,
+        updated_at=NOW,
+        next_attempt_at=NOW,
+    )
+    decision = AnalysisDecision(
+        id=str(uuid.uuid4()),
+        incident_id=incident.id,
+        occurrence_id=incident.current_occurrence.id,
+        outcome=AnalysisDecisionOutcome.SELECTED,
+        reason_code="critical_failure",
+        reason="Critical direct evidence requires agent investigation.",
+        source="scan",
+        mode=ScanMode.REGULAR,
+        priority=100,
+        evidence_hash="analysis-evidence",
+        scan_id=scan_id,
+        request_id=request.id,
+        created_at=NOW,
+    )
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        await uow.investigation_requests.enqueue(request)
+        await uow.analysis_decisions.save(decision)
+        await uow.commit()
+
+    app, _ = make_app(postgres_session_factory)
+    async with client(app) as api:
+        queued = await api.get(f"/api/v2/scans/{scan_id}")
+
+        async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+            stored = await uow.investigation_requests.get(request.id)
+            assert stored is not None
+            failed = stored.claim(owner="test-agent", now=NOW, lease_seconds=60).fail(
+                "model request failed",
+                now=NOW + timedelta(seconds=1),
+            )
+            await uow.investigation_requests.save(failed)
+            await uow.commit()
+
+        finished = await api.get(f"/api/v2/scans/{scan_id}")
+
+    queued_analysis = queued.json()["analysis"]
+    assert queued.json()["status"] == "succeeded"
+    assert queued_analysis["status"] == "queued"
+    assert queued_analysis["candidate_count"] == 1
+    assert queued_analysis["selected_count"] == 1
+    assert queued_analysis["active_count"] == 1
+    assert queued_analysis["items"][0] == {
+        "incident_id": incident.id,
+        "incident_title": incident.title,
+        "severity": "critical",
+        "outcome": "selected",
+        "reason_code": "critical_failure",
+        "reason": "Critical direct evidence requires agent investigation.",
+        "request_id": request.id,
+        "request_status": "queued",
+        "investigation_id": None,
+        "error_summary": None,
+        "completed_at": None,
+    }
+    finished_analysis = finished.json()["analysis"]
+    assert finished_analysis["status"] == "complete_with_issues"
+    assert finished_analysis["active_count"] == 0
+    assert finished_analysis["failed_count"] == 1
+    assert finished_analysis["items"][0]["error_summary"] == "model request failed"
+
+
+@pytest.mark.asyncio
 async def test_sse_replays_after_last_event_id_for_multiple_viewers(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -416,6 +502,7 @@ async def test_analyze_build_creates_incident_and_durable_request(
         await uow.jenkins.refresh_classifications(now=NOW)
         page = await uow.jenkins.failure_builds(since=NOW - timedelta(hours=1), limit=1)
         build_id = page.items[0]["id"]
+        assert page.total_count == 1
         await uow.commit()
 
     app, _ = make_app(postgres_session_factory)

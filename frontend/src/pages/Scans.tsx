@@ -34,6 +34,13 @@ import StatusChip from "../components/StatusChip";
 import { useScanEvents } from "../hooks/useScanEvents";
 import { ApiError, createScan, listScans, type Scan } from "../services/api";
 import { formatDate, formatRelative, titleCase } from "../utils/format";
+import {
+  analysisProgress,
+  isAnalysisActive,
+  isCollectionActive,
+  scanStageLabel,
+  scanWorkflowStatus,
+} from "../utils/scan";
 
 const CATEGORIES = [
   ["jenkins_controller", "Jenkins controller"],
@@ -83,12 +90,22 @@ export default function Scans() {
 
   useEffect(() => void refresh(), [refresh]);
 
-  const active = useMemo(() => scans.find((scan) => scan.status === "queued" || scan.status === "running"), [scans]);
+  const collectionActive = useMemo(() => scans.find(isCollectionActive), [scans]);
+  const active = useMemo(
+    () => scans.find((scan) => isCollectionActive(scan) || isAnalysisActive(scan)),
+    [scans],
+  );
   const { events, connection } = useScanEvents(active?.id, refresh);
 
   useEffect(() => {
     if (events.length) void refresh();
   }, [events.length, refresh]);
+
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => void refresh(), 2_500);
+    return () => window.clearInterval(timer);
+  }, [active, refresh]);
 
   async function start() {
     setStarting(true);
@@ -96,6 +113,7 @@ export default function Scans() {
     try {
       const scan = await createScan(mode, categories);
       setScans((current) => [scan, ...current.filter((item) => item.id !== scan.id)]);
+      navigate(`/scans/${scan.id}`);
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 409) await refresh();
       else setError(requestError);
@@ -111,7 +129,12 @@ export default function Scans() {
     setCursor(page.next_cursor);
   }
 
-  const progress = active ? ((STAGE_INDEX[active.stage] ?? 0) / 7) * 100 : 0;
+  const progress = active
+    ? isCollectionActive(active)
+      ? ((STAGE_INDEX[active.stage] ?? 0) / 7) * 100
+      : analysisProgress(active.analysis)
+    : 0;
+  const activeWorkflow = active ? scanWorkflowStatus(active) : null;
 
   return (
     <Box>
@@ -162,7 +185,7 @@ export default function Scans() {
           <Button
             variant="contained"
             startIcon={<PlayArrowIcon />}
-            disabled={starting || Boolean(active)}
+            disabled={starting || Boolean(collectionActive)}
             onClick={() => void start()}
             sx={{ minWidth: 138 }}
           >
@@ -178,8 +201,14 @@ export default function Scans() {
               <Box sx={{ minWidth: 0 }}>
                 <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
                   <Typography variant="h6">Active {active.mode} scan</Typography>
-                  <StatusChip value={active.status} />
-                  <Chip size="small" variant="outlined" label={titleCase(active.stage)} />
+                  <StatusChip value={activeWorkflow?.value ?? active.status} />
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={isCollectionActive(active)
+                      ? scanStageLabel(active.stage)
+                      : `${active.analysis?.succeeded_count ?? 0} of ${active.analysis?.selected_count ?? 0} investigations complete`}
+                  />
                 </Stack>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
                   Started {formatRelative(active.started_at ?? active.created_at)} · attempt {active.attempt_count || 1}
@@ -196,7 +225,7 @@ export default function Scans() {
           {events.length > 0 && (
             <Box sx={{ px: { xs: 2, md: 2.5 }, py: 1.5, bgcolor: "#f8f9fa", borderTop: "1px solid", borderColor: "divider" }}>
               <Typography variant="caption" color="text.secondary">
-                {connection === "live" ? "Live" : "Reconnecting"} · {titleCase(events.at(-1)?.type ?? active.stage)}
+                {connection === "live" ? "Live" : "Reconnecting"} · {activeWorkflow?.label ?? scanStageLabel(active.stage)}
               </Typography>
             </Box>
           )}
@@ -214,12 +243,13 @@ export default function Scans() {
             <Table sx={{ minWidth: 760 }}>
               <TableHead>
                 <TableRow>
-                  <TableCell>Status</TableCell>
+                  <TableCell>Overall</TableCell>
+                  <TableCell>Collection</TableCell>
+                  <TableCell>Agent analysis</TableCell>
                   <TableCell>Mode</TableCell>
-                  <TableCell>Stage</TableCell>
                   <TableCell>Categories</TableCell>
                   <TableCell>Created</TableCell>
-                  <TableCell>Duration</TableCell>
+                  <TableCell>Collection time</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -232,9 +262,22 @@ export default function Scans() {
                     onKeyDown={(event) => event.key === "Enter" && navigate(`/scans/${scan.id}`)}
                     sx={{ cursor: "pointer" }}
                   >
-                    <TableCell><StatusChip value={scan.status} /></TableCell>
+                    <TableCell><StatusChip value={scanWorkflowStatus(scan).value} /></TableCell>
+                    <TableCell>
+                      <StatusChip value={scan.status} />
+                      {isCollectionActive(scan) && <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>{scanStageLabel(scan.stage)}</Typography>}
+                    </TableCell>
+                    <TableCell>
+                      {scan.analysis?.status && scan.analysis.status !== "not_started"
+                        ? <StatusChip value={scan.analysis.status} />
+                        : <Typography variant="body2" color="text.secondary">No candidates</Typography>}
+                      {Boolean(scan.analysis?.candidate_count) && (
+                        <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
+                          {scan.analysis?.selected_count ?? 0} selected of {scan.analysis?.candidate_count ?? 0}
+                        </Typography>
+                      )}
+                    </TableCell>
                     <TableCell>{titleCase(scan.mode)}</TableCell>
-                    <TableCell>{titleCase(scan.stage)}</TableCell>
                     <TableCell>{scan.categories.length ? `${scan.categories.length} selected` : "All"}</TableCell>
                     <TableCell>{formatDate(scan.created_at)}</TableCell>
                     <TableCell>{duration(scan)}</TableCell>

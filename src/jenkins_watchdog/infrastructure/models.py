@@ -218,6 +218,7 @@ class InvestigationRequestRecord(Base):
         ),
         Index("ix_investigation_requests_claim", "status", "next_attempt_at", "lease_expires_at", "priority"),
         Index("ix_investigation_requests_incident_created", "incident_id", "created_at"),
+        Index("ix_investigation_requests_scan_status", "scan_id", "status", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -284,6 +285,7 @@ class AnalysisDecisionRecord(Base):
     __table_args__ = (
         Index("ix_analysis_decisions_incident_created", "incident_id", "created_at"),
         Index("ix_analysis_decisions_outcome_created", "outcome", "created_at"),
+        Index("ix_analysis_decisions_scan_created", "scan_id", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)

@@ -25,6 +25,13 @@ import StatusChip from "../components/StatusChip";
 import { useScanEvents } from "../hooks/useScanEvents";
 import { cancelScan, getScan, type Scan } from "../services/api";
 import { formatDate, formatTokens, formatUsd, titleCase } from "../utils/format";
+import {
+  analysisProgress,
+  isAnalysisActive,
+  isCollectionActive,
+  scanStageLabel,
+  scanWorkflowStatus,
+} from "../utils/scan";
 
 const STAGES = ["queued", "detecting", "findings_stored", "correlating", "reconciling", "investigating", "planning_actions", "completed"];
 
@@ -55,6 +62,13 @@ export default function ScanDetailPage() {
     if (events.length) void refresh();
   }, [events.length, refresh]);
 
+  const workflowActive = Boolean(scan && (isCollectionActive(scan) || isAnalysisActive(scan)));
+  useEffect(() => {
+    if (!workflowActive) return;
+    const timer = window.setInterval(() => void refresh(), 2_500);
+    return () => window.clearInterval(timer);
+  }, [refresh, workflowActive]);
+
   async function cancel() {
     if (!scanId) return;
     setCancelling(true);
@@ -72,9 +86,18 @@ export default function ScanDetailPage() {
   if (error && !scan) return <ErrorPanel error={error} />;
   if (!scan) return <Alert severity="warning">Scan not found</Alert>;
 
-  const active = scan.status === "queued" || scan.status === "running";
+  const collectionActive = isCollectionActive(scan);
+  const analysisActive = isAnalysisActive(scan);
+  const workflow = scanWorkflowStatus(scan);
   const progress = ((STAGES.indexOf(scan.stage) + 1) / STAGES.length) * 100;
   const llmUsage = scan.llm_usage ?? {};
+  const analysis = scan.analysis;
+  const showAnalysis = Boolean(
+    analysis?.candidate_count
+    || analysis?.selected_count
+    || (analysis && analysis.status !== "not_started")
+    || !collectionActive,
+  );
 
   return (
     <Box>
@@ -85,7 +108,7 @@ export default function ScanDetailPage() {
         title={`${titleCase(scan.mode)} scan`}
         subtitle={scan.id}
         actions={
-          active ? (
+          collectionActive ? (
             <Button
               color="error"
               variant="outlined"
@@ -101,9 +124,14 @@ export default function ScanDetailPage() {
 
       {Boolean(error) && <Box sx={{ mb: 2 }}><ErrorPanel error={error} /></Box>}
       {scan.failure_summary && <Alert severity="error" sx={{ mb: 2 }}>{scan.failure_summary}</Alert>}
-      {scan.coverage_status && !active && scan.coverage_status !== "complete" && (
+      {scan.coverage_status && !collectionActive && scan.coverage_status !== "complete" && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           Detector coverage was {titleCase(scan.coverage_status)}. Incident results may be incomplete and unresolved conditions were preserved.
+        </Alert>
+      )}
+      {analysisActive && !collectionActive && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Collection is complete. Agent analysis is still running for {analysis?.active_count ?? 0} selected investigation{analysis?.active_count === 1 ? "" : "s"}.
         </Alert>
       )}
 
@@ -111,8 +139,8 @@ export default function ScanDetailPage() {
         <Box sx={{ p: { xs: 2, md: 2.5 } }}>
           <Stack direction={{ xs: "column", md: "row" }} gap={2.5} justifyContent="space-between">
             <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-              <StatusChip value={scan.status} size="medium" />
-              <Chip label={titleCase(scan.stage)} variant="outlined" />
+              <StatusChip value={workflow.value} size="medium" />
+              <Chip label={scanStageLabel(scan.stage)} variant="outlined" />
               <Typography variant="body2" color="text.secondary">
                 Attempt {scan.attempt_count || 1}
               </Typography>
@@ -120,15 +148,35 @@ export default function ScanDetailPage() {
             <Stack direction={{ xs: "column", sm: "row" }} gap={{ xs: 0.5, sm: 3 }}>
               <Meta label="Created" value={formatDate(scan.created_at)} />
               <Meta label="Started" value={formatDate(scan.started_at)} />
-              <Meta label="Completed" value={formatDate(scan.completed_at)} />
+              <Meta label="Collection ended" value={formatDate(scan.completed_at)} />
             </Stack>
           </Stack>
-          <Box sx={{ mt: 2 }}>
+          <Box sx={{ mt: 2.25 }}>
+            <Stack direction="row" justifyContent="space-between" gap={2} sx={{ mb: 0.75 }}>
+              <Typography variant="caption" color="text.secondary">Collection</Typography>
+              <Typography variant="caption" color="text.secondary">{collectionActive ? scanStageLabel(scan.stage) : titleCase(scan.status)}</Typography>
+            </Stack>
             <LinearProgress
               variant="determinate"
-              value={active ? Math.max(4, progress) : 100}
+              value={collectionActive ? Math.max(4, progress) : 100}
               sx={{ height: 6, "& .MuiLinearProgress-bar": { transition: "none" } }}
             />
+            {showAnalysis && (
+              <Box sx={{ mt: 1.75 }}>
+                <Stack direction="row" justifyContent="space-between" gap={2} sx={{ mb: 0.75 }}>
+                  <Typography variant="caption" color="text.secondary">Agent analysis</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {analysis?.succeeded_count ?? 0} succeeded · {analysis?.failed_count ?? 0} failed · {analysis?.active_count ?? 0} active
+                  </Typography>
+                </Stack>
+                <LinearProgress
+                  color={analysis?.failed_count || analysis?.budget_deferred_count ? "warning" : "primary"}
+                  variant="determinate"
+                  value={analysisProgress(analysis)}
+                  sx={{ height: 6, "& .MuiLinearProgress-bar": { transition: "none" } }}
+                />
+              </Box>
+            )}
           </Box>
         </Box>
         <Divider />
@@ -139,9 +187,75 @@ export default function ScanDetailPage() {
         </Box>
       </Paper>
 
-      {Number(llmUsage.call_count ?? 0) > 0 && (
+      {showAnalysis && (
+        <Box sx={{ mb: 2.5 }}>
+          <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ xs: "flex-start", sm: "center" }} gap={1} sx={{ mb: 1.25 }}>
+            <Box>
+              <Typography variant="h6">Agent selection and analysis</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {analysis?.candidate_count ?? 0} incident candidates evaluated; {analysis?.selected_count ?? 0} selected for agent investigation.
+              </Typography>
+            </Box>
+            <StatusChip value={analysis?.status ?? "not_started"} />
+          </Stack>
+
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(3, minmax(0, 1fr))", lg: "repeat(5, minmax(0, 1fr))" },
+              border: "1px solid",
+              borderColor: "divider",
+              borderRadius: 1,
+              overflow: "hidden",
+              mb: 1.5,
+            }}
+          >
+            <AnalysisMetric label="Candidates" value={analysis?.candidate_count ?? 0} />
+            <AnalysisMetric label="Selected" value={analysis?.selected_count ?? 0} />
+            <AnalysisMetric label="Queued" value={analysis?.queued_count ?? 0} />
+            <AnalysisMetric label="Running" value={analysis?.running_count ?? 0} />
+            <AnalysisMetric label="Succeeded" value={analysis?.succeeded_count ?? 0} />
+            <AnalysisMetric label="Failed" value={analysis?.failed_count ?? 0} tone="danger" />
+            <AnalysisMetric label="Reused" value={analysis?.reused_count ?? 0} />
+            <AnalysisMetric label="Deferred" value={analysis?.deferred_count ?? 0} />
+            <AnalysisMetric label="Manual only" value={analysis?.manual_only_count ?? 0} />
+            <AnalysisMetric label="Budget deferred" value={analysis?.budget_deferred_count ?? 0} tone="warning" />
+          </Box>
+
+          <TableContainer component={Paper} variant="outlined">
+            <Table sx={{ minWidth: 860 }}>
+              <TableHead><TableRow><TableCell>Incident</TableCell><TableCell width={130}>Decision</TableCell><TableCell>Reason</TableCell><TableCell width={130}>Agent status</TableCell><TableCell width={190}>Result</TableCell></TableRow></TableHead>
+              <TableBody>
+                {!analysis?.items?.length ? (
+                  <TableRow><TableCell colSpan={5}><Typography color="text.secondary" sx={{ py: 2, textAlign: "center" }}>No incident candidates were recorded for this scan</Typography></TableCell></TableRow>
+                ) : (analysis.items ?? []).map((item) => (
+                  <TableRow hover key={item.incident_id} onClick={() => navigate(`/incidents/${item.incident_id}`)} sx={{ cursor: "pointer" }}>
+                    <TableCell>
+                      <Typography variant="body2" fontWeight={650}>{item.incident_title}</Typography>
+                      <Typography variant="caption" color="text.secondary">{titleCase(item.severity)} · {item.incident_id}</Typography>
+                    </TableCell>
+                    <TableCell><StatusChip value={item.outcome} /></TableCell>
+                    <TableCell>
+                      <Typography variant="body2">{item.reason}</Typography>
+                      <Typography variant="caption" color="text.secondary">{titleCase(item.reason_code)}</Typography>
+                    </TableCell>
+                    <TableCell>{item.request_status ? <StatusChip value={item.request_status} /> : <Typography color="text.secondary">-</Typography>}</TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color={item.error_summary ? "error.main" : "text.secondary"}>
+                        {item.error_summary || (item.investigation_id ? "Investigation available" : "-")}
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
+      )}
+
+      {showAnalysis && (
         <Box sx={{ mb: 2.5, py: 1.5, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
-          <Typography variant="h6" sx={{ mb: 1 }}>Agent analysis cost</Typography>
+          <Typography variant="h6" sx={{ mb: 1 }}>Live agent cost</Typography>
           <Stack direction={{ xs: "column", sm: "row" }} gap={{ xs: 1, sm: 4 }}>
             <Meta label="Model calls" value={String(llmUsage.call_count ?? 0)} />
             <Meta label="Input" value={formatTokens(llmUsage.prompt_tokens)} />
@@ -178,7 +292,7 @@ export default function ScanDetailPage() {
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.25 }}>
         <Typography variant="h6">Event timeline</Typography>
         <Typography variant="caption" color={connection === "error" ? "error.main" : "text.secondary"}>
-          {active ? (connection === "live" ? "Live" : titleCase(connection)) : `${events.length} events`}
+          {workflowActive ? (connection === "live" ? "Live" : titleCase(connection)) : `${events.length} events`}
         </Typography>
       </Stack>
       <Paper variant="outlined" sx={{ overflow: "hidden" }}>
@@ -212,6 +326,16 @@ function Meta({ label, value }: { label: string; value: string }) {
     <Box>
       <Typography variant="caption" color="text.secondary">{label}</Typography>
       <Typography variant="body2" fontWeight={600}>{value}</Typography>
+    </Box>
+  );
+}
+
+function AnalysisMetric({ label, value, tone }: { label: string; value: number; tone?: "danger" | "warning" }) {
+  const color = tone === "danger" ? "error.main" : tone === "warning" ? "warning.main" : "text.primary";
+  return (
+    <Box sx={{ minWidth: 0, px: 1.75, py: 1.5, borderRight: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
+      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography variant="h6" color={color}>{value.toLocaleString()}</Typography>
     </Box>
   );
 }

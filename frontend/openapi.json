@@ -1918,11 +1918,16 @@
               }
             ],
             "title": "Next Cursor"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
           }
         },
         "required": [
           "items",
-          "next_cursor"
+          "next_cursor",
+          "total_count"
         ],
         "title": "V2JenkinsFailurePage",
         "type": "object"
@@ -2775,6 +2780,181 @@
         "title": "V2OverviewResponse",
         "type": "object"
       },
+      "V2ScanAnalysisItemResponse": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "incident_title": {
+            "title": "Incident Title",
+            "type": "string"
+          },
+          "investigation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Id"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "request_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Status"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "incident_title",
+          "severity",
+          "outcome",
+          "reason_code",
+          "reason"
+        ],
+        "title": "V2ScanAnalysisItemResponse",
+        "type": "object"
+      },
+      "V2ScanAnalysisResponse": {
+        "properties": {
+          "active_count": {
+            "default": 0,
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "budget_deferred_count": {
+            "default": 0,
+            "title": "Budget Deferred Count",
+            "type": "integer"
+          },
+          "candidate_count": {
+            "default": 0,
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "deferred_count": {
+            "default": 0,
+            "title": "Deferred Count",
+            "type": "integer"
+          },
+          "failed_count": {
+            "default": 0,
+            "title": "Failed Count",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/V2ScanAnalysisItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "manual_only_count": {
+            "default": 0,
+            "title": "Manual Only Count",
+            "type": "integer"
+          },
+          "queued_count": {
+            "default": 0,
+            "title": "Queued Count",
+            "type": "integer"
+          },
+          "reused_count": {
+            "default": 0,
+            "title": "Reused Count",
+            "type": "integer"
+          },
+          "running_count": {
+            "default": 0,
+            "title": "Running Count",
+            "type": "integer"
+          },
+          "selected_count": {
+            "default": 0,
+            "title": "Selected Count",
+            "type": "integer"
+          },
+          "status": {
+            "default": "not_started",
+            "enum": [
+              "not_started",
+              "selecting",
+              "queued",
+              "running",
+              "complete",
+              "complete_with_issues"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "succeeded_count": {
+            "default": 0,
+            "title": "Succeeded Count",
+            "type": "integer"
+          }
+        },
+        "title": "V2ScanAnalysisResponse",
+        "type": "object"
+      },
       "V2ScanPage": {
         "properties": {
           "items": {
@@ -2834,6 +3014,9 @@
       },
       "V2ScanResponse": {
         "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/V2ScanAnalysisResponse"
+          },
           "attempt_count": {
             "title": "Attempt Count",
             "type": "integer"

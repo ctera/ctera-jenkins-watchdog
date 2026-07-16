@@ -64,12 +64,16 @@ export class ApiError extends Error {
 
 const BASE = "/api/v2";
 
-export function getOverview(): Promise<Overview> {
-  return request<Overview>("/overview");
+export function getOverview(signal?: AbortSignal): Promise<Overview> {
+  return request<Overview>("/overview", { signal });
 }
 
-export function getJenkinsWorkspace(windowHours = 168, limit = 50): Promise<JenkinsWorkspace> {
-  return request<JenkinsWorkspace>(`/jenkins${query({ window_hours: windowHours, limit })}`);
+export function getJenkinsWorkspace(
+  windowHours = 168,
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<JenkinsWorkspace> {
+  return request<JenkinsWorkspace>(`/jenkins${query({ window_hours: windowHours, limit })}`, { signal });
 }
 
 export function listJenkinsFailures(
@@ -77,9 +81,11 @@ export function listJenkinsFailures(
   filters: { view?: "all" | "new"; result?: "FAILURE" | "UNSTABLE" | "ABORTED"; job?: string } = {},
   limit = 100,
   cursor?: string,
+  signal?: AbortSignal,
 ): Promise<JenkinsFailurePage> {
   return request<JenkinsFailurePage>(
     `/jenkins/failures${query({ window_hours: windowHours, limit, cursor, ...filters })}`,
+    { signal },
   );
 }
 
@@ -203,7 +209,7 @@ export async function* streamScanEvents(
       }
       if (signal.aborted) return;
       const scan = await getScan(scanId);
-      if (["succeeded", "failed", "cancelled"].includes(scan.status)) return;
+      if (["succeeded", "failed", "cancelled"].includes(scan.status) && !scan.analysis?.active_count) return;
     } catch (error) {
       if (signal.aborted) return;
       if (error instanceof ApiError && [404, 422].includes(error.status)) throw error;

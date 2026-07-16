@@ -21,6 +21,7 @@ class EnqueueScan:
 class CursorPage:
     items: tuple[Any, ...]
     next_cursor: str | None
+    total_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

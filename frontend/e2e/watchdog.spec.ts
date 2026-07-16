@@ -2,6 +2,25 @@ import { expect, test, type Page } from "@playwright/test";
 
 const now = "2026-07-13T12:00:00Z";
 
+function scanAnalysis(overrides: Record<string, unknown> = {}) {
+  return {
+    status: "not_started",
+    candidate_count: 0,
+    selected_count: 0,
+    queued_count: 0,
+    running_count: 0,
+    succeeded_count: 0,
+    failed_count: 0,
+    reused_count: 0,
+    deferred_count: 0,
+    manual_only_count: 0,
+    budget_deferred_count: 0,
+    active_count: 0,
+    items: [],
+    ...overrides,
+  };
+}
+
 function scan(overrides: Record<string, unknown> = {}) {
   return {
     id: "scan-active",
@@ -15,6 +34,10 @@ function scan(overrides: Record<string, unknown> = {}) {
     cancel_requested_at: null,
     attempt_count: 1,
     failure_summary: null,
+    coverage_status: null,
+    checks: [],
+    llm_usage: { call_count: 0, total_tokens: 0, estimated_cost_usd: 0 },
+    analysis: scanAnalysis(),
     urls: {
       detail: "/api/v2/scans/scan-active",
       events: "/api/v2/scans/scan-active/events",
@@ -122,9 +145,65 @@ async function installApi(
     if (path.endsWith("/events")) {
       const lastEventId = request.headers()["last-event-id"] ?? "";
       eventHeaders.push(lastEventId);
-      const sequence = lastEventId === "1" ? 2 : 1;
-      if (sequence >= 2) currentScan = scan({ status: "succeeded", stage: "completed", completed_at: now });
-      const type = sequence >= 2 ? "scan_completed" : "scan_started";
+      const sequence = Number(lastEventId || 0) + 1;
+      if (sequence === 2) {
+        currentScan = scan({
+          ...currentScan,
+          status: "succeeded",
+          stage: "completed",
+          completed_at: now,
+          analysis: scanAnalysis({
+            status: "running",
+            candidate_count: 1,
+            selected_count: 1,
+            running_count: 1,
+            active_count: 1,
+            items: [{
+              incident_id: "incident-1",
+              incident_title: "Compiler failure across MR builds",
+              severity: "critical",
+              outcome: "selected",
+              reason_code: "critical_failure",
+              reason: "Critical direct evidence requires agent investigation.",
+              request_id: "request-1",
+              request_status: "running",
+              investigation_id: null,
+              error_summary: null,
+              completed_at: null,
+            }],
+          }),
+        });
+      }
+      if (sequence >= 3) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        currentScan = scan({
+          ...currentScan,
+          status: "succeeded",
+          stage: "completed",
+          completed_at: now,
+          llm_usage: { call_count: 1, prompt_tokens: 800, completion_tokens: 200, total_tokens: 1_000, estimated_cost_usd: 0.004 },
+          analysis: scanAnalysis({
+            status: "complete",
+            candidate_count: 1,
+            selected_count: 1,
+            succeeded_count: 1,
+            items: [{
+              incident_id: "incident-1",
+              incident_title: "Compiler failure across MR builds",
+              severity: "critical",
+              outcome: "selected",
+              reason_code: "critical_failure",
+              reason: "Critical direct evidence requires agent investigation.",
+              request_id: "request-1",
+              request_status: "succeeded",
+              investigation_id: "investigation-1",
+              error_summary: null,
+              completed_at: now,
+            }],
+          }),
+        });
+      }
+      const type = sequence === 1 ? "scan_started" : sequence === 2 ? "scan_completed" : "analysis_completed";
       const envelope = { sequence, type, occurred_at: now, payload_version: 1, payload: { attempt: 1 } };
       await route.fulfill({
         status: 200,
@@ -350,7 +429,10 @@ test("scan detail replays and reconnects with Last-Event-ID", async ({ page }, t
   await page.goto("/scans/scan-active");
 
   await expect.poll(() => api.eventHeaders().find(Boolean), { timeout: 20_000 }).toBe("1");
-  await expect(page.getByText("Scan Completed")).toBeVisible();
+  await expect(page.getByText("Analyzing", { exact: true })).toBeVisible();
+  await expect(page.getByText("Complete", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("1 incident candidates evaluated; 1 selected for agent investigation.")).toBeVisible();
+  await expect(page.getByText("$0.0040")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("scan-detail.png"), fullPage: true });
 });
 
@@ -364,7 +446,9 @@ test("operator can enqueue a regular scan", async ({ page }, testInfo) => {
   const request = await requestPromise;
 
   expect(request.postDataJSON()).toEqual({ mode: "regular", categories: null });
-  await expect(page.getByText("Active regular scan")).toBeVisible();
+  await expect(page).toHaveURL(/\/scans\/scan-new$/);
+  await expect(page.getByRole("heading", { name: "Regular scan" })).toBeVisible();
+  await expect(page.getByText("Scanning", { exact: true }).first()).toBeVisible();
 });
 
 test("latest build-history window wins when responses finish out of order", async ({ page }, testInfo) => {
@@ -373,19 +457,37 @@ test("latest build-history window wins when responses finish out of order", asyn
   const hold24 = new Promise<void>((resolve) => {
     release24 = resolve;
   });
+  let fail720Once = true;
   await page.route("**/auth/me", (route) => route.fulfill({ json: { authenticated: true, email: "operator@example.com" } }));
   await page.route("**/api/v2/**", async (route) => {
     const url = new URL(route.request().url());
+    const windowHours = Number(url.searchParams.get("window_hours"));
+    if (
+      fail720Once
+      && windowHours === 720
+      && ["/api/v2/jenkins", "/api/v2/jenkins/failures"].includes(url.pathname)
+    ) {
+      fail720Once = false;
+      await route.fulfill({ status: 500, json: { detail: "simulated window failure" } });
+      return;
+    }
     if (url.pathname === "/api/v2/overview") {
       await route.fulfill({ json: { llm_usage: { total_tokens: 0, estimated_cost_usd: 0 } } });
       return;
     }
     if (url.pathname === "/api/v2/jenkins/failures") {
-      await route.fulfill({ json: { items: [], next_cursor: null } });
+      if (windowHours === 24) await hold24;
+      if (windowHours === 4) await new Promise((resolve) => setTimeout(resolve, 20));
+      await route.fulfill({
+        json: {
+          items: [jenkinsBuildDetail({ id: `build-${windowHours}`, job_name: `window-${windowHours}-failure` })],
+          next_cursor: null,
+          total_count: windowHours,
+        },
+      });
       return;
     }
     if (url.pathname === "/api/v2/jenkins") {
-      const windowHours = Number(url.searchParams.get("window_hours"));
       if (windowHours === 24) await hold24;
       if (windowHours === 4) await new Promise((resolve) => setTimeout(resolve, 20));
       await route.fulfill({ json: jenkinsWorkspace(windowHours, windowHours * 10) });
@@ -393,24 +495,45 @@ test("latest build-history window wins when responses finish out of order", asyn
     }
     await route.fulfill({ status: 404, json: { detail: { code: "not_mocked" } } });
   });
-  await page.goto("/overview");
+  await page.goto("/overview?window=168&view=all");
   const failedBuilds = page.getByText("Failed builds", { exact: true }).locator("..");
   await expect(failedBuilds).toContainText("1,680");
+  await expect(page.getByText("window-168-failure")).toBeVisible();
 
   const request24 = page.waitForRequest((request) => request.url().includes("window_hours=24"));
-  const response24 = page.waitForResponse((response) => response.url().includes("window_hours=24"));
   await page.getByRole("button", { name: "24h", exact: true }).click();
   await request24;
-  expect(await page.getByRole("button", { name: "7d", exact: true }).getAttribute("aria-pressed")).toBe("true");
+  await expect(page.getByRole("button", { name: "24h", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveURL(/window=24&view=all/);
   expect(await failedBuilds.innerText()).toContain("1,680");
   await page.getByRole("button", { name: "4h", exact: true }).click();
 
   await expect(failedBuilds).toContainText("40");
-  release24();
-  await response24;
-  await page.waitForTimeout(50);
+  await expect(page.getByText("window-4-failure")).toBeVisible();
+  await expect(page.getByText("1 of 4 failures")).toBeVisible();
   await expect(page.getByRole("button", { name: "4h", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveURL(/window=4&view=all/);
+
+  await page.getByRole("button", { name: "24h", exact: true }).click();
+  await expect(page.getByRole("button", { name: "24h", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveURL(/window=24&view=all/);
+  release24();
+  await expect(failedBuilds).toContainText("240");
+  await expect(page.getByText("window-24-failure")).toBeVisible();
+  await expect(page.getByText("1 of 24 failures")).toBeVisible();
+
+  await page.getByRole("button", { name: "4h", exact: true }).click();
+  await expect(page.getByText("window-4-failure")).toBeVisible();
   await expect(failedBuilds).toContainText("40");
+
+  await page.getByRole("button", { name: "30d", exact: true }).click();
+  await expect(page.getByRole("button", { name: "30d", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveURL(/window=720&view=all/);
+  await expect(page.getByRole("button", { name: "Retry 30d history" })).toBeVisible();
+  await page.getByRole("button", { name: "Retry 30d history" }).click();
+  await expect(failedBuilds).toContainText("7,200");
+  await expect(page.getByText("window-720-failure")).toBeVisible();
+  await expect(page.getByText("1 of 720 failures")).toBeVisible();
 });
 
 test("operator can queue a deep build analysis", async ({ page }, testInfo) => {

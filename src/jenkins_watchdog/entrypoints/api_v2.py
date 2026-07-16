@@ -23,11 +23,13 @@ from jenkins_watchdog.application.types import ScanEvent
 from jenkins_watchdog.domain.model import (
     Action,
     AnalysisDecision,
+    AnalysisDecisionOutcome,
     CheckResult,
     FindingObservation,
     Incident,
     Investigation,
     InvestigationRequest,
+    InvestigationRequestStatus,
     LLMCall,
     Scan,
     ScanMode,
@@ -36,10 +38,49 @@ from jenkins_watchdog.domain.serialization import to_primitive
 
 router = APIRouter()
 
+ScanAnalysisStatus = Literal[
+    "not_started",
+    "selecting",
+    "queued",
+    "running",
+    "complete",
+    "complete_with_issues",
+]
+
 
 class V2ScanRequest(BaseModel):
     mode: Literal["regular", "deep"] = "regular"
     categories: list[str] | None = Field(default=None)
+
+
+class V2ScanAnalysisItemResponse(BaseModel):
+    incident_id: str
+    incident_title: str
+    severity: str
+    outcome: str
+    reason_code: str
+    reason: str
+    request_id: str | None = None
+    request_status: str | None = None
+    investigation_id: str | None = None
+    error_summary: str | None = None
+    completed_at: datetime | None = None
+
+
+class V2ScanAnalysisResponse(BaseModel):
+    status: ScanAnalysisStatus = "not_started"
+    candidate_count: int = 0
+    selected_count: int = 0
+    queued_count: int = 0
+    running_count: int = 0
+    succeeded_count: int = 0
+    failed_count: int = 0
+    reused_count: int = 0
+    deferred_count: int = 0
+    manual_only_count: int = 0
+    budget_deferred_count: int = 0
+    active_count: int = 0
+    items: list[V2ScanAnalysisItemResponse] = Field(default_factory=list)
 
 
 class V2ScanResponse(BaseModel):
@@ -58,6 +99,7 @@ class V2ScanResponse(BaseModel):
     coverage_status: str | None = None
     checks: list["V2CheckExecutionResponse"] = Field(default_factory=list)
     llm_usage: dict[str, Any] = Field(default_factory=dict)
+    analysis: V2ScanAnalysisResponse = Field(default_factory=V2ScanAnalysisResponse)
 
 
 class V2CheckExecutionResponse(BaseModel):
@@ -436,6 +478,7 @@ class V2JenkinsWorkspaceResponse(BaseModel):
 class V2JenkinsFailurePage(BaseModel):
     items: list[V2JenkinsBuildResponse]
     next_cursor: str | None
+    total_count: int
 
 
 class V2JenkinsBuildDetailResponse(V2JenkinsBuildResponse):
@@ -519,6 +562,9 @@ async def overview(request: Request) -> V2OverviewResponse:
     async with container.uow_factory() as uow:
         latest_scan = await uow.scans.latest_completed()
         checks = await uow.checks.for_scan(latest_scan.id) if latest_scan else ()
+        latest_scan_analysis = (
+            await _scan_analysis_response(uow, latest_scan) if latest_scan else None
+        )
         incident_page = await uow.incidents.list(limit=100, status="open")
         incident_rows: list[tuple[Incident, tuple[FindingObservation, ...]]] = []
         for incident in incident_page.items:
@@ -561,7 +607,11 @@ async def overview(request: Request) -> V2OverviewResponse:
         environment=container.settings.kubernetes_environment,
         status=status,
         generated_at=generated_at,
-        latest_scan=_scan_response(latest_scan, checks=checks) if latest_scan else None,
+        latest_scan=(
+            _scan_response(latest_scan, checks=checks, analysis=latest_scan_analysis)
+            if latest_scan
+            else None
+        ),
         coverage_status=coverage_status,
         active_incident_count=len(incident_rows),
         critical_incident_count=critical_count,
@@ -661,6 +711,7 @@ async def jenkins_failures(
     return V2JenkinsFailurePage(
         items=[V2JenkinsBuildResponse.model_validate(item) for item in page.items],
         next_cursor=page.next_cursor,
+        total_count=page.total_count or 0,
     )
 
 
@@ -768,10 +819,17 @@ async def list_scans(
     try:
         async with _container(request).uow_factory() as uow:
             page = await uow.scans.list(limit=limit, cursor=cursor)
+            items = [
+                _scan_response(
+                    scan,
+                    analysis=await _scan_analysis_response(uow, scan),
+                )
+                for scan in page.items
+            ]
     except InvalidCursorError as exc:
         raise HTTPException(status_code=422, detail={"code": "invalid_cursor"}) from exc
     return V2ScanPage(
-        items=[_scan_response(scan) for scan in page.items],
+        items=items,
         next_cursor=page.next_cursor,
     )
 
@@ -782,9 +840,10 @@ async def get_scan(request: Request, scan_id: str) -> V2ScanResponse:
         scan = await uow.scans.get(scan_id)
         checks = await uow.checks.for_scan(scan_id) if scan else ()
         llm_usage = await uow.llm_calls.summary_for_scan(scan_id) if scan else {}
+        analysis = await _scan_analysis_response(uow, scan) if scan else None
     if scan is None:
         raise HTTPException(status_code=404, detail={"code": "scan_not_found"})
-    return _scan_response(scan, checks=checks, llm_usage=llm_usage)
+    return _scan_response(scan, checks=checks, llm_usage=llm_usage, analysis=analysis)
 
 
 @router.post("/scans/{scan_id}/cancel", response_model=V2CancelResponse)
@@ -825,11 +884,20 @@ async def scan_events(
             async with _container(request).uow_factory() as uow:
                 events = await uow.events.after(scan_id, current_sequence)
                 scan = await uow.scans.get(scan_id)
+                requests = await uow.investigation_requests.for_scan(scan_id)
             for event in events:
                 current_sequence = event.sequence
                 last_emission = datetime.now(timezone.utc)
                 yield _sse_event(event)
-            if scan is None or (scan.terminal and not events):
+            analysis_active = any(
+                item.status
+                in {
+                    InvestigationRequestStatus.QUEUED,
+                    InvestigationRequestStatus.RUNNING,
+                }
+                for item in requests
+            )
+            if scan is None or (scan.terminal and not events and not analysis_active):
                 return
             now = datetime.now(timezone.utc)
             if (now - last_emission).total_seconds() >= 15:
@@ -1079,11 +1147,110 @@ def _actor_email(request: Request) -> str | None:
     return user.get("email") if isinstance(user, dict) else None
 
 
+async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisResponse:
+    decisions = await uow.analysis_decisions.for_scan(scan.id)
+    requests = await uow.investigation_requests.for_scan(scan.id)
+    request_by_id = {item.id: item for item in requests}
+    request_by_incident = {item.incident_id: item for item in requests}
+    incidents = {}
+    for incident_id in dict.fromkeys(item.incident_id for item in decisions):
+        incident = await uow.incidents.get(incident_id)
+        if incident is not None:
+            incidents[incident_id] = incident
+
+    selected_count = sum(
+        item.outcome is AnalysisDecisionOutcome.SELECTED for item in decisions
+    )
+    queued_count = sum(
+        item.status is InvestigationRequestStatus.QUEUED for item in requests
+    )
+    running_count = sum(
+        item.status is InvestigationRequestStatus.RUNNING for item in requests
+    )
+    succeeded_count = sum(
+        item.status is InvestigationRequestStatus.SUCCEEDED for item in requests
+    )
+    failed_count = sum(
+        item.status is InvestigationRequestStatus.FAILED for item in requests
+    )
+    reused_count = sum(
+        item.outcome is AnalysisDecisionOutcome.REUSED for item in decisions
+    )
+    deferred_count = sum(
+        item.outcome is AnalysisDecisionOutcome.DEFERRED for item in decisions
+    )
+    manual_only_count = sum(
+        item.outcome is AnalysisDecisionOutcome.MANUAL_ONLY for item in decisions
+    )
+    budget_deferred_count = sum(
+        item.outcome is AnalysisDecisionOutcome.BUDGET_DEFERRED for item in decisions
+    )
+    active_count = queued_count + running_count
+
+    status: ScanAnalysisStatus
+    if running_count:
+        status = "running"
+    elif queued_count:
+        status = "queued"
+    elif not scan.terminal and scan.stage.value in {
+        "investigating",
+        "planning_actions",
+        "completed",
+    }:
+        status = "selecting"
+    elif scan.terminal and (failed_count or budget_deferred_count or scan.status.value != "succeeded"):
+        status = "complete_with_issues"
+    elif scan.terminal:
+        status = "complete"
+    else:
+        status = "not_started"
+
+    items = []
+    for decision in decisions:
+        linked_request = (
+            request_by_id.get(decision.request_id or "")
+            or request_by_incident.get(decision.incident_id)
+        )
+        incident = incidents.get(decision.incident_id)
+        items.append(
+            V2ScanAnalysisItemResponse(
+                incident_id=decision.incident_id,
+                incident_title=incident.title if incident else "Incident unavailable",
+                severity=incident.severity.value if incident else "unknown",
+                outcome=decision.outcome.value,
+                reason_code=decision.reason_code,
+                reason=decision.reason,
+                request_id=linked_request.id if linked_request else decision.request_id,
+                request_status=linked_request.status.value if linked_request else None,
+                investigation_id=linked_request.investigation_id if linked_request else None,
+                error_summary=linked_request.error_summary if linked_request else None,
+                completed_at=linked_request.completed_at if linked_request else None,
+            )
+        )
+
+    return V2ScanAnalysisResponse(
+        status=status,
+        candidate_count=len(decisions),
+        selected_count=selected_count,
+        queued_count=queued_count,
+        running_count=running_count,
+        succeeded_count=succeeded_count,
+        failed_count=failed_count,
+        reused_count=reused_count,
+        deferred_count=deferred_count,
+        manual_only_count=manual_only_count,
+        budget_deferred_count=budget_deferred_count,
+        active_count=active_count,
+        items=items,
+    )
+
+
 def _scan_response(
     scan: Scan,
     *,
     checks: tuple[CheckResult, ...] = (),
     llm_usage: dict[str, Any] | None = None,
+    analysis: V2ScanAnalysisResponse | None = None,
 ) -> V2ScanResponse:
     return V2ScanResponse(
         id=scan.id,
@@ -1100,12 +1267,24 @@ def _scan_response(
         coverage_status=_coverage_status(checks, scan),
         checks=[_check_response(check) for check in checks],
         llm_usage=llm_usage or {},
+        analysis=analysis or _empty_scan_analysis(scan),
         urls={
             "detail": f"/api/v2/scans/{scan.id}",
             "events": f"/api/v2/scans/{scan.id}/events",
             "cancel": f"/api/v2/scans/{scan.id}/cancel",
         },
     )
+
+
+def _empty_scan_analysis(scan: Scan) -> V2ScanAnalysisResponse:
+    status: ScanAnalysisStatus
+    if scan.terminal:
+        status = "complete" if scan.status.value == "succeeded" else "complete_with_issues"
+    elif scan.stage.value in {"investigating", "planning_actions", "completed"}:
+        status = "selecting"
+    else:
+        status = "not_started"
+    return V2ScanAnalysisResponse(status=status)
 
 
 def _check_response(check: CheckResult) -> V2CheckExecutionResponse:
