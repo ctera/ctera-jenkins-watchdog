@@ -201,6 +201,62 @@ async def test_sync_wrapper_has_explicit_timeout_and_constructor_requires_url() 
         await client._http.aclose()
 
 
+@pytest.mark.asyncio
+async def test_failed_build_collection_pages_all_jobs_until_the_window_cutoff(monkeypatch) -> None:
+    trees: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        tree = request.url.params["tree"]
+        trees.append(tree)
+        pages = {
+            "builds[number,result,timestamp,duration,url]{0,2}": [
+                {"number": 10, "result": "SUCCESS", "timestamp": 9_900_000},
+                {"number": 9, "result": "SUCCESS", "timestamp": 9_850_000},
+            ],
+            "builds[number,result,timestamp,duration,url]{2,4}": [
+                {
+                    "number": 8,
+                    "result": "FAILURE",
+                    "timestamp": 9_800_000,
+                    "duration": 30_000,
+                    "url": "https://jenkins/job/recovered/8/",
+                },
+                {"number": 7, "result": "SUCCESS", "timestamp": 9_700_000},
+            ],
+            "builds[number,result,timestamp,duration,url]{4,6}": [
+                {"number": 6, "result": "FAILURE", "timestamp": 6_000_000},
+                {"number": 5, "result": "SUCCESS", "timestamp": 5_900_000},
+            ],
+        }
+        return httpx.Response(200, json={"builds": pages.get(tree, [])})
+
+    server = FakeServer()
+    server.get_all_jobs = lambda *, folder_depth: [  # type: ignore[method-assign]
+        {"name": "recovered", "color": "blue"}
+    ]
+    http = httpx.AsyncClient(
+        base_url="https://jenkins.example",
+        transport=httpx.MockTransport(handler),
+    )
+    client = JenkinsClient(
+        base_url="https://jenkins.example",
+        server=server,
+        http_client=http,
+    )
+    monkeypatch.setattr(jenkins_module.time, "time", lambda: 10_000.0)
+    try:
+        failures = await client.get_recent_failed_builds(window_hours=1, build_limit=2)
+    finally:
+        await http.aclose()
+
+    assert [(item.job_name, item.build_number) for item in failures] == [("recovered", 8)]
+    assert trees == [
+        "builds[number,result,timestamp,duration,url]{0,2}",
+        "builds[number,result,timestamp,duration,url]{2,4}",
+        "builds[number,result,timestamp,duration,url]{4,6}",
+    ]
+
+
 @pytest.mark.parametrize(
     ("name", "expected"),
     [

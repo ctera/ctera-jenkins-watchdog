@@ -521,6 +521,10 @@ class SqlAlchemyInvestigationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def get(self, investigation_id: str) -> Investigation | None:
+        record = await self._session.get(InvestigationRecord, _uuid(investigation_id))
+        return investigation_from_record(record) if record else None
+
     async def latest_for_incident(self, incident_id: str) -> Investigation | None:
         record = await self._session.scalar(
             select(InvestigationRecord)

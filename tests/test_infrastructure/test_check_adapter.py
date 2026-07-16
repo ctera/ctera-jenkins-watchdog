@@ -103,6 +103,18 @@ async def test_check_adapter_returns_structured_failure_and_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_check_adapter_applies_a_check_specific_timeout() -> None:
+    result = await LegacyCheckRunner(
+        (SlowCheck(),),
+        timeout_seconds=1,
+        timeout_overrides={"jenkins_agent_connectivity": 0.01},
+    ).run("scan-id", "jenkins_agent_connectivity", ScanMode.REGULAR)
+
+    assert result.status is CheckStatus.TIMED_OUT
+    assert result.failure_summary == "timed out after 0.01s"
+
+
+@pytest.mark.asyncio
 async def test_check_adapter_activates_mode_specific_options_without_leaking_context() -> None:
     check = OptionCheck()
     regular = ScanOptions(jenkins_failed_build_window_hours=2, jenkins_build_depth=4)

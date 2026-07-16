@@ -12,6 +12,7 @@ data:
   WATCHDOG_JENKINS_AGENT_LABEL: {{ .Values.config.jenkinsAgentLabel | quote }}
   WATCHDOG_JENKINS_NAMESPACE: {{ .Values.config.jenkinsNamespace | quote }}
   WATCHDOG_JENKINS_FAILED_BUILD_WINDOW_HOURS: {{ .Values.config.jenkinsFailedBuildWindowHours | quote }}
+  WATCHDOG_JENKINS_FAILED_BUILD_CHECK_TIMEOUT_S: {{ .Values.config.jenkinsFailedBuildCheckTimeoutSeconds | quote }}
   WATCHDOG_JENKINS_MONITOR_ENABLED: {{ .Values.config.jenkinsMonitorEnabled | quote }}
   WATCHDOG_JENKINS_SYNC_INTERVAL_S: {{ .Values.config.jenkinsSyncIntervalSeconds | quote }}
   WATCHDOG_JENKINS_SYNC_WINDOW_HOURS: {{ .Values.config.jenkinsSyncWindowHours | quote }}

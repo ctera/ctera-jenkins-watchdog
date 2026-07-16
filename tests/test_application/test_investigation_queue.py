@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -113,6 +114,28 @@ class AgentReasoning:
         return ReasoningReply(content=message)
 
 
+class PartialAgentReasoning(AgentReasoning):
+    async def investigate(self, incident, observations, *, context=None, mode=ScanMode.REGULAR, on_progress=None):
+        investigation = await super().investigate(
+            incident,
+            observations,
+            context=context,
+            mode=mode,
+            on_progress=on_progress,
+        )
+        return replace(
+            investigation,
+            status=InvestigationStatus.PARTIAL,
+            confidence=Confidence.LOW,
+            error_summary="investigation exploration limit reached",
+            result={
+                **dict(investigation.result),
+                "completion_status": "partial",
+                "partial_reason": "investigation exploration limit reached",
+            },
+        )
+
+
 class Automation:
     def __init__(self) -> None:
         self.incidents: list[str] = []
@@ -216,6 +239,51 @@ async def test_queue_deduplicates_worker_persists_result_and_plans_actions(
     assert persisted is not None and persisted.attempt_count == 1
     assert investigation is not None and investigation.result["root_cause"] == "node memory pressure"
     assert updated is not None and updated.classification == "infrastructure"
+
+
+@pytest.mark.asyncio
+async def test_partial_agent_result_finishes_once_without_retry_or_automation(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    incident = await seed_incident(postgres_session_factory)
+    factory = uow_factory(postgres_session_factory)
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        scan_id = (await uow.incidents.observations(incident.id))[0].scan_id
+    queue = InvestigationQueueService(uow_factory=factory, now=lambda: NOW)
+    request = await queue.enqueue_incident(
+        incident.id,
+        source="automatic",
+        scan_id=scan_id,
+        force=True,
+    )
+    assert request is not None
+    automation = Automation()
+    events = RecordingEvents()
+    worker = InvestigationWorker(
+        owner="worker-partial",
+        uow_factory=factory,
+        reasoning=ReasoningService(uow_factory=factory, reasoning=PartialAgentReasoning(), now=lambda: NOW),
+        queue=queue,
+        automation=automation,
+        events=events,  # type: ignore[arg-type]
+        now=lambda: NOW,
+        lease_seconds=60,
+        heartbeat_seconds=5,
+        max_attempts=3,
+    )
+
+    completed = await worker.run_once()
+
+    assert completed is not None and completed.status is InvestigationRequestStatus.SUCCEEDED
+    assert completed.attempt_count == 1
+    assert automation.incidents == []
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        investigation = await uow.investigations.latest_for_incident(incident.id)
+        persisted = await uow.investigation_requests.get(request.id)
+    assert investigation is not None and investigation.status is InvestigationStatus.PARTIAL
+    assert persisted is not None and persisted.status is InvestigationRequestStatus.SUCCEEDED
+    completion_event = next(payload for _, event, payload in events.events if event == "investigation_completed")
+    assert completion_event["investigation_status"] == "partial"
 
 
 @pytest.mark.asyncio

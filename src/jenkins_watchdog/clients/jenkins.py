@@ -23,7 +23,6 @@ MR_JOB_PATTERN = re.compile(
     re.IGNORECASE,
 )
 FAILED_BUILD_RESULTS = frozenset({"FAILURE"})
-FAILED_JOB_COLORS = frozenset({"red", "yellow", "aborted"})
 _COMPUTER_TREE = (
     "computer[displayName,offline,temporarilyOffline,offlineCauseReason,idle,"
     "numExecutors,monitorData,executors[currentExecutable[number,url,timestamp,estimatedDuration]]]"
@@ -210,8 +209,16 @@ class JenkinsClient:
     async def get_all_jobs(self, folder_depth: int = 1) -> list[dict[str, Any]]:
         return await self._run_sync(self._server.get_all_jobs, folder_depth=folder_depth)
 
-    async def get_job_recent_builds(self, job_name: str, limit: int = 10) -> list[dict[str, Any]]:
-        tree = f"builds[number,result,timestamp,duration,url]{{0,{limit}}}"
+    async def get_job_recent_builds(
+        self,
+        job_name: str,
+        limit: int = 10,
+        *,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        start = max(0, offset)
+        end = start + max(1, limit)
+        tree = f"builds[number,result,timestamp,duration,url]{{{start},{end}}}"
         response = await self._http.get(f"{job_to_api_path(job_name)}/api/json", params={"tree": tree})
         response.raise_for_status()
         return response.json().get("builds", [])
@@ -229,43 +236,65 @@ class JenkinsClient:
         cutoff_ms = (time.time() - window * 3600) * 1000
         jobs = await self.get_all_jobs(folder_depth=folder_depth)
         candidates = [
-            job.get("fullname") or job.get("name", "")
-            for job in jobs
-            if job.get("color") in FAILED_JOB_COLORS and (job.get("fullname") or job.get("name"))
+            str(job.get("fullname") or job.get("name")) for job in jobs if job.get("fullname") or job.get("name")
         ]
+        if mr_only:
+            candidates = [name for name in candidates if is_mr_job(name)]
         semaphore = asyncio.Semaphore(max_concurrency)
+        page_size = max(1, build_limit)
 
         async def fetch(job_name: str) -> list[FailedBuildSummary]:
             async with semaphore:
-                try:
-                    builds = await self.get_job_recent_builds(job_name, limit=build_limit)
-                except Exception as exc:
-                    logger.debug("Failed to fetch builds for %s: %s", job_name, exc)
-                    return []
                 result: list[FailedBuildSummary] = []
                 mr_job = is_mr_job(job_name)
-                for build in builds:
-                    build_result = build.get("result")
-                    timestamp_ms = build.get("timestamp", 0)
-                    if build_result not in FAILED_BUILD_RESULTS or timestamp_ms < cutoff_ms:
-                        continue
-                    result.append(
-                        FailedBuildSummary(
-                            job_name=job_name,
-                            build_number=build.get("number", 0),
-                            result=build_result,
-                            duration_ms=build.get("duration", 0),
-                            timestamp_ms=timestamp_ms,
-                            url=build.get("url", ""),
-                            is_mr=mr_job,
+                seen_builds: set[int] = set()
+                offset = 0
+                while True:
+                    try:
+                        builds = await self.get_job_recent_builds(
+                            job_name,
+                            limit=page_size,
+                            offset=offset,
                         )
-                    )
+                    except Exception as exc:
+                        logger.debug("Failed to fetch builds for %s: %s", job_name, exc)
+                        break
+                    if not builds:
+                        break
+
+                    new_builds = 0
+                    reached_cutoff = False
+                    for build in builds:
+                        build_number = int(build.get("number") or 0)
+                        if build_number in seen_builds:
+                            continue
+                        seen_builds.add(build_number)
+                        new_builds += 1
+                        timestamp_ms = int(build.get("timestamp") or 0)
+                        if timestamp_ms < cutoff_ms:
+                            reached_cutoff = True
+                            continue
+                        build_result = str(build.get("result") or "")
+                        if build_result not in FAILED_BUILD_RESULTS:
+                            continue
+                        result.append(
+                            FailedBuildSummary(
+                                job_name=job_name,
+                                build_number=build_number,
+                                result=build_result,
+                                duration_ms=int(build.get("duration") or 0),
+                                timestamp_ms=timestamp_ms,
+                                url=str(build.get("url") or ""),
+                                is_mr=mr_job,
+                            )
+                        )
+                    if reached_cutoff or len(builds) < page_size or new_builds == 0:
+                        break
+                    offset += len(builds)
                 return result
 
         batches = await asyncio.gather(*(fetch(name) for name in candidates))
         failed_builds = [build for batch in batches for build in batch]
-        if mr_only:
-            failed_builds = [build for build in failed_builds if build.is_mr]
         failed_builds.sort(key=lambda build: build.timestamp_ms, reverse=True)
         return failed_builds
 

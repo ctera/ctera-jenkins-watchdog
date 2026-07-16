@@ -211,10 +211,13 @@ function AgentAnalysis({
   const investigation = build.latest_investigation;
   const result = asRecord(investigation?.result);
   const trace = asRecords(result.tool_trace);
-  const hasAssessment = investigation?.status === "succeeded";
+  const hasAssessment = investigation?.status === "succeeded" || investigation?.status === "partial";
+  const analysisPartial = investigation?.status === "partial";
   const analysisFailed = request?.status === "failed" || (!active && investigation?.status === "failed");
   const failureDetail = request?.error_summary || investigation?.error_summary;
-  const status = request?.status ?? (investigation?.status === "succeeded" ? "succeeded" : "not_started");
+  const status = active || analysisFailed
+    ? request?.status ?? investigation?.status ?? "not_started"
+    : investigation?.status ?? request?.status ?? "not_started";
 
   return (
     <Section title="Agent analysis">
@@ -250,6 +253,12 @@ function AgentAnalysis({
 
         {request?.status === "queued" && <Alert severity="info" sx={{ mt: 2 }}>Agent analysis is queued.</Alert>}
         {request?.status === "running" && <Alert severity="info" sx={{ mt: 2 }}>Agent is gathering live evidence.</Alert>}
+        {analysisPartial && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            The agent retained a partial assessment from the evidence it collected. Review it before acting or run a focused analysis again.
+            {failureDetail && <Typography variant="caption" component="div" sx={{ mt: 0.5 }}>Diagnostic: {failureDetail}</Typography>}
+          </Alert>
+        )}
         {analysisFailed && (
           <Alert severity="error" sx={{ mt: 2 }}>
             Agent analysis failed before producing a root-cause assessment. This is a Watchdog agent error, not the Jenkins failure. Retry the analysis.

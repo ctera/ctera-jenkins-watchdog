@@ -131,8 +131,8 @@ class InvestigationQueueService:
         *,
         uow_factory: UnitOfWorkFactory,
         now: Callable[[], datetime],
-        token_budget: int = 24_000,
-        deep_token_budget: int = 40_000,
+        token_budget: int = 40_000,
+        deep_token_budget: int = 64_000,
         daily_token_budget: int = 4_000_000,
         manual_token_reserve: int = 1_000_000,
         daily_cost_budget_usd: Decimal = Decimal("14.00"),
@@ -405,7 +405,7 @@ class InvestigationWorker:
             now = self._now()
             if investigation is None:
                 raise RuntimeError("reasoning returned no investigation")
-            if investigation.status is InvestigationStatus.SUCCEEDED:
+            if investigation.status in {InvestigationStatus.SUCCEEDED, InvestigationStatus.PARTIAL}:
                 completed = request.succeed(investigation.id, now=now)
             else:
                 completed = request.fail(
@@ -425,12 +425,16 @@ class InvestigationWorker:
                         "request_id": request.id,
                         "investigation_id": investigation.id,
                         "status": completed.status.value,
+                        "investigation_status": investigation.status.value,
                         "confidence": investigation.confidence.value if investigation.confidence else None,
                         "error_summary": investigation.error_summary,
                     },
                     now=now,
                 )
-            if completed.status is InvestigationRequestStatus.SUCCEEDED:
+            if (
+                completed.status is InvestigationRequestStatus.SUCCEEDED
+                and investigation.status is InvestigationStatus.SUCCEEDED
+            ):
                 try:
                     await self._automation.plan(request.incident_id)
                 except Exception:

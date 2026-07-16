@@ -31,6 +31,7 @@ from jenkins_watchdog.domain.model import (
     Investigation,
     InvestigationRequest,
     InvestigationRequestStatus,
+    InvestigationStatus,
     LLMCall,
     Scan,
     ScanMode,
@@ -65,6 +66,7 @@ class V2ScanAnalysisItemResponse(BaseModel):
     request_id: str | None = None
     request_status: str | None = None
     investigation_id: str | None = None
+    investigation_status: str | None = None
     error_summary: str | None = None
     completed_at: datetime | None = None
 
@@ -76,6 +78,7 @@ class V2ScanAnalysisResponse(BaseModel):
     queued_count: int = 0
     running_count: int = 0
     succeeded_count: int = 0
+    partial_count: int = 0
     failed_count: int = 0
     reused_count: int = 0
     deferred_count: int = 0
@@ -1185,6 +1188,13 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
     requests = await uow.investigation_requests.for_scan(scan.id)
     request_by_id = {item.id: item for item in requests}
     request_by_incident = {item.incident_id: item for item in requests}
+    investigation_by_request: dict[str, Investigation] = {}
+    for item in requests:
+        if not item.investigation_id:
+            continue
+        investigation = await uow.investigations.get(item.investigation_id)
+        if investigation is not None:
+            investigation_by_request[item.id] = investigation
     incidents = {}
     for incident_id in dict.fromkeys(item.incident_id for item in decisions):
         incident = await uow.incidents.get(incident_id)
@@ -1200,8 +1210,15 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
     running_count = sum(
         item.status is InvestigationRequestStatus.RUNNING for item in requests
     )
-    succeeded_count = sum(
-        item.status is InvestigationRequestStatus.SUCCEEDED for item in requests
+    partial_count = sum(
+        item.status is InvestigationRequestStatus.SUCCEEDED
+        and investigation_by_request.get(item.id) is not None
+        and investigation_by_request[item.id].status is InvestigationStatus.PARTIAL
+        for item in requests
+    )
+    succeeded_count = (
+        sum(item.status is InvestigationRequestStatus.SUCCEEDED for item in requests)
+        - partial_count
     )
     failed_count = sum(
         item.status is InvestigationRequestStatus.FAILED for item in requests
@@ -1234,7 +1251,9 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
         status = "selecting"
     elif scan.terminal and all_budget_deferred:
         status = "budget_deferred"
-    elif scan.terminal and (failed_count or budget_deferred_count or scan.status.value != "succeeded"):
+    elif scan.terminal and (
+        partial_count or failed_count or budget_deferred_count or scan.status.value != "succeeded"
+    ):
         status = "complete_with_issues"
     elif scan.terminal:
         status = "complete"
@@ -1248,6 +1267,10 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
             or request_by_incident.get(decision.incident_id)
         )
         incident = incidents.get(decision.incident_id)
+        investigation = investigation_by_request.get(linked_request.id) if linked_request else None
+        error_summary = linked_request.error_summary if linked_request else None
+        if not error_summary and investigation is not None:
+            error_summary = investigation.error_summary
         items.append(
             V2ScanAnalysisItemResponse(
                 incident_id=decision.incident_id,
@@ -1259,7 +1282,8 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
                 request_id=linked_request.id if linked_request else decision.request_id,
                 request_status=linked_request.status.value if linked_request else None,
                 investigation_id=linked_request.investigation_id if linked_request else None,
-                error_summary=linked_request.error_summary if linked_request else None,
+                investigation_status=investigation.status.value if investigation else None,
+                error_summary=error_summary,
                 completed_at=linked_request.completed_at if linked_request else None,
             )
         )
@@ -1271,6 +1295,7 @@ async def _scan_analysis_response(uow: Any, scan: Scan) -> V2ScanAnalysisRespons
         queued_count=queued_count,
         running_count=running_count,
         succeeded_count=succeeded_count,
+        partial_count=partial_count,
         failed_count=failed_count,
         reused_count=reused_count,
         deferred_count=deferred_count,

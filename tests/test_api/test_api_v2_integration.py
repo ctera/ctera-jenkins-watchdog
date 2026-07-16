@@ -346,6 +346,7 @@ async def test_terminal_scan_reports_linked_agent_analysis_until_request_finishe
         "request_id": request.id,
         "request_status": "queued",
         "investigation_id": None,
+        "investigation_status": None,
         "error_summary": None,
         "completed_at": None,
     }
@@ -354,6 +355,78 @@ async def test_terminal_scan_reports_linked_agent_analysis_until_request_finishe
     assert finished_analysis["active_count"] == 0
     assert finished_analysis["failed_count"] == 1
     assert finished_analysis["items"][0]["error_summary"] == "model request failed"
+
+
+@pytest.mark.asyncio
+async def test_terminal_scan_exposes_partial_agent_assessment_as_complete_with_issues(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    incident, _, _ = await seed_incident(postgres_session_factory)
+    scan_id = await seed_terminal_scan(postgres_session_factory)
+    completed_at = NOW + timedelta(minutes=1)
+    investigation = Investigation(
+        id=str(uuid.uuid4()),
+        incident_id=incident.id,
+        occurrence_id=incident.current_occurrence.id,
+        status=InvestigationStatus.PARTIAL,
+        evidence_hash="partial-evidence",
+        input_version="v2",
+        prompt_version="tool-agent-v1",
+        model="model",
+        confidence=Confidence.LOW,
+        usage={"total_tokens": 12},
+        result={"root_cause": "incomplete", "completion_status": "partial"},
+        error_summary="exploration token limit reached",
+        created_at=completed_at,
+        completed_at=completed_at,
+    )
+    request = InvestigationRequest(
+        id=str(uuid.uuid4()),
+        incident_id=incident.id,
+        occurrence_id=incident.current_occurrence.id,
+        mode=ScanMode.REGULAR,
+        source="scan",
+        priority=100,
+        evidence_hash="partial-evidence",
+        status=InvestigationRequestStatus.SUCCEEDED,
+        scan_id=scan_id,
+        investigation_id=investigation.id,
+        created_at=NOW,
+        updated_at=completed_at,
+        completed_at=completed_at,
+    )
+    decision = AnalysisDecision(
+        id=str(uuid.uuid4()),
+        incident_id=incident.id,
+        occurrence_id=incident.current_occurrence.id,
+        outcome=AnalysisDecisionOutcome.SELECTED,
+        reason_code="critical_failure",
+        reason="Critical direct evidence requires agent investigation.",
+        source="scan",
+        mode=ScanMode.REGULAR,
+        priority=100,
+        evidence_hash="partial-evidence",
+        scan_id=scan_id,
+        request_id=request.id,
+        created_at=NOW,
+    )
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        await uow.investigations.save(investigation)
+        await uow.investigation_requests.enqueue(request)
+        await uow.analysis_decisions.save(decision)
+        await uow.commit()
+
+    app, _ = make_app(postgres_session_factory)
+    async with client(app) as api:
+        response = await api.get(f"/api/v2/scans/{scan_id}")
+
+    analysis = response.json()["analysis"]
+    assert analysis["status"] == "complete_with_issues"
+    assert analysis["succeeded_count"] == 0
+    assert analysis["partial_count"] == 1
+    assert analysis["failed_count"] == 0
+    assert analysis["items"][0]["investigation_status"] == "partial"
+    assert analysis["items"][0]["error_summary"] == "exploration token limit reached"
 
 
 @pytest.mark.asyncio

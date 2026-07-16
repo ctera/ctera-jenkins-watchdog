@@ -140,8 +140,7 @@ class JenkinsFailedBuildCheck:
                 "failed_mr_build_count": sum(build.is_mr for build in failed_builds),
                 "window_hours": opts.jenkins_failed_build_window_hours,
                 "recent_failed_builds": [
-                    build.to_dict()
-                    for build in sorted(failed_builds, key=lambda item: item.timestamp_ms, reverse=True)[:25]
+                    build.to_dict() for build in sorted(failed_builds, key=lambda item: item.timestamp_ms, reverse=True)
                 ],
             },
         )

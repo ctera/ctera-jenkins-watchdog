@@ -10,6 +10,7 @@ function scanAnalysis(overrides: Record<string, unknown> = {}) {
     queued_count: 0,
     running_count: 0,
     succeeded_count: 0,
+    partial_count: 0,
     failed_count: 0,
     reused_count: 0,
     deferred_count: 0,
@@ -499,6 +500,68 @@ test("scan detail explains when every candidate is budget deferred", async ({ pa
   await page.screenshot({ path: testInfo.outputPath("scan-budget-deferred.png"), fullPage: true });
 });
 
+test("scan detail displays every collected failure and partial agent result", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  test.setTimeout(60_000);
+  await installApi(page, {
+    scanOverrides: {
+      id: "scan-partial",
+      status: "succeeded",
+      stage: "completed",
+      completed_at: now,
+      checks: [{
+        name: "jenkins_failed_builds",
+        status: "succeeded",
+        categories: ["jenkins_failed_build"],
+        started_at: now,
+        completed_at: now,
+        failure_summary: null,
+        summary: {
+          failed_build_count: 2,
+          failed_job_count: 2,
+          window_hours: 4,
+          recent_failed_builds: [
+            { job_name: "recovered-job", build_number: 8, result: "FAILURE", timestamp_ms: Date.parse(now), duration_minutes: 1.5, url: "https://jenkins/job/recovered-job/8" },
+            { job_name: "busy-job", build_number: 41, result: "FAILURE", timestamp_ms: Date.parse(now) - 60_000, duration_minutes: 3, url: "https://jenkins/job/busy-job/41" },
+          ],
+        },
+      }],
+      analysis: scanAnalysis({
+        status: "complete_with_issues",
+        candidate_count: 1,
+        selected_count: 1,
+        partial_count: 1,
+        items: [{
+          incident_id: "incident-1",
+          incident_title: "Compiler failure across MR builds",
+          severity: "critical",
+          outcome: "selected",
+          reason_code: "critical_failure",
+          reason: "Critical direct evidence requires agent investigation.",
+          request_id: "request-1",
+          request_status: "succeeded",
+          investigation_id: "investigation-1",
+          investigation_status: "partial",
+          error_summary: "investigation exploration limit reached",
+          completed_at: now,
+        }],
+      }),
+    },
+  });
+
+  const scanResponse = page.waitForResponse((response) => response.url().endsWith("/api/v2/scans/scan-partial"));
+  await page.goto("/scans/scan-partial");
+  await scanResponse;
+
+  await expect(page.getByRole("heading", { name: "Failed builds in window" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("2 failed builds across 2 jobs in the 4-hour collection window.")).toBeVisible();
+  await expect(page.getByText("recovered-job", { exact: true })).toBeVisible();
+  await expect(page.getByText("busy-job", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open recovered-job build 8 in Jenkins" })).toHaveAttribute("href", "https://jenkins/job/recovered-job/8");
+  await expect(page.getByText("Partial", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("investigation exploration limit reached", { exact: true })).toBeVisible();
+});
+
 test("operator can enqueue a regular scan", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium");
   await installApi(page);
@@ -667,6 +730,60 @@ test("failed agent run is distinct from a root-cause assessment", async ({ page 
   await expect(page.getByText(/Watchdog agent error/)).toHaveCount(0);
   await expect(page.getByText(`Diagnostic: ${diagnostic}`)).toHaveCount(0);
   await expect(page.getByText("Low confidence", { exact: true })).toHaveCount(0);
+});
+
+test("partial agent assessment remains visible on build and incident detail", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  test.setTimeout(90_000);
+  const diagnostic = "investigation exploration limit reached";
+  const partialRequest = investigationRequest({
+    status: "succeeded",
+    attempt_count: 1,
+    next_attempt_at: null,
+    investigation_id: "investigation-1",
+    completed_at: now,
+  });
+  const partialInvestigation = investigation({
+    status: "partial",
+    confidence: "low",
+    result: {
+      root_cause: "Root cause was not fully determined before analysis stopped.",
+      impact: "MR remains blocked",
+      suggested_fix: "Review the collected console evidence.",
+      evidence: ["Build 42 failed in Compile"],
+      completion_status: "partial",
+      partial_reason: diagnostic,
+    },
+    error_summary: diagnostic,
+  });
+  await installApi(page, {
+    buildOverrides: {
+      incident_id: "incident-1",
+      investigation_request: partialRequest,
+      latest_investigation: partialInvestigation,
+    },
+    incidentDetailOverrides: {
+      investigation_request: partialRequest,
+      latest_investigation: partialInvestigation,
+    },
+  });
+
+  const buildResponse = page.waitForResponse((response) => response.url().endsWith("/api/v2/jenkins/builds/build-1"));
+  await page.goto("/jenkins/builds/build-1");
+  await buildResponse;
+  await expect(page.getByText(/retained a partial assessment/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(`Diagnostic: ${diagnostic}`)).toBeVisible();
+  await expect(page.getByText("Root cause was not fully determined before analysis stopped.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Analyze again" })).toBeVisible();
+
+  const incidentResponse = page.waitForResponse((response) => response.url().endsWith("/api/v2/incidents/incident-1"));
+  await page.goto("/incidents/incident-1");
+  await incidentResponse;
+  await expect(page.getByText(/partial agent assessment based on the evidence/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Root cause was not fully determined before analysis stopped.")).toBeVisible();
+  await page.getByRole("tab", { name: "Investigation" }).click({ timeout: 30_000 });
+  await expect(page.getByText(/retained a partial assessment from completed evidence reads/)).toBeVisible();
+  await expect(page.getByText("Build 42 failed in Compile")).toBeVisible();
 });
 
 test("operator can browse, suppress, inspect retry, and chat", async ({ page }, testInfo) => {

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     jenkins_agent_label: str = ""
     jenkins_namespace: str = "jenkins"
     jenkins_failed_build_window_hours: int = 4
+    jenkins_failed_build_check_timeout_s: float = 120.0
     jenkins_monitor_enabled: bool = True
     jenkins_sync_interval_s: float = 300.0
     jenkins_sync_window_hours: int = 168
@@ -73,8 +74,8 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_max_tokens: int = 2048
     llm_max_retries: int = 2
-    llm_scan_token_budget: int = 24000
-    llm_deep_scan_token_budget: int = 40000
+    llm_scan_token_budget: int = 40000
+    llm_deep_scan_token_budget: int = 64000
     llm_daily_token_budget: int = 4000000
     llm_manual_token_reserve: int = 1000000
     llm_daily_cost_budget_usd: Decimal = Decimal("14.00")

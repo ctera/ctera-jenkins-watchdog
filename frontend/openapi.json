@@ -2824,6 +2824,17 @@
             ],
             "title": "Investigation Id"
           },
+          "investigation_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Status"
+          },
           "outcome": {
             "title": "Outcome",
             "type": "string"
@@ -3000,6 +3011,11 @@
           "manual_only_count": {
             "default": 0,
             "title": "Manual Only Count",
+            "type": "integer"
+          },
+          "partial_count": {
+            "default": 0,
+            "title": "Partial Count",
             "type": "integer"
           },
           "queued_count": {

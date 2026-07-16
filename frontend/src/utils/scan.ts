@@ -41,6 +41,6 @@ export function scanStageLabel(stage: string): string {
 
 export function analysisProgress(analysis: ScanAnalysis | undefined): number {
   if (!analysis?.selected_count) return analysis?.active_count ? 4 : 100;
-  const finished = analysis.succeeded_count + analysis.failed_count;
+  const finished = analysis.succeeded_count + analysis.partial_count + analysis.failed_count;
   return Math.min(100, Math.max(analysis.active_count ? 4 : 0, (finished / analysis.selected_count) * 100));
 }

@@ -75,7 +75,7 @@ def test_usage_extracts_provider_cache_tokens() -> None:
 
 
 @pytest.mark.asyncio
-async def test_disabled_reasoning_persists_a_low_confidence_failure_value() -> None:
+async def test_disabled_reasoning_persists_a_low_confidence_partial_value() -> None:
     item = observation()
     incident = Incident.open_new(
         id="incident",
@@ -95,9 +95,11 @@ async def test_disabled_reasoning_persists_a_low_confidence_failure_value() -> N
 
     result = await adapter.investigate(incident, (item,))
 
-    assert result.status == InvestigationStatus.FAILED
+    assert result.status == InvestigationStatus.PARTIAL
     assert result.confidence.value == "low"
     assert "disabled" in (result.error_summary or "")
+    assert result.result["completion_status"] == "partial"
+    assert result.result["evidence"] == ("resource: pressure",)
 
 
 def response(content: str, *, total_tokens: int = 12, tool_calls=None):
@@ -121,9 +123,7 @@ async def test_reasoning_falls_back_accounts_usage_and_supports_triage_and_chat(
         if kwargs["model"] == "primary" and models.count("primary") == 1:
             raise RuntimeError("primary unavailable")
         if "Return decisions as an array" in kwargs["messages"][-1]["content"]:
-            return response(
-                '{"decisions":[{"incident_id":"incident","action":"investigate","reason":"new failure"}]}'
-            )
+            return response('{"decisions":[{"incident_id":"incident","action":"investigate","reason":"new failure"}]}')
         return response(payload)
 
     item = observation()
@@ -428,7 +428,7 @@ async def test_tool_loop_refuses_a_model_call_when_the_prompt_cannot_fit_the_tok
 
     result = await adapter.investigate(incident, (item,))
 
-    assert result.status is InvestigationStatus.FAILED
+    assert result.status is InvestigationStatus.PARTIAL
     assert tools.calls == 0
     assert completions == 0
     assert "token limit reached" in (result.error_summary or "")
@@ -484,12 +484,13 @@ async def test_tool_loop_reserves_a_final_answer_within_the_investigation_token_
 
     result = await adapter.investigate(incident, (item,))
 
-    assert result.status is InvestigationStatus.SUCCEEDED
+    assert result.status is InvestigationStatus.PARTIAL
     assert tools.calls == 1
     assert len(max_token_requests) == 2
     assert all(value < 200 for value in max_token_requests)
     assert result.usage["total_tokens"] == 180
     assert result.usage["total_tokens"] <= 300
+    assert result.result["root_cause"] == "bounded evidence"
 
 
 def test_tool_history_compaction_and_failed_test_report_cap_confidence() -> None:

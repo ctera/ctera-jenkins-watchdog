@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -75,10 +76,14 @@ class LegacyCheckRunner:
         checks: tuple[BaseCheck, ...],
         *,
         timeout_seconds: float,
+        timeout_overrides: Mapping[str, float] | None = None,
         regular_options: ScanOptions | None = None,
     ) -> None:
         self._checks = {check.name: check for check in checks}
         self._timeout_seconds = timeout_seconds
+        self._timeout_overrides = {
+            name: max(0.01, value) for name, value in (timeout_overrides or {}).items()
+        }
         self._regular_options = regular_options or ScanOptions()
         unknown = set(self._checks) - set(CHECK_CATEGORIES)
         if unknown:
@@ -98,16 +103,17 @@ class LegacyCheckRunner:
         check = self._checks[check_name]
         started_at = datetime.now(timezone.utc)
         options = ScanOptions.deep_scan() if mode is ScanMode.DEEP else self._regular_options
+        timeout_seconds = self._timeout_overrides.get(check_name, self._timeout_seconds)
         token = activate_scan_options(options)
         try:
-            output = await asyncio.wait_for(check.run(), timeout=self._timeout_seconds)
+            output = await asyncio.wait_for(check.run(), timeout=timeout_seconds)
         except TimeoutError:
             completed_at = datetime.now(timezone.utc)
             return CheckResult(
                 scan_id=scan_id,
                 check_name=check_name,
                 status=CheckStatus.TIMED_OUT,
-                failure_summary=f"timed out after {self._timeout_seconds:.0f}s",
+                failure_summary=f"timed out after {timeout_seconds:g}s",
                 categories=CHECK_CATEGORIES[check_name],
                 started_at=started_at,
                 completed_at=completed_at,

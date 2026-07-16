@@ -63,6 +63,7 @@ class IncidentStatus(StrEnum):
 class InvestigationStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
     FAILED = "failed"
 
 

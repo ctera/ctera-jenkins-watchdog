@@ -1481,6 +1481,8 @@ export interface components {
             incident_title: string;
             /** Investigation Id */
             investigation_id?: string | null;
+            /** Investigation Status */
+            investigation_status?: string | null;
             /** Outcome */
             outcome: string;
             /** Reason */
@@ -1544,6 +1546,11 @@ export interface components {
              * @default 0
              */
             manual_only_count: number;
+            /**
+             * Partial Count
+             * @default 0
+             */
+            partial_count: number;
             /**
              * Queued Count
              * @default 0

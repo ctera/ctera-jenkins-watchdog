@@ -207,7 +207,7 @@ export default function Scans() {
                     variant="outlined"
                     label={isCollectionActive(active)
                       ? scanStageLabel(active.stage)
-                      : `${active.analysis?.succeeded_count ?? 0} of ${active.analysis?.selected_count ?? 0} investigations complete`}
+                      : `${(active.analysis?.succeeded_count ?? 0) + (active.analysis?.partial_count ?? 0)} of ${active.analysis?.selected_count ?? 0} investigations finished`}
                   />
                 </Stack>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>

@@ -73,14 +73,10 @@ class _TokenAllowance:
 
     def consume(self, tokens: int) -> None:
         tokens = max(0, tokens)
-        projected = self.used + tokens
-        self.used = projected
-        if projected > self.limit:
-            raise ReasoningTokenBudgetExceeded(
-                limit=self.limit,
-                used=projected,
-                required=0,
-            )
+        # Provider usage is authoritative and arrives only after a billable call.
+        # Preserve that response even when preflight estimation was slightly low;
+        # the next preflight will stop further calls.
+        self.used += tokens
 
 
 class LiteLLMReasoningAdapter:
@@ -95,8 +91,8 @@ class LiteLLMReasoningAdapter:
         max_retries: int,
         max_tool_rounds: int = 15,
         max_deep_tool_rounds: int = 25,
-        token_budget: int = 24_000,
-        deep_token_budget: int = 40_000,
+        token_budget: int = 40_000,
+        deep_token_budget: int = 64_000,
         triage_token_budget: int = 8_000,
         tools: ReadOnlyToolRegistry | None = None,
         completion: Completion | None = None,
@@ -183,9 +179,16 @@ class LiteLLMReasoningAdapter:
         evidence_hash = evidence_digest(observations)
         investigation_id = str(uuid4())
         calls: list[LLMCall] = []
-        allowance = _TokenAllowance(
-            self._deep_token_budget if mode is ScanMode.DEEP else self._token_budget
-        )
+        token_limit = self._deep_token_budget if mode is ScanMode.DEEP else self._token_budget
+        final_limit = _final_call_reserve(token_limit, mode=mode)
+        exploration_allowance = _TokenAllowance(max(0, token_limit - final_limit))
+        final_allowance = _TokenAllowance(final_limit)
+        total_allowance = _TokenAllowance(token_limit)
+        trace: list[dict[str, Any]] = []
+        raw_reasoning = ""
+        partial_reason: str | None = None
+        model = self._models[0]
+        usage: dict[str, int] = {}
         try:
             if self._tools is None:
                 result, model, usage = await self._complete(
@@ -194,12 +197,10 @@ class LiteLLMReasoningAdapter:
                     concise=False,
                     purpose="investigation",
                     model_calls=calls,
-                    allowance=allowance,
+                    allowance=total_allowance,
                 )
-                trace: list[dict[str, Any]] = []
-                raw_reasoning = ""
             else:
-                raw_reasoning, trace, model, usage = await self._run_tool_loop(
+                raw_reasoning, trace, model, usage, partial_reason = await self._run_tool_loop(
                     system_prompt=_investigation_system_prompt(mode),
                     user_prompt=_investigation_prompt(incident, observations, context=context, mode=mode),
                     mode=mode,
@@ -208,21 +209,37 @@ class LiteLLMReasoningAdapter:
                     initial_tool_calls=_required_pipeline_tool_calls(observations, context=context, mode=mode),
                     purpose="investigation",
                     model_calls=calls,
-                    allowance=allowance,
+                    exploration_allowance=exploration_allowance,
+                    final_allowance=final_allowance,
                 )
-                result, extraction_model, extraction_usage = await self._extract(
-                    raw_reasoning,
-                    mode=mode,
-                    model_calls=calls,
-                    allowance=allowance,
-                )
-                model = extraction_model or model
-                usage = _merge_usage(usage, extraction_usage)
+                try:
+                    if partial_reason and not raw_reasoning.strip():
+                        raise ValueError(partial_reason)
+                    result, extraction_model, extraction_usage = await self._extract(
+                        raw_reasoning,
+                        mode=mode,
+                        model_calls=calls,
+                        allowance=final_allowance,
+                    )
+                    model = extraction_model or model
+                    usage = _merge_usage(usage, extraction_usage)
+                except Exception as exc:
+                    partial_reason = partial_reason or f"{type(exc).__name__}: {exc}"
+                    result = _partial_assessment(
+                        incident,
+                        observations,
+                        trace=trace,
+                        mode=mode,
+                        reason=partial_reason,
+                    )
                 result["tool_trace"] = trace
                 result["tools_used"] = list(dict.fromkeys(item["tool"] for item in trace))
                 result["agent_summary"] = raw_reasoning[:24_000 if mode is ScanMode.DEEP else 12_000]
                 result["mode"] = mode.value
                 _apply_quality_gates(result, observations, trace, context=context)
+            result["completion_status"] = "partial" if partial_reason else "complete"
+            if partial_reason:
+                result["partial_reason"] = partial_reason
             confidence = Confidence(str(result["confidence"]).lower())
             result["deterministic_severity"] = incident.severity.value
             associated_calls = _associate_calls(calls, incident_id=incident.id, investigation_id=investigation_id)
@@ -230,7 +247,7 @@ class LiteLLMReasoningAdapter:
                 id=investigation_id,
                 incident_id=incident.id,
                 occurrence_id=incident.current_occurrence.id,
-                status=InvestigationStatus.SUCCEEDED,
+                status=(InvestigationStatus.PARTIAL if partial_reason else InvestigationStatus.SUCCEEDED),
                 evidence_hash=evidence_hash,
                 input_version=INPUT_VERSION,
                 prompt_version=PROMPT_VERSION,
@@ -239,25 +256,35 @@ class LiteLLMReasoningAdapter:
                 usage=_aggregate_calls(associated_calls) or usage,
                 result=result,
                 model_calls=associated_calls,
+                error_summary=partial_reason[:500] if partial_reason else None,
                 created_at=created_at,
                 completed_at=datetime.now(timezone.utc),
             )
         except Exception as exc:
+            partial_reason = f"{type(exc).__name__}: {exc}"[:500]
             associated_calls = _associate_calls(calls, incident_id=incident.id, investigation_id=investigation_id)
+            result = _partial_assessment(
+                incident,
+                observations,
+                trace=trace,
+                mode=mode,
+                reason=partial_reason,
+            )
+            _apply_quality_gates(result, observations, trace, context=context)
             return Investigation(
                 id=investigation_id,
                 incident_id=incident.id,
                 occurrence_id=incident.current_occurrence.id,
-                status=InvestigationStatus.FAILED,
+                status=InvestigationStatus.PARTIAL,
                 evidence_hash=evidence_hash,
                 input_version=INPUT_VERSION,
                 prompt_version=PROMPT_VERSION,
                 model=self._models[0],
                 confidence=Confidence.LOW,
                 usage=_aggregate_calls(associated_calls),
-                result={"deterministic_severity": incident.severity.value, "mode": mode.value},
+                result=result,
                 model_calls=associated_calls,
-                error_summary=f"{type(exc).__name__}: {exc}"[:500],
+                error_summary=partial_reason,
                 created_at=created_at,
                 completed_at=datetime.now(timezone.utc),
             )
@@ -322,7 +349,8 @@ class LiteLLMReasoningAdapter:
             f"Operator question: {message}\n\nCurrent durable snapshot (use tools for live facts):\n"
             f"{json.dumps(to_primitive(operational_context), separators=(',', ':'), ensure_ascii=False)}"
         )
-        content, _, _, _ = await self._run_tool_loop(
+        final_limit = _final_call_reserve(self._token_budget, mode=ScanMode.REGULAR)
+        content, _, _, _, _ = await self._run_tool_loop(
             system_prompt=_chat_system_prompt(),
             user_prompt=prompt,
             mode=ScanMode.REGULAR,
@@ -335,7 +363,8 @@ class LiteLLMReasoningAdapter:
             final_only=True,
             purpose="chat",
             model_calls=calls,
-            allowance=allowance,
+            exploration_allowance=_TokenAllowance(max(0, self._token_budget - final_limit)),
+            final_allowance=_TokenAllowance(final_limit),
         )
         if not content.strip():
             raise ValueError("reasoning response was empty")
@@ -357,8 +386,9 @@ class LiteLLMReasoningAdapter:
         initial_tool_calls: tuple[tuple[str, dict[str, Any]], ...] = (),
         purpose: str,
         model_calls: list[LLMCall],
-        allowance: _TokenAllowance,
-    ) -> tuple[str, list[dict[str, Any]], str, dict[str, int]]:
+        exploration_allowance: _TokenAllowance,
+        final_allowance: _TokenAllowance,
+    ) -> tuple[str, list[dict[str, Any]], str, dict[str, int], str | None]:
         if not self._api_key:
             raise RuntimeError("reasoning integration is disabled")
         if self._tools is None:
@@ -373,7 +403,7 @@ class LiteLLMReasoningAdapter:
         total_usage: dict[str, int] = {}
         last_model = self._models[0]
         max_rounds = self._max_deep_tool_rounds if mode is ScanMode.DEEP else self._max_tool_rounds
-        final_reserve = _final_call_reserve(allowance.limit, mode=mode)
+        partial_reason: str | None = None
 
         for name, arguments in initial_tool_calls:
             await _emit(
@@ -413,19 +443,30 @@ class LiteLLMReasoningAdapter:
                     temperature=self._temperature,
                     purpose=purpose,
                     model_calls=model_calls,
-                    allowance=allowance,
-                    reserve_tokens=final_reserve,
+                    allowance=exploration_allowance,
                 )
-            except ReasoningTokenBudgetExceeded:
+            except ReasoningTokenBudgetExceeded as exc:
+                partial_reason = str(exc)
                 await _emit(
                     on_progress,
                     {
                         "type": "reasoning",
                         "round": round_number,
                         "content": (
-                            f"Investigation token limit reached ({allowance.limit}); "
+                            f"Investigation exploration limit reached ({exploration_allowance.limit}); "
                             "producing the final assessment."
                         ),
+                    },
+                )
+                break
+            except Exception as exc:
+                partial_reason = f"{type(exc).__name__}: {exc}"
+                await _emit(
+                    on_progress,
+                    {
+                        "type": "reasoning",
+                        "round": round_number,
+                        "content": "Agent exploration stopped; producing a partial assessment from collected evidence.",
                     },
                 )
                 break
@@ -445,7 +486,7 @@ class LiteLLMReasoningAdapter:
             if not tool_calls:
                 final_content = content.strip() if isinstance(content, str) else ""
                 output = final_content if final_only else "\n\n".join(raw_parts)
-                return output, trace, last_model, total_usage
+                return output, trace, last_model, total_usage, None
 
             for call in tool_calls:
                 name = str(call["function"]["name"])
@@ -467,9 +508,9 @@ class LiteLLMReasoningAdapter:
                         "preview": execution.output[:500],
                     },
                 )
-                messages.append(
-                    {"role": "tool", "tool_call_id": call["id"], "content": execution.output}
-                )
+                messages.append({"role": "tool", "tool_call_id": call["id"], "content": execution.output})
+        else:
+            partial_reason = f"investigation tool round limit reached ({max_rounds})"
 
         final_messages = _final_assessment_messages(
             system_prompt=system_prompt,
@@ -482,20 +523,24 @@ class LiteLLMReasoningAdapter:
             ),
             mode=mode,
         )
-        response, last_model = await self._call_with_fallback(
-            messages=final_messages,
-            tools=None,
-            temperature=0.0,
-            purpose=purpose,
-            model_calls=model_calls,
-            allowance=allowance,
-        )
+        try:
+            response, last_model = await self._call_with_fallback(
+                messages=final_messages,
+                tools=None,
+                temperature=0.0,
+                purpose=purpose,
+                model_calls=model_calls,
+                allowance=final_allowance,
+            )
+        except Exception as exc:
+            reason = partial_reason or f"{type(exc).__name__}: {exc}"
+            return "", trace, last_model, total_usage, reason
         total_usage = _merge_usage(total_usage, _usage(response))
         content = response.choices[0].message.content
         if isinstance(content, str) and content.strip():
             raw_parts.append(content.strip())
         output = content.strip() if final_only and isinstance(content, str) else "\n\n".join(raw_parts)
-        return output, trace, last_model, total_usage
+        return output, trace, last_model, total_usage, partial_reason
 
     async def _extract(
         self,
@@ -836,6 +881,47 @@ def _extract_assessment(content: Any) -> dict[str, Any]:
     value.setdefault("fix_location", None)
     value.setdefault("fix_verification", None)
     return value
+
+
+def _partial_assessment(
+    incident: Incident,
+    observations: tuple[FindingObservation, ...],
+    *,
+    trace: list[dict[str, Any]],
+    mode: ScanMode,
+    reason: str,
+) -> dict[str, Any]:
+    evidence = [
+        f"{item.resource_id}: {item.summary}"
+        for item in sorted(observations, key=lambda item: item.observed_at, reverse=True)[:8]
+    ]
+    for item in trace:
+        if not item.get("ok"):
+            continue
+        output = str(item.get("output") or "").strip().replace("\x00", "")
+        if output:
+            evidence.append(f"{item.get('tool')}: {_bounded_prompt_text(output, 500)}")
+        if len(evidence) >= 12:
+            break
+    return {
+        "root_cause": "Root cause was not fully determined before the agent investigation stopped.",
+        "evidence": evidence,
+        "impact": f"The {incident.severity.value} incident remains active and requires review.",
+        "suggested_fix": "Review the collected evidence and run a focused deep or manual investigation before changing the pipeline.",
+        "fix_location": None,
+        "fix_verification": None,
+        "actionability": "unknown",
+        "classification": "unknown",
+        "priority": incident.severity.value,
+        "confidence": Confidence.LOW.value,
+        "completion_status": "partial",
+        "partial_reason": reason[:500],
+        "deterministic_severity": incident.severity.value,
+        "mode": mode.value,
+        "tool_trace": trace,
+        "tools_used": list(dict.fromkeys(str(item.get("tool")) for item in trace if item.get("tool"))),
+        "agent_summary": "A partial assessment was retained from deterministic findings and completed tool calls.",
+    }
 
 
 def _extract_triage_routes(

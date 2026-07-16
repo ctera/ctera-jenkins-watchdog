@@ -67,3 +67,20 @@ async def test_failed_build_check_emits_grouped_findings():
     assert len(by_job["App_Pipeline_new"].context["failed_builds"]) == 2
     assert by_job["Automation_GatedMergeRequest"].severity == "critical"
     assert by_job["Automation_GatedMergeRequest"].context["is_mr"] is True
+
+
+@pytest.mark.asyncio
+async def test_failed_build_check_keeps_the_complete_window_inventory():
+    builds = [
+        FailedBuildSummary("busy-job", number, "FAILURE", 1_000, number, f"url/{number}", False)
+        for number in range(1, 31)
+    ]
+    client = SimpleNamespace(
+        get_recent_failed_builds=AsyncMock(return_value=builds),
+        get_build_console_output=AsyncMock(return_value="ERROR: test failed\nBUILD FAILED"),
+    )
+
+    report = await JenkinsFailedBuildCheck(client).run()
+
+    assert report.summary["failed_build_count"] == 30
+    assert len(report.summary["recent_failed_builds"]) == 30

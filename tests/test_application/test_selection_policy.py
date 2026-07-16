@@ -280,6 +280,30 @@ async def test_daily_cost_budget_protects_manual_reserve_with_conservative_reser
 
 
 @pytest.mark.asyncio
+async def test_default_cost_guard_admits_ten_regular_requests_before_the_cycle_ceiling(
+    sqlite_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _, incidents = await seed_incidents(sqlite_factory, (Severity.CRITICAL,) * 11)
+    queue = InvestigationQueueService(
+        uow_factory=factory_port(sqlite_factory),
+        now=lambda: NOW,
+    )
+
+    admitted = [
+        await queue.enqueue_incident(incident.id, source="scan")
+        for incident in incidents[:10]
+    ]
+
+    assert all(request is not None for request in admitted)
+    assert sum(request.reserved_tokens for request in admitted if request is not None) == 400_000
+    with pytest.raises(InvestigationCostBudgetExceeded) as error:
+        await queue.enqueue_incident(incidents[10].id, source="scan")
+    assert error.value.limit_usd == Decimal("10.50")
+    assert error.value.active_reserved_usd == Decimal("10.00")
+    assert error.value.projected_usd == Decimal("11.00")
+
+
+@pytest.mark.asyncio
 async def test_daily_cost_budget_conservatively_prices_calls_without_a_cost_estimate(
     sqlite_factory: async_sessionmaker[AsyncSession],
 ) -> None:

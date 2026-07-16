@@ -370,6 +370,9 @@ def build_container(settings: Settings) -> Container:
             k8s_events_window_minutes=settings.k8s_events_window_minutes,
         ),
         timeout_seconds=max(settings.request_timeout_s, 20.0),
+        timeout_overrides={
+            "jenkins_failed_builds": settings.jenkins_failed_build_check_timeout_s,
+        },
         regular_options=ScanOptions(
             max_investigations_per_scan=settings.max_investigations_per_scan,
             max_tool_rounds=settings.max_tool_rounds,

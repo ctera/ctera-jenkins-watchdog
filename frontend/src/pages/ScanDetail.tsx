@@ -4,6 +4,7 @@ import {
   Button,
   Chip,
   Divider,
+  IconButton,
   LinearProgress,
   Paper,
   Stack,
@@ -13,10 +14,12 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import CancelOutlinedIcon from "@mui/icons-material/CancelOutlined";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
@@ -92,6 +95,7 @@ export default function ScanDetailPage() {
   const progress = ((STAGES.indexOf(scan.stage) + 1) / STAGES.length) * 100;
   const llmUsage = scan.llm_usage ?? {};
   const analysis = scan.analysis;
+  const failedBuildInventory = scanFailedBuildInventory(scan);
   const costBudgetDeferred = analysis?.budget_metric === "cost_usd";
   const allBudgetDeferred = Boolean(
     analysis?.status === "budget_deferred"
@@ -194,7 +198,7 @@ export default function ScanDetailPage() {
                   <Typography variant="caption" color="text.secondary">
                     {allBudgetDeferred
                       ? `Not run · ${analysis?.budget_deferred_count ?? 0} budget deferred`
-                      : `${analysis?.succeeded_count ?? 0} succeeded · ${analysis?.failed_count ?? 0} failed · ${analysis?.active_count ?? 0} active`}
+                      : `${analysis?.succeeded_count ?? 0} complete · ${analysis?.partial_count ?? 0} partial · ${analysis?.failed_count ?? 0} failed · ${analysis?.active_count ?? 0} active`}
                   </Typography>
                 </Stack>
                 <LinearProgress
@@ -252,7 +256,8 @@ export default function ScanDetailPage() {
                 <AnalysisMetric label="Admitted" value={analysis?.selected_count ?? 0} />
                 <AnalysisMetric label="Queued" value={analysis?.queued_count ?? 0} />
                 <AnalysisMetric label="Running" value={analysis?.running_count ?? 0} />
-                <AnalysisMetric label="Succeeded" value={analysis?.succeeded_count ?? 0} />
+                <AnalysisMetric label="Complete" value={analysis?.succeeded_count ?? 0} />
+                <AnalysisMetric label="Partial" value={analysis?.partial_count ?? 0} tone="warning" />
                 <AnalysisMetric label="Failed" value={analysis?.failed_count ?? 0} tone="danger" />
                 <AnalysisMetric label="Reused" value={analysis?.reused_count ?? 0} />
                 <AnalysisMetric label="Deferred" value={analysis?.deferred_count ?? 0} />
@@ -279,9 +284,9 @@ export default function ScanDetailPage() {
                       <Typography variant="body2">{item.reason}</Typography>
                       <Typography variant="caption" color="text.secondary">{titleCase(item.reason_code)}</Typography>
                     </TableCell>
-                    <TableCell>{item.request_status ? <StatusChip value={item.request_status} /> : <Typography color="text.secondary">-</Typography>}</TableCell>
+                    <TableCell>{item.investigation_status || item.request_status ? <StatusChip value={item.investigation_status ?? item.request_status ?? "unknown"} /> : <Typography color="text.secondary">-</Typography>}</TableCell>
                     <TableCell>
-                      <Typography variant="body2" color={item.error_summary ? "error.main" : "text.secondary"}>
+                      <Typography variant="body2" color={item.investigation_status === "partial" ? "warning.main" : item.error_summary ? "error.main" : "text.secondary"}>
                         {item.error_summary || (item.investigation_id ? "Investigation available" : "-")}
                       </Typography>
                     </TableCell>
@@ -303,6 +308,49 @@ export default function ScanDetailPage() {
             <Meta label="Cache read" value={formatTokens(llmUsage.cache_read_input_tokens)} />
             <Meta label="Estimated cost" value={formatUsd(llmUsage.estimated_cost_usd)} />
           </Stack>
+        </Box>
+      )}
+
+      {failedBuildInventory && (
+        <Box sx={{ mb: 2.5 }}>
+          <Typography variant="h6">Failed builds in window</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
+            {failedBuildInventory.rows.length.toLocaleString()} failed build{failedBuildInventory.rows.length === 1 ? "" : "s"} across {failedBuildInventory.jobCount.toLocaleString()} job{failedBuildInventory.jobCount === 1 ? "" : "s"} in the {failedBuildInventory.windowHours}-hour collection window.
+          </Typography>
+          <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 440 }}>
+            <Table stickyHeader size="small" sx={{ minWidth: 760 }}>
+              <TableHead><TableRow><TableCell>Job</TableCell><TableCell width={100}>Build</TableCell><TableCell width={110}>Result</TableCell><TableCell width={190}>Started</TableCell><TableCell width={110}>Duration</TableCell><TableCell width={56} aria-label="Jenkins link" /></TableRow></TableHead>
+              <TableBody>
+                {failedBuildInventory.rows.length === 0 ? (
+                  <TableRow><TableCell colSpan={6}><Typography color="text.secondary" sx={{ py: 2, textAlign: "center" }}>No failed Jenkins builds were found in this window</Typography></TableCell></TableRow>
+                ) : failedBuildInventory.rows.map((build) => (
+                  <TableRow key={`${build.jobName}#${build.buildNumber}`}>
+                    <TableCell><Typography variant="body2" fontWeight={650}>{build.jobName}</Typography></TableCell>
+                    <TableCell>#{build.buildNumber}</TableCell>
+                    <TableCell><StatusChip value={build.result.toLowerCase()} /></TableCell>
+                    <TableCell>{formatDate(new Date(build.timestampMs).toISOString())}</TableCell>
+                    <TableCell>{build.durationMinutes.toLocaleString()}m</TableCell>
+                    <TableCell>
+                      {build.url ? (
+                        <Tooltip title="Open in Jenkins">
+                          <IconButton
+                            component="a"
+                            href={build.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            size="small"
+                            aria-label={`Open ${build.jobName} build ${build.buildNumber} in Jenkins`}
+                          >
+                            <OpenInNewIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
         </Box>
       )}
 
@@ -359,6 +407,46 @@ export default function ScanDetailPage() {
       </Paper>
     </Box>
   );
+}
+
+type FailedBuildRow = {
+  jobName: string;
+  buildNumber: number;
+  result: string;
+  timestampMs: number;
+  durationMinutes: number;
+  url: string;
+};
+
+function scanFailedBuildInventory(scan: Scan): { rows: FailedBuildRow[]; jobCount: number; windowHours: number } | null {
+  const execution = (scan.checks ?? []).find((check) => check.name === "jenkins_failed_builds");
+  if (!execution || execution.status !== "succeeded") return null;
+  const rawRows = execution.summary.recent_failed_builds;
+  const rows = Array.isArray(rawRows)
+    ? rawRows.flatMap((value): FailedBuildRow[] => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const item = value as Record<string, unknown>;
+      const jobName = typeof item.job_name === "string" ? item.job_name : "";
+      const buildNumber = Number(item.build_number);
+      const timestampMs = Number(item.timestamp_ms);
+      if (!jobName || !Number.isFinite(buildNumber) || !Number.isFinite(timestampMs)) return [];
+      return [{
+        jobName,
+        buildNumber,
+        result: typeof item.result === "string" ? item.result : "failure",
+        timestampMs,
+        durationMinutes: Number.isFinite(Number(item.duration_minutes)) ? Number(item.duration_minutes) : 0,
+        url: typeof item.url === "string" ? item.url : "",
+      }];
+    })
+    : [];
+  const jobCount = Number(execution.summary.failed_job_count);
+  const windowHours = Number(execution.summary.window_hours);
+  return {
+    rows,
+    jobCount: Number.isFinite(jobCount) ? jobCount : new Set(rows.map((item) => item.jobName)).size,
+    windowHours: Number.isFinite(windowHours) ? windowHours : 4,
+  };
 }
 
 function Meta({ label, value }: { label: string; value: string }) {

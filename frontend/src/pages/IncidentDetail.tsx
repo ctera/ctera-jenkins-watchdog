@@ -242,7 +242,8 @@ export default function IncidentDetailPage() {
 function Overview({ detail }: { detail: IncidentDetail }) {
   const incident = detail.incident;
   const investigation = detail.latest_investigation;
-  const hasAssessment = investigation?.status === "succeeded";
+  const hasAssessment = investigation?.status === "succeeded" || investigation?.status === "partial";
+  const analysisPartial = investigation?.status === "partial";
   const result = hasAssessment ? investigation.result : {};
   const requestActive = ["queued", "running"].includes(detail.investigation_request?.status ?? "");
   const analysisFailed = detail.investigation_request?.status === "failed" || (!requestActive && investigation?.status === "failed");
@@ -264,6 +265,12 @@ function Overview({ detail }: { detail: IncidentDetail }) {
       {analysisFailed && (
         <Alert severity="error">
           Agent analysis failed before producing a root-cause assessment. This is a Watchdog agent error, not an explanation of the incident. Use Reinvestigate to retry it.
+        </Alert>
+      )}
+      {analysisPartial && (
+        <Alert severity="warning">
+          This is a partial agent assessment based on the evidence collected before analysis stopped.
+          {investigation.error_summary && <Typography variant="caption" component="div" sx={{ mt: 0.5 }}>Diagnostic: {investigation.error_summary}</Typography>}
         </Alert>
       )}
       {textValue(result.quality_gate, "") && <Alert severity="warning">{textValue(result.quality_gate, "")}</Alert>}
@@ -351,16 +358,17 @@ function InvestigationView({ detail }: { detail: IncidentDetail }) {
   const request = detail.investigation_request;
   const decision = detail.analysis_decision;
   if (!investigation && !request && !decision) return <Typography color="text.secondary">No investigation recorded</Typography>;
-  const hasAssessment = investigation?.status === "succeeded";
+  const hasAssessment = investigation?.status === "succeeded" || investigation?.status === "partial";
+  const analysisPartial = investigation?.status === "partial";
   const requestActive = ["queued", "running"].includes(request?.status ?? "");
   const analysisFailed = request?.status === "failed" || (!requestActive && investigation?.status === "failed");
   const failureDetail = request?.error_summary || investigation?.error_summary;
   return (
     <Stack gap={2.5}>
       <Stack direction="row" gap={1} flexWrap="wrap">
-        {request && <StatusChip value={request.status} />}
+        {request && (requestActive || analysisFailed || !investigation) && <StatusChip value={request.status} />}
         {request && <Chip size="small" label={`${titleCase(request.mode)} mode`} variant="outlined" />}
-        {investigation && !request && <StatusChip value={investigation.status} />}
+        {investigation && <StatusChip value={investigation.status} />}
         {hasAssessment && investigation.confidence && <Chip size="small" label={`${titleCase(investigation.confidence)} confidence`} variant="outlined" />}
         {hasAssessment && <Chip size="small" label={investigation.model} variant="outlined" />}
         {request && request.reserved_tokens > 0 && <Chip size="small" label={`${formatTokens(request.reserved_tokens)} reserved`} variant="outlined" />}
@@ -372,6 +380,12 @@ function InvestigationView({ detail }: { detail: IncidentDetail }) {
       )}
       {request?.status === "queued" && <Alert severity="info">Agent analysis is queued.</Alert>}
       {request?.status === "running" && <Alert severity="info">Agent is gathering live evidence.</Alert>}
+      {analysisPartial && (
+        <Alert severity="warning">
+          The agent retained a partial assessment from completed evidence reads. Review it before acting or run a focused investigation again.
+          {failureDetail && <Typography variant="caption" component="div" sx={{ mt: 0.5 }}>Diagnostic: {failureDetail}</Typography>}
+        </Alert>
+      )}
       {analysisFailed && (
         <Alert severity="error">
           Agent analysis failed before producing a root-cause assessment. This is a Watchdog agent error, not the incident root cause. Use Reinvestigate to retry it.
