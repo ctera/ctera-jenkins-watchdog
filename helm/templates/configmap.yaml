@@ -13,6 +13,7 @@ data:
   WATCHDOG_JENKINS_NAMESPACE: {{ .Values.config.jenkinsNamespace | quote }}
   WATCHDOG_JENKINS_FAILED_BUILD_WINDOW_HOURS: {{ .Values.config.jenkinsFailedBuildWindowHours | quote }}
   WATCHDOG_JENKINS_FAILED_BUILD_CHECK_TIMEOUT_S: {{ .Values.config.jenkinsFailedBuildCheckTimeoutSeconds | quote }}
+  WATCHDOG_JENKINS_PIPELINE_PATTERN_CHECK_TIMEOUT_S: {{ .Values.config.jenkinsPipelinePatternCheckTimeoutSeconds | quote }}
   WATCHDOG_JENKINS_MONITOR_ENABLED: {{ .Values.config.jenkinsMonitorEnabled | quote }}
   WATCHDOG_JENKINS_SYNC_INTERVAL_S: {{ .Values.config.jenkinsSyncIntervalSeconds | quote }}
   WATCHDOG_JENKINS_SYNC_WINDOW_HOURS: {{ .Values.config.jenkinsSyncWindowHours | quote }}
@@ -42,6 +43,8 @@ data:
   WATCHDOG_LLM_MAX_RETRIES: {{ .Values.config.llmMaxRetries | quote }}
   WATCHDOG_LLM_SCAN_TOKEN_BUDGET: {{ .Values.config.llmScanTokenBudget | quote }}
   WATCHDOG_LLM_DEEP_SCAN_TOKEN_BUDGET: {{ .Values.config.llmDeepScanTokenBudget | quote }}
+  WATCHDOG_LLM_EXPECTED_INVESTIGATION_TOKENS: {{ .Values.config.llmExpectedInvestigationTokens | quote }}
+  WATCHDOG_LLM_EXPECTED_DEEP_INVESTIGATION_TOKENS: {{ .Values.config.llmExpectedDeepInvestigationTokens | quote }}
   WATCHDOG_LLM_DAILY_TOKEN_BUDGET: {{ .Values.config.llmDailyTokenBudget | quote }}
   WATCHDOG_LLM_MANUAL_TOKEN_RESERVE: {{ .Values.config.llmManualTokenReserve | quote }}
   WATCHDOG_LLM_DAILY_COST_BUDGET_USD: {{ .Values.config.llmDailyCostBudgetUsd | quote }}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -28,6 +29,8 @@ from jenkins_watchdog.domain.model import (
     ScanMode,
     Severity,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +321,15 @@ class AnalysisSelectionService:
                 for candidate in batch
             ]
         except Exception as exc:
+            # Only the exception type reaches the decision record, so log the detail here or
+            # the reason for deferring a whole batch is lost.
+            logger.warning(
+                "batch triage failed for %d candidates (scan_id=%s): %s",
+                len(batch),
+                scan_id,
+                exc,
+                exc_info=True,
+            )
             return [
                 _route(
                     candidate,

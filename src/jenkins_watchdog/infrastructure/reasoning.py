@@ -49,6 +49,7 @@ _TEST_FAILURE_CLAIM = re.compile(
     re.IGNORECASE,
 )
 _MIN_COMPLETION_TOKENS = 64
+_MANDATORY_EVIDENCE_PREFIX = "Mandatory pipeline evidence collected before reasoning."
 
 
 class ReasoningTokenBudgetExceeded(RuntimeError):
@@ -150,8 +151,9 @@ class LiteLLMReasoningAdapter:
                 {
                     "role": "user",
                     "content": (
-                        "Return decisions as an array with incident_id, action (investigate or defer), and a short "
-                        "reason. Provide one decision for every input. Input: "
+                        'Reply with a JSON object shaped {"decisions": [...]}, where each entry has incident_id, '
+                        "action (investigate or defer), and a short reason. Provide one decision for every input. "
+                        "Input: "
                         f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}"
                     ),
                 },
@@ -428,7 +430,7 @@ class LiteLLMReasoningAdapter:
                 {
                     "role": "user",
                     "content": (
-                        "Mandatory pipeline evidence collected before reasoning. Use this live tool result in the "
+                        f"{_MANDATORY_EVIDENCE_PREFIX} Use this live tool result in the "
                         f"assessment. Tool: {name}; arguments: "
                         f"{json.dumps(arguments, separators=(',', ':'), ensure_ascii=False)}\n{execution.output}"
                     ),
@@ -474,8 +476,6 @@ class LiteLLMReasoningAdapter:
             message = response.choices[0].message
             content = getattr(message, "content", None)
             tool_calls = _tool_calls(message)
-            if tool_calls:
-                _compact_tool_messages(messages, mode=mode)
             assistant: dict[str, Any] = {"role": "assistant", "content": content or None}
             if tool_calls:
                 assistant["tool_calls"] = tool_calls
@@ -488,6 +488,7 @@ class LiteLLMReasoningAdapter:
                 output = final_content if final_only else "\n\n".join(raw_parts)
                 return output, trace, last_model, total_usage, None
 
+            round_start = len(messages)
             for call in tool_calls:
                 name = str(call["function"]["name"])
                 arguments = _tool_arguments(call["function"].get("arguments"))
@@ -509,6 +510,10 @@ class LiteLLMReasoningAdapter:
                     },
                 )
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": execution.output})
+            # Compact once this round's results are in, so the next preflight sees the bounded
+            # history rather than the previous round's full-size output.
+            _compact_tool_messages(messages, mode=mode, keep_from=round_start)
+            _bound_round_results(messages, start=round_start, mode=mode)
         else:
             partial_reason = f"investigation tool round limit reached ({max_rounds})"
 
@@ -848,14 +853,17 @@ def _extraction_prompt(mode: ScanMode) -> str:
     )
 
 
+def _strip_json_fence(text: str) -> str:
+    """Unwrap a ```json fenced block, which models emit even when asked for a bare object."""
+    cleaned = text.strip()
+    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    return match.group(1) if match else cleaned
+
+
 def _extract_assessment(content: Any) -> dict[str, Any]:
     if not isinstance(content, str):
         raise ValueError("reasoning content is not text")
-    cleaned = content.strip()
-    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", cleaned, flags=re.DOTALL | re.IGNORECASE)
-    if match:
-        cleaned = match.group(1)
-    value = json.loads(cleaned)
+    value = json.loads(_strip_json_fence(content))
     required = {
         "root_cause",
         "evidence",
@@ -930,7 +938,7 @@ def _extract_triage_routes(
 ) -> tuple[TriageRoute, ...]:
     expected = {candidate.incident.id for candidate in candidates}
     try:
-        value = json.loads(str(content or ""))
+        value = json.loads(_strip_json_fence(str(content or "")))
     except json.JSONDecodeError as exc:
         raise ValueError("triage response was not valid JSON") from exc
     decisions = value.get("decisions") if isinstance(value, dict) else None
@@ -1140,18 +1148,74 @@ def _claims_test_failure(result: dict[str, Any]) -> bool:
     return _TEST_FAILURE_CLAIM.search(diagnosis) is not None
 
 
-def _compact_tool_messages(messages: list[dict[str, Any]], *, mode: ScanMode) -> None:
-    limit = 4_000 if mode is ScanMode.DEEP else 2_000
-    for message in messages:
-        if message.get("role") != "tool":
-            continue
-        content = message.get("content")
-        if not isinstance(content, str) or len(content) <= limit:
-            continue
-        half = limit // 2
-        message["content"] = (
-            f"{content[:half]}\n... [prior tool result compacted to {limit} characters] ...\n{content[-half:]}"
-        )
+def _is_evidence_message(message: dict[str, Any]) -> bool:
+    """Tool output the agent has already read, whatever role it was delivered under.
+
+    The mandatory pre-flight build log arrives as a ``user`` message because it has no
+    originating tool call to answer, but it is tool output and grows context like any other.
+    """
+    if message.get("role") == "tool":
+        return True
+    content = message.get("content")
+    return (
+        message.get("role") == "user"
+        and isinstance(content, str)
+        and content.startswith(_MANDATORY_EVIDENCE_PREFIX)
+    )
+
+
+def _shrink_message(message: dict[str, Any], limit: int) -> None:
+    content = message.get("content")
+    if not isinstance(content, str) or len(content) <= limit:
+        return
+    marker = f"\n... [prior tool result compacted to {limit} characters] ...\n"
+    # Charge the marker against the limit so it stays a true ceiling; callers size aggregate
+    # budgets by multiplying it out.
+    half = max(1, (limit - len(marker)) // 2)
+    message["content"] = f"{content[:half]}{marker}{content[-half:]}"
+
+
+def _compact_tool_messages(
+    messages: list[dict[str, Any]], *, mode: ScanMode, keep_from: int | None = None
+) -> None:
+    """Shrink evidence from earlier rounds so context stays bounded as the loop runs.
+
+    Messages at or after ``keep_from`` are the current round's fresh results and keep full
+    detail; everything before it has already been reasoned over.
+
+    A per-message cap alone does not bound history: an investigation that calls one tool per
+    failing build accumulates hundreds of messages, and hundreds times any fixed cap still
+    exhausts the budget. So the cap tightens as messages accumulate, holding total history
+    under ``history_budget`` however many rounds run.
+    """
+    floor = 4_000 if mode is ScanMode.DEEP else 2_000
+    history_budget = 240_000 if mode is ScanMode.DEEP else 120_000
+    boundary = len(messages) if keep_from is None else keep_from
+    older = [message for message in messages[:boundary] if _is_evidence_message(message)]
+    if not older:
+        return
+    limit = min(floor, max(400, history_budget // len(older)))
+    for message in older:
+        _shrink_message(message, limit)
+
+
+def _bound_round_results(messages: list[dict[str, Any]], *, start: int, mode: ScanMode) -> None:
+    """Cap what a single round may contribute to context.
+
+    A model can request many tools in one round -- one build log per failing build, say -- and
+    each result is capped individually, not collectively. Without an aggregate bound a single
+    fan-out round can outgrow any per-investigation token budget.
+    """
+    budget = 96_000 if mode is ScanMode.DEEP else 48_000
+    fresh = [message for message in messages[start:] if message.get("role") == "tool"]
+    if not fresh:
+        return
+    total = sum(len(content) for message in fresh if isinstance(content := message.get("content"), str))
+    if total <= budget:
+        return
+    share = max(2_000, budget // len(fresh))
+    for message in fresh:
+        _shrink_message(message, share)
 
 
 def _final_call_reserve(limit: int, *, mode: ScanMode) -> int:

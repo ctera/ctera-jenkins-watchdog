@@ -7,8 +7,10 @@ import pytest
 from jenkins_watchdog.application.types import TriageCandidate
 from jenkins_watchdog.domain.model import FindingObservation, Incident, InvestigationStatus, ScanMode, Severity
 from jenkins_watchdog.infrastructure.reasoning import (
+    _MANDATORY_EVIDENCE_PREFIX,
     LiteLLMReasoningAdapter,
     _apply_quality_gates,
+    _bound_round_results,
     _compact_tool_messages,
     _extract_assessment,
     _investigation_system_prompt,
@@ -122,7 +124,7 @@ async def test_reasoning_falls_back_accounts_usage_and_supports_triage_and_chat(
         models.append(kwargs["model"])
         if kwargs["model"] == "primary" and models.count("primary") == 1:
             raise RuntimeError("primary unavailable")
-        if "Return decisions as an array" in kwargs["messages"][-1]["content"]:
+        if "one decision for every input" in kwargs["messages"][-1]["content"]:
             return response('{"decisions":[{"incident_id":"incident","action":"investigate","reason":"new failure"}]}')
         return response(payload)
 
@@ -520,6 +522,54 @@ def test_tool_history_compaction_and_failed_test_report_cap_confidence() -> None
     )
     assert result["confidence"] == "medium"
     assert "failed-test report" in result["quality_gate"]
+
+
+def test_compaction_shrinks_mandatory_evidence_but_spares_the_current_round() -> None:
+    messages = [
+        {"role": "user", "content": _MANDATORY_EVIDENCE_PREFIX + " log " + "x" * 20_000},
+        {"role": "tool", "content": "old" + "y" * 20_000},
+        {"role": "tool", "content": "fresh" + "z" * 20_000},
+    ]
+
+    _compact_tool_messages(messages, mode=ScanMode.REGULAR, keep_from=2)
+
+    # The pre-flight build log arrives as a user message but is still tool output, and it was
+    # previously re-sent at full size on every round.
+    assert len(messages[0]["content"]) < 2_100
+    assert len(messages[1]["content"]) < 2_100
+    assert len(messages[2]["content"]) == len("fresh") + 20_000
+
+
+def test_a_single_fan_out_round_cannot_outgrow_the_context_budget() -> None:
+    """Regression: one round requesting many build logs exhausted any token budget."""
+    messages = [{"role": "user", "content": "prompt"}]
+    messages.extend({"role": "tool", "content": "x" * 12_000} for _ in range(13))
+
+    _bound_round_results(messages, start=1, mode=ScanMode.REGULAR)
+
+    total = sum(len(message["content"]) for message in messages[1:])
+    assert total <= 48_000
+
+
+def test_history_stays_bounded_as_tool_messages_accumulate() -> None:
+    """Regression: a fixed per-message cap still blew the budget once rounds piled up."""
+    messages = [{"role": "user", "content": "prompt"}]
+    messages.extend({"role": "tool", "content": "x" * 12_000} for _ in range(200))
+    messages.append({"role": "tool", "content": "fresh" + "z" * 12_000})
+
+    _compact_tool_messages(messages, mode=ScanMode.REGULAR, keep_from=201)
+
+    history = sum(len(m["content"]) for m in messages[1:201])
+    assert history <= 120_000
+    assert len(messages[201]["content"]) == len("fresh") + 12_000
+
+
+def test_a_small_round_keeps_full_detail() -> None:
+    messages = [{"role": "user", "content": "prompt"}, {"role": "tool", "content": "x" * 12_000}]
+
+    _bound_round_results(messages, start=1, mode=ScanMode.REGULAR)
+
+    assert len(messages[1]["content"]) == 12_000
 
 
 def test_pipeline_quality_gate_distinguishes_failed_log_access_from_no_attempt() -> None:

@@ -288,7 +288,9 @@ def jenkins_build_observations(builds: tuple[dict[str, Any], ...]) -> tuple[Find
 def should_reinvestigate(
     *, incident: Incident, latest: Investigation | None, evidence_hash: str, now: datetime
 ) -> bool:
-    if latest is None or latest.status is InvestigationStatus.FAILED:
+    # A partial result was cut short mid-investigation, so it never reached a conclusion and
+    # never triggers action planning. Treat it like a failure and try again.
+    if latest is None or latest.status in (InvestigationStatus.FAILED, InvestigationStatus.PARTIAL):
         return True
     if latest.occurrence_id != incident.current_occurrence.id:
         return True

@@ -241,6 +241,8 @@ def build_container(settings: Settings) -> Container:
         now=_utcnow,
         token_budget=settings.llm_scan_token_budget,
         deep_token_budget=settings.llm_deep_scan_token_budget,
+        reservation_tokens=settings.llm_expected_investigation_tokens,
+        deep_reservation_tokens=settings.llm_expected_deep_investigation_tokens,
         daily_token_budget=settings.llm_daily_token_budget,
         manual_token_reserve=settings.llm_manual_token_reserve,
         daily_cost_budget_usd=settings.llm_daily_cost_budget_usd,
@@ -372,6 +374,7 @@ def build_container(settings: Settings) -> Container:
         timeout_seconds=max(settings.request_timeout_s, 20.0),
         timeout_overrides={
             "jenkins_failed_builds": settings.jenkins_failed_build_check_timeout_s,
+            "jenkins_pipeline_patterns": settings.jenkins_pipeline_pattern_check_timeout_s,
         },
         regular_options=ScanOptions(
             max_investigations_per_scan=settings.max_investigations_per_scan,

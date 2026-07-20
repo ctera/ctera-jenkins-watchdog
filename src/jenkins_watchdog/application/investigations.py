@@ -131,18 +131,28 @@ class InvestigationQueueService:
         *,
         uow_factory: UnitOfWorkFactory,
         now: Callable[[], datetime],
-        token_budget: int = 40_000,
-        deep_token_budget: int = 64_000,
-        daily_token_budget: int = 4_000_000,
-        manual_token_reserve: int = 1_000_000,
-        daily_cost_budget_usd: Decimal = Decimal("14.00"),
-        manual_cost_reserve_usd: Decimal = Decimal("3.50"),
-        max_token_cost_usd_per_million: Decimal = Decimal("25.00"),
+        # Keep these in step with the matching llm_* defaults in config.py; bootstrap always
+        # passes explicit values, so drift here only ever surfaces in tests.
+        token_budget: int = 200_000,
+        deep_token_budget: int = 300_000,
+        # What to reserve per investigation. Defaults to the hard budget so existing callers
+        # keep their behaviour; pass the expected cost to stop one scan reserving the day.
+        reservation_tokens: int | None = None,
+        deep_reservation_tokens: int | None = None,
+        daily_token_budget: int = 20_000_000,
+        manual_token_reserve: int = 4_000_000,
+        daily_cost_budget_usd: Decimal = Decimal("30.00"),
+        manual_cost_reserve_usd: Decimal = Decimal("5.00"),
+        max_token_cost_usd_per_million: Decimal = Decimal("5.00"),
     ) -> None:
         self._uow_factory = uow_factory
         self._now = now
         self._token_budget = max(0, token_budget)
         self._deep_token_budget = max(0, deep_token_budget)
+        self._reservation_tokens = self._token_budget if reservation_tokens is None else max(0, reservation_tokens)
+        self._deep_reservation_tokens = (
+            self._deep_token_budget if deep_reservation_tokens is None else max(0, deep_reservation_tokens)
+        )
         self._daily_token_budget = max(0, daily_token_budget)
         self._manual_token_reserve = min(self._daily_token_budget, max(0, manual_token_reserve))
         self._daily_cost_budget_usd = max(Decimal("0"), Decimal(str(daily_cost_budget_usd)))
@@ -174,7 +184,7 @@ class InvestigationQueueService:
     async def ensure_chat_budget_available(self) -> None:
         await self.ensure_budget_available(
             budget_kind=InvestigationBudgetKind.MANUAL,
-            reserved_tokens=self._token_budget,
+            reserved_tokens=self._reservation_tokens,
         )
 
     async def enqueue_incident(
@@ -196,7 +206,7 @@ class InvestigationQueueService:
             if requested_by or source.startswith("manual") or source.startswith("api")
             else InvestigationBudgetKind.AUTOMATIC
         )
-        reserved_tokens = self._deep_token_budget if mode is ScanMode.DEEP else self._token_budget
+        reserved_tokens = self._deep_reservation_tokens if mode is ScanMode.DEEP else self._reservation_tokens
         async with self._uow_factory() as uow:
             await uow.investigation_requests.lock_budget()
             incident = await uow.incidents.get(incident_id)

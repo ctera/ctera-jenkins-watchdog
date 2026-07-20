@@ -584,7 +584,8 @@ async def test_chat_rejects_calls_when_daily_cost_budget_is_exhausted(
                     cache_read_input_tokens=0,
                     cache_creation_input_tokens=0,
                     total_tokens=125,
-                    estimated_cost_usd=Decimal("14.00"),
+                    # At or above llm_daily_cost_budget_usd, so the chat reservation tips it over.
+                    estimated_cost_usd=Decimal("30.00"),
                     cost_source="test",
                     created_at=NOW,
                 ),

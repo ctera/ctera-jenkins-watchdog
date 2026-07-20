@@ -68,6 +68,13 @@ def test_reinvestigation_reasons_and_fresh_noop() -> None:
         evidence_hash="evidence",
         now=NOW,
     )
+    # A truncated investigation never reached a conclusion, so it must not be cached as fresh.
+    assert should_reinvestigate(
+        incident=target,
+        latest=investigation(target, status=InvestigationStatus.PARTIAL),
+        evidence_hash="evidence",
+        now=NOW,
+    )
 
 
 def test_reinvestigates_on_reopen_or_severity_change() -> None:

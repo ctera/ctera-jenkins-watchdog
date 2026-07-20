@@ -16,6 +16,7 @@ from jenkins_watchdog.application.investigations import (
 )
 from jenkins_watchdog.application.selection import AnalysisSelectionService
 from jenkins_watchdog.application.types import EnqueueScan, TriageBatchResult, TriageRoute
+from jenkins_watchdog.config import Settings
 from jenkins_watchdog.domain.model import (
     AnalysisDecisionOutcome,
     CheckResult,
@@ -280,27 +281,87 @@ async def test_daily_cost_budget_protects_manual_reserve_with_conservative_reser
 
 
 @pytest.mark.asyncio
-async def test_default_cost_guard_admits_ten_regular_requests_before_the_cycle_ceiling(
+async def test_default_cost_guard_admits_a_full_scans_worth_of_critical_incidents(
     sqlite_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _, incidents = await seed_incidents(sqlite_factory, (Severity.CRITICAL,) * 11)
+    """A single scan's candidates must all be admitted under the shipped defaults.
+
+    Regression: reservations were priced at $25/M against a measured ~$3.68/M, so thirteen
+    candidates from one scan exhausted the daily ceiling after eight were queued.
+    """
+    _, incidents = await seed_incidents(sqlite_factory, (Severity.CRITICAL,) * 13)
     queue = InvestigationQueueService(
         uow_factory=factory_port(sqlite_factory),
         now=lambda: NOW,
     )
 
-    admitted = [
-        await queue.enqueue_incident(incident.id, source="scan")
-        for incident in incidents[:10]
-    ]
+    admitted = [await queue.enqueue_incident(incident.id, source="scan") for incident in incidents]
 
     assert all(request is not None for request in admitted)
-    assert sum(request.reserved_tokens for request in admitted if request is not None) == 400_000
+
+
+def test_default_token_ceiling_cannot_bind_before_the_cost_ceiling() -> None:
+    """Regression: an 8M token ceiling silently deferred a whole scan before the USD cap bound.
+
+    Reservations are priced at ``max_token_cost_usd_per_million`` but real spend meters lower,
+    so a dollar buys more tokens than it reserves. The token backstop therefore has to clear
+    what the cost cap can buy at the cheapest plausible rate.
+    """
+    settings = Settings(_env_file=None)  # shipped defaults, not whatever this machine's .env holds
+    automatic_cost_ceiling = settings.llm_daily_cost_budget_usd - settings.llm_manual_cost_reserve_usd
+    automatic_token_ceiling = settings.llm_daily_token_budget - settings.llm_manual_token_reserve
+
+    cheapest_usd_per_million = Decimal("3.00")
+    tokens_the_cost_cap_can_buy = automatic_cost_ceiling / cheapest_usd_per_million * Decimal(1_000_000)
+
+    assert automatic_token_ceiling > tokens_the_cost_cap_can_buy
+
+
+@pytest.mark.asyncio
+async def test_admission_reserves_expected_cost_not_the_hard_rail(
+    sqlite_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Reserving the rail would let one scan's candidates reserve the day and starve each other."""
+    _, incidents = await seed_incidents(sqlite_factory, (Severity.CRITICAL,) * 3)
+    queue = InvestigationQueueService(
+        uow_factory=factory_port(sqlite_factory),
+        now=lambda: NOW,
+        token_budget=200_000,
+        reservation_tokens=80_000,
+    )
+
+    admitted = [await queue.enqueue_incident(incident.id, source="scan") for incident in incidents]
+
+    assert [request.reserved_tokens for request in admitted if request is not None] == [80_000] * 3
+
+
+@pytest.mark.asyncio
+async def test_cost_ceiling_binds_before_the_token_ceiling(
+    sqlite_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Spend is the limit operators are meant to hit; the token budget is only a backstop."""
+    _, incidents = await seed_incidents(sqlite_factory, (Severity.CRITICAL,) * 5)
+    queue = InvestigationQueueService(
+        uow_factory=factory_port(sqlite_factory),
+        now=lambda: NOW,
+        token_budget=100_000,
+        daily_token_budget=10_000_000,
+        manual_token_reserve=0,
+        daily_cost_budget_usd=Decimal("2.50"),
+        manual_cost_reserve_usd=Decimal("0.50"),
+        max_token_cost_usd_per_million=Decimal("5.00"),
+    )
+
+    admitted = [await queue.enqueue_incident(incident.id, source="scan") for incident in incidents[:4]]
+
+    assert all(request is not None for request in admitted)
+    # 4 * 100k = 400k tokens, nowhere near the 10M token ceiling, but 5 * $0.50 clears the
+    # $2.00 automatic cost ceiling -- so the cost guard is what stops admission.
     with pytest.raises(InvestigationCostBudgetExceeded) as error:
-        await queue.enqueue_incident(incidents[10].id, source="scan")
-    assert error.value.limit_usd == Decimal("10.50")
-    assert error.value.active_reserved_usd == Decimal("10.00")
-    assert error.value.projected_usd == Decimal("11.00")
+        await queue.enqueue_incident(incidents[4].id, source="scan")
+    assert error.value.limit_usd == Decimal("2.00")
+    assert error.value.active_reserved_usd == Decimal("2.00")
+    assert error.value.projected_usd == Decimal("2.50")
 
 
 @pytest.mark.asyncio

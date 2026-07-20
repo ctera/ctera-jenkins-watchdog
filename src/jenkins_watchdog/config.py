@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     jenkins_namespace: str = "jenkins"
     jenkins_failed_build_window_hours: int = 4
     jenkins_failed_build_check_timeout_s: float = 120.0
+    jenkins_pipeline_pattern_check_timeout_s: float = 60.0
     jenkins_monitor_enabled: bool = True
     jenkins_sync_interval_s: float = 300.0
     jenkins_sync_window_hours: int = 168
@@ -72,15 +73,30 @@ class Settings(BaseSettings):
     llm_model: str = "anthropic/claude-sonnet-4-6"
     llm_fallback_models: str = "anthropic/claude-opus-4-6"
     llm_temperature: float = 0.1
-    llm_max_tokens: int = 2048
+    llm_max_tokens: int = 8192
     llm_max_retries: int = 2
-    llm_scan_token_budget: int = 40000
-    llm_deep_scan_token_budget: int = 64000
-    llm_daily_token_budget: int = 4000000
-    llm_manual_token_reserve: int = 1000000
-    llm_daily_cost_budget_usd: Decimal = Decimal("14.00")
-    llm_manual_cost_reserve_usd: Decimal = Decimal("3.50")
-    llm_max_token_cost_usd_per_million: Decimal = Decimal("25.00")
+    # Runaway rails, not the operating limit. This is cumulative token spend across every
+    # call in one investigation: each round re-sends the conversation, so the total is roughly
+    # rounds x context. Measured complete investigations average ~68k, so this leaves room to
+    # finish rather than stopping mid-way with no root cause.
+    llm_scan_token_budget: int = 200000
+    llm_deep_scan_token_budget: int = 300000
+    # What admission control reserves per investigation. Deliberately the expected cost, not
+    # the rail above: reserving the rail would let a single scan's candidates reserve the whole
+    # day and starve each other, which is the failure this pair of settings exists to avoid.
+    llm_expected_investigation_tokens: int = 80000
+    llm_expected_deep_investigation_tokens: int = 120000
+    # A backstop only: the USD cap is meant to bind first. Size it above what the cost cap can
+    # buy at the *cheapest* plausible rate, not at the reservation rate -- actual spend meters
+    # near $3.68/M while reservations price $5/M, so a dollar buys more tokens than it reserves.
+    # $25 automatic / $3.68 per M is ~6.8M, so 16M automatic leaves clear headroom.
+    llm_daily_token_budget: int = 20000000
+    llm_manual_token_reserve: int = 4000000
+    llm_daily_cost_budget_usd: Decimal = Decimal("30.00")
+    llm_manual_cost_reserve_usd: Decimal = Decimal("5.00")
+    # Reservations are priced at this rate before a call is made. Measured blended rate for
+    # claude-sonnet-4-6 is ~$3.68/M; this carries margin without over-reserving.
+    llm_max_token_cost_usd_per_million: Decimal = Decimal("5.00")
     llm_triage_batch_size: int = 50
     llm_triage_token_budget: int = 8000
 
@@ -120,7 +136,7 @@ class Settings(BaseSettings):
     # Agent
     max_tool_rounds: int = 15
     max_deep_tool_rounds: int = 25
-    max_investigations_per_scan: int = 12
+    max_investigations_per_scan: int = 30
     max_deep_investigations_per_scan: int = 20
 
     @model_validator(mode="after")
