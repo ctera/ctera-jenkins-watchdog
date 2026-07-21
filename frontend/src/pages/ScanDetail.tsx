@@ -6,6 +6,7 @@ import {
   Divider,
   IconButton,
   LinearProgress,
+  MenuItem,
   Paper,
   Stack,
   Table,
@@ -14,6 +15,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TablePagination,
+  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -26,7 +29,7 @@ import PageHeader from "../components/PageHeader";
 import { ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
 import { useScanEvents } from "../hooks/useScanEvents";
-import { cancelScan, getScan, type Scan } from "../services/api";
+import { ApiError, cancelScan, getScan, getScanJenkinsFailures, type JenkinsFailureReport, type Scan } from "../services/api";
 import { formatDate, formatTokens, formatUsd, titleCase } from "../utils/format";
 import {
   analysisProgress,
@@ -45,18 +48,36 @@ export default function ScanDetailPage() {
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [jenkinsFailures, setJenkinsFailures] = useState<JenkinsFailureReport | null>(null);
+  const [failurePage, setFailurePage] = useState(0);
+  const [failureRowsPerPage, setFailureRowsPerPage] = useState(50);
+  const [failureStatus, setFailureStatus] = useState("");
+  const [failureJobInput, setFailureJobInput] = useState("");
+  const [failureJob, setFailureJob] = useState("");
 
   const refresh = useCallback(async () => {
     if (!scanId) return;
     try {
-      setScan(await getScan(scanId));
+      const nextScan = await getScan(scanId);
+      let nextFailures = (nextScan.jenkins_failures as JenkinsFailureReport | null | undefined) ?? null;
+      if (nextFailures && (failurePage > 0 || failureRowsPerPage !== 50 || failureStatus || failureJob)) {
+        nextFailures = await getScanJenkinsFailures(
+          scanId,
+          failurePage * failureRowsPerPage,
+          failureRowsPerPage,
+          { status: failureStatus || undefined, job: failureJob || undefined },
+        );
+      }
+      setScan(nextScan);
+      setJenkinsFailures(nextFailures);
       setError(null);
     } catch (requestError) {
-      setError(requestError);
+      if (requestError instanceof ApiError && requestError.status === 404) setJenkinsFailures(null);
+      else setError(requestError);
     } finally {
       setLoading(false);
     }
-  }, [scanId]);
+  }, [failureJob, failurePage, failureRowsPerPage, failureStatus, scanId]);
 
   useEffect(() => void refresh(), [refresh]);
   const { events, connection } = useScanEvents(scanId, refresh, false);
@@ -65,12 +86,18 @@ export default function ScanDetailPage() {
     if (events.length) void refresh();
   }, [events.length, refresh]);
 
-  const workflowActive = Boolean(scan && (isCollectionActive(scan) || isAnalysisActive(scan)));
+  const failureWorkflowActive = Boolean(
+    jenkinsFailures && ["collecting", "investigating", "waiting_budget"].includes(jenkinsFailures.status),
+  );
+  const workflowActive = Boolean(scan && (isCollectionActive(scan) || isAnalysisActive(scan) || failureWorkflowActive));
   useEffect(() => {
     if (!workflowActive) return;
-    const timer = window.setInterval(() => void refresh(), 2_500);
+    const timer = window.setInterval(
+      () => void refresh(),
+      jenkinsFailures?.status === "waiting_budget" ? 60_000 : 2_500,
+    );
     return () => window.clearInterval(timer);
-  }, [refresh, workflowActive]);
+  }, [jenkinsFailures?.status, refresh, workflowActive]);
 
   async function cancel() {
     if (!scanId) return;
@@ -91,7 +118,9 @@ export default function ScanDetailPage() {
 
   const collectionActive = isCollectionActive(scan);
   const analysisActive = isAnalysisActive(scan);
-  const workflow = scanWorkflowStatus(scan);
+  const workflow = jenkinsFailures
+    ? reportWorkflowStatus(jenkinsFailures.status)
+    : scanWorkflowStatus(scan);
   const progress = ((STAGES.indexOf(scan.stage) + 1) / STAGES.length) * 100;
   const llmUsage = scan.llm_usage ?? {};
   const analysis = scan.analysis;
@@ -105,12 +134,13 @@ export default function ScanDetailPage() {
       && analysis.selected_count === 0
     ),
   );
-  const showAnalysis = Boolean(
+  const showAnalysis = !jenkinsFailures && Boolean(
     analysis?.candidate_count
-    || analysis?.selected_count
-    || (analysis && analysis.status !== "not_started")
-    || !collectionActive,
+      || analysis?.selected_count
+      || (analysis && analysis.status !== "not_started")
+      || !collectionActive,
   );
+  const reportCompleted = jenkinsFailures ? terminalReportBuildCount(jenkinsFailures) : 0;
 
   return (
     <Box>
@@ -142,12 +172,12 @@ export default function ScanDetailPage() {
           Detector coverage was {titleCase(scan.coverage_status)}. Incident results may be incomplete and unresolved conditions were preserved.
         </Alert>
       )}
-      {analysisActive && !collectionActive && (
+      {!jenkinsFailures && analysisActive && !collectionActive && (
         <Alert severity="info" sx={{ mb: 2 }}>
           Collection is complete. Agent analysis is still running for {analysis?.active_count ?? 0} selected investigation{analysis?.active_count === 1 ? "" : "s"}.
         </Alert>
       )}
-      {allBudgetDeferred && (
+      {!jenkinsFailures && allBudgetDeferred && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           <Typography variant="body2" fontWeight={700}>
             Agent analysis was skipped: daily automatic {costBudgetDeferred ? "cost" : "token"} budget exhausted.
@@ -191,7 +221,26 @@ export default function ScanDetailPage() {
               value={collectionActive ? Math.max(4, progress) : 100}
               sx={{ height: 6, "& .MuiLinearProgress-bar": { transition: "none" } }}
             />
-            {showAnalysis && (
+            {jenkinsFailures ? (
+              <Box sx={{ mt: 1.75 }}>
+                <Stack direction="row" justifyContent="space-between" gap={2} sx={{ mb: 0.75 }}>
+                  <Typography variant="caption" color="text.secondary">Failed-build investigations</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {jenkinsFailures.status === "failed"
+                      ? "Collection failed"
+                      : `${reportCompleted} of ${jenkinsFailures.failures_found} terminal`}
+                  </Typography>
+                </Stack>
+                <LinearProgress
+                  color={jenkinsFailures.status === "failed" || jenkinsFailures.status === "waiting_budget" ? "warning" : "primary"}
+                  variant="determinate"
+                  value={jenkinsFailures.failures_found
+                    ? (reportCompleted / jenkinsFailures.failures_found) * 100
+                    : jenkinsFailures.status === "collecting" ? 4 : 100}
+                  sx={{ height: 6, "& .MuiLinearProgress-bar": { transition: "none" } }}
+                />
+              </Box>
+            ) : showAnalysis && (
               <Box sx={{ mt: 1.75 }}>
                 <Stack direction="row" justifyContent="space-between" gap={2} sx={{ mb: 0.75 }}>
                   <Typography variant="caption" color="text.secondary">Agent analysis</Typography>
@@ -218,6 +267,22 @@ export default function ScanDetailPage() {
           </Stack>
         </Box>
       </Paper>
+
+      {jenkinsFailures && (
+        <JenkinsFailureInventory
+          report={jenkinsFailures}
+          jobInput={failureJobInput}
+          status={failureStatus}
+          page={failurePage}
+          rowsPerPage={failureRowsPerPage}
+          onJobInputChange={setFailureJobInput}
+          onApplyJob={() => { setFailurePage(0); setFailureJob(failureJobInput.trim()); }}
+          onStatusChange={(value) => { setFailurePage(0); setFailureStatus(value); }}
+          onPageChange={setFailurePage}
+          onRowsPerPageChange={(value) => { setFailurePage(0); setFailureRowsPerPage(value); }}
+          onOpenBuild={(buildId) => navigate(`/jenkins/builds/${buildId}?scan=${encodeURIComponent(scan.id)}`)}
+        />
+      )}
 
       {showAnalysis && (
         <Box sx={{ mb: 2.5 }}>
@@ -311,7 +376,7 @@ export default function ScanDetailPage() {
         </Box>
       )}
 
-      {failedBuildInventory && (
+      {!jenkinsFailures && failedBuildInventory && (
         <Box sx={{ mb: 2.5 }}>
           <Typography variant="h6">Failed builds in window</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
@@ -409,6 +474,161 @@ export default function ScanDetailPage() {
   );
 }
 
+function JenkinsFailureInventory({
+  report,
+  jobInput,
+  status,
+  page,
+  rowsPerPage,
+  onJobInputChange,
+  onApplyJob,
+  onStatusChange,
+  onPageChange,
+  onRowsPerPageChange,
+  onOpenBuild,
+}: {
+  report: JenkinsFailureReport;
+  jobInput: string;
+  status: string;
+  page: number;
+  rowsPerPage: number;
+  onJobInputChange: (value: string) => void;
+  onApplyJob: () => void;
+  onStatusChange: (value: string) => void;
+  onPageChange: (value: number) => void;
+  onRowsPerPageChange: (value: number) => void;
+  onOpenBuild: (buildId: string) => void;
+}) {
+  const completed = terminalReportBuildCount(report);
+  return (
+    <Box sx={{ mb: 2.5 }}>
+      <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" gap={1.5} sx={{ mb: 1.25 }}>
+        <Box>
+          <Typography variant="h6">Failed Jenkins builds</Typography>
+          <Typography variant="body2" color="text.secondary">
+            {report.status === "failed" && !report.collected_at
+              ? `Jenkins coverage could not be established for the window from ${formatDate(report.window_started_at)} to ${formatDate(report.window_ended_at)}. No zero-failure conclusion was recorded.`
+              : `${report.failures_found.toLocaleString()} failed build${report.failures_found === 1 ? "" : "s"} found across ${report.jobs_discovered.toLocaleString()} checked jobs between ${formatDate(report.window_started_at)} and ${formatDate(report.window_ended_at)}.`}
+          </Typography>
+        </Box>
+        <Stack direction="row" gap={0.75} flexWrap="wrap" alignItems="center">
+          <StatusChip value={report.status} />
+          <Chip size="small" variant="outlined" label={`${completed} of ${report.failures_found} analyzed`} />
+          {Object.entries(report.counts).map(([value, count]) => (
+            <Chip key={value} size="small" label={`${count} ${titleCase(value)}`} color={value === "explained" ? "success" : value === "waiting_budget" ? "warning" : "default"} />
+          ))}
+        </Stack>
+      </Stack>
+
+      {report.budget_reset_at && (
+        <Alert severity="warning" sx={{ mb: 1.25 }}>
+          Agent investigations are paused by the daily budget and will resume automatically after {formatDate(report.budget_reset_at)}. Every failed build remains in this scan.
+        </Alert>
+      )}
+      {report.status === "failed" && (
+        <Alert severity="error" sx={{ mb: 1.25 }}>
+          Jenkins collection failed before this scan could establish complete build coverage
+          {report.error_summary ? `: ${report.error_summary}` : "."}
+        </Alert>
+      )}
+      {report.coverage_exceptions.length > 0 && (
+        <Alert severity="warning" sx={{ mb: 1.25 }}>
+          {report.coverage_exceptions.length.toLocaleString()} Jenkins job coverage exception{report.coverage_exceptions.length === 1 ? "" : "s"} recorded for this scan.
+        </Alert>
+      )}
+
+      <Stack direction={{ xs: "column", sm: "row" }} gap={1} sx={{ mb: 1.25 }}>
+        <TextField
+          size="small"
+          label="Filter job"
+          value={jobInput}
+          onChange={(event) => onJobInputChange(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") onApplyJob(); }}
+          sx={{ minWidth: { sm: 320 } }}
+        />
+        <Button variant="outlined" onClick={onApplyJob}>Apply</Button>
+        <TextField
+          select
+          size="small"
+          label="Agent status"
+          value={status}
+          onChange={(event) => onStatusChange(event.target.value)}
+          sx={{ minWidth: 180 }}
+        >
+          <MenuItem value="">All statuses</MenuItem>
+          {["queued", "running", "waiting_budget", "explained", "evidence_gap", "agent_failed", "cancelled"].map((value) => (
+            <MenuItem key={value} value={value}>{titleCase(value)}</MenuItem>
+          ))}
+        </TextField>
+      </Stack>
+
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small" sx={{ minWidth: 900 }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Job</TableCell>
+              <TableCell width={100}>Result</TableCell>
+              <TableCell width={180}>Started</TableCell>
+              <TableCell width={110}>Duration</TableCell>
+              <TableCell width={140}>Source</TableCell>
+              <TableCell width={150}>Agent analysis</TableCell>
+              <TableCell width={56} aria-label="Jenkins link" />
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {report.builds.length === 0 ? (
+              <TableRow><TableCell colSpan={7}><Typography color="text.secondary" sx={{ py: 2, textAlign: "center" }}>No failed builds match these filters</Typography></TableCell></TableRow>
+            ) : report.builds.map((build) => (
+              <TableRow
+                hover
+                key={build.id}
+                tabIndex={0}
+                onClick={() => onOpenBuild(build.build_id)}
+                onKeyDown={(event) => { if (event.key === "Enter") onOpenBuild(build.build_id); }}
+                sx={{ cursor: "pointer" }}
+              >
+                <TableCell>
+                  <Typography variant="body2" fontWeight={650}>{build.job_name}</Typography>
+                  <Typography variant="caption" color="text.secondary">Build #{build.build_number}</Typography>
+                </TableCell>
+                <TableCell><StatusChip value={build.result.toLowerCase()} /></TableCell>
+                <TableCell>{formatDate(build.started_at)}</TableCell>
+                <TableCell>{buildDuration(build.duration_ms)}</TableCell>
+                <TableCell>{String(build.source.change_number ?? build.source.repository ?? "-")}</TableCell>
+                <TableCell><StatusChip value={build.status} /></TableCell>
+                <TableCell>
+                  <Tooltip title="Open in Jenkins">
+                    <IconButton
+                      component="a"
+                      href={build.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      size="small"
+                      aria-label={`Open ${build.job_name} build ${build.build_number} in Jenkins`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <OpenInNewIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <TablePagination
+          component="div"
+          count={report.total_builds}
+          page={page}
+          rowsPerPage={rowsPerPage}
+          rowsPerPageOptions={[25, 50, 100]}
+          onPageChange={(_, value) => onPageChange(value)}
+          onRowsPerPageChange={(event) => onRowsPerPageChange(Number(event.target.value))}
+        />
+      </TableContainer>
+    </Box>
+  );
+}
+
 type FailedBuildRow = {
   jobName: string;
   buildNumber: number;
@@ -473,4 +693,24 @@ function checkDuration(startedAt: string | null, completedAt: string | null): st
   const end = completedAt ? new Date(completedAt).getTime() : Date.now();
   const seconds = Math.max(0, Math.round((end - new Date(startedAt).getTime()) / 1000));
   return `${seconds}s`;
+}
+
+function buildDuration(milliseconds: number): string {
+  const minutes = milliseconds / 60_000;
+  if (minutes >= 60) return `${(minutes / 60).toFixed(1)}h`;
+  if (minutes >= 1) return `${Math.round(minutes)}m`;
+  return `${Math.max(0, Math.round(milliseconds / 1000))}s`;
+}
+
+function terminalReportBuildCount(report: JenkinsFailureReport): number {
+  return ["explained", "evidence_gap", "agent_failed", "cancelled"]
+    .reduce((total, key) => total + (report.counts[key] ?? 0), 0);
+}
+
+function reportWorkflowStatus(status: string): { value: string; label: string } {
+  if (status === "collecting") return { value: "scanning", label: "Scanning" };
+  if (status === "investigating") return { value: "analyzing", label: "Analyzing" };
+  if (status === "waiting_budget") return { value: "waiting_budget", label: "Waiting budget" };
+  if (status === "failed" || status === "cancelled") return { value: "complete_with_issues", label: "Complete with issues" };
+  return { value: "complete", label: "Complete" };
 }

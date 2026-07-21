@@ -8,11 +8,14 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from jenkins_watchdog.application.types import EnqueueScan
+from jenkins_watchdog.domain.jenkins import JenkinsBuildSnapshot, JenkinsJobSnapshot
 from jenkins_watchdog.domain.model import (
     CheckResult,
     CheckStatus,
     FindingObservation,
     Incident,
+    InvestigationRequest,
+    InvestigationRequestStatus,
     ScanMode,
     ScanStage,
     Severity,
@@ -178,3 +181,88 @@ async def test_scan_event_sequences_are_durable_and_monotonic(
     assert first.sequence == 1
     assert second.sequence == 2
     assert replay == (second,)
+
+
+@pytest.mark.asyncio
+async def test_build_investigation_lookup_is_scoped_to_the_selected_scan(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    first_scan_id = await _enqueue(postgres_session_factory)
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        first_scan = await uow.scans.get(first_scan_id)
+        assert first_scan is not None
+        await uow.scans.save(first_scan.succeed(now=NOW))
+        await uow.commit()
+    second_scan_id = await _enqueue(postgres_session_factory)
+    observation = FindingObservation(
+        scan_id=first_scan_id,
+        check_name="jenkins_failure_report",
+        rule_id="jenkins.failure.report.v1",
+        resource_id="Portal/Backend#42",
+        severity=Severity.CRITICAL,
+        category="jenkins_build",
+        summary="Jenkins build failed",
+        observed_at=NOW,
+    )
+    incident = Incident.open_new(
+        id=str(uuid.uuid4()),
+        correlation_rule_id="jenkins_failure_report_build",
+        correlation_key="build-42",
+        observation=observation,
+        opened_at=NOW,
+    )
+    job = JenkinsJobSnapshot(
+        full_name="Portal/Backend",
+        display_name="Portal Backend",
+        url="https://jenkins/job/Portal/Backend",
+        job_class="org.jenkinsci.plugins.workflow.job.WorkflowJob",
+        color="red",
+        parent_full_name=None,
+        last_build_number=42,
+        last_build_at=NOW,
+    )
+    build = JenkinsBuildSnapshot(
+        job_full_name=job.full_name,
+        number=42,
+        result="FAILURE",
+        url="https://jenkins/job/Portal/Backend/42",
+        started_at=NOW,
+        duration_ms=60_000,
+    )
+
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        await uow.incidents.save(incident)
+        await uow.jenkins.upsert_jobs((job,), now=NOW)
+        await uow.jenkins.upsert_builds((build,), now=NOW)
+        stored_build = await uow.jenkins.build_by_job_number(job.full_name, build.number)
+        assert stored_build is not None
+        requests = tuple(
+            InvestigationRequest(
+                id=str(uuid.uuid4()),
+                incident_id=incident.id,
+                occurrence_id=incident.current_occurrence.id,
+                mode=ScanMode.REGULAR,
+                source="jenkins_report",
+                priority=100,
+                evidence_hash=f"scan-{index}",
+                status=InvestigationRequestStatus.SUCCEEDED,
+                scan_id=scan_id,
+                build_id=stored_build["id"],
+                created_at=NOW + timedelta(minutes=index),
+                updated_at=NOW + timedelta(minutes=index),
+                completed_at=NOW + timedelta(minutes=index),
+            )
+            for index, scan_id in enumerate((first_scan_id, second_scan_id), start=1)
+        )
+        for request in requests:
+            await uow.investigation_requests.enqueue(request)
+        await uow.commit()
+
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        first = await uow.investigation_requests.for_build_in_scan(stored_build["id"], first_scan_id)
+        second = await uow.investigation_requests.for_build_in_scan(stored_build["id"], second_scan_id)
+        latest = await uow.investigation_requests.latest_for_build(stored_build["id"])
+
+    assert first is not None and first.id == requests[0].id
+    assert second is not None and second.id == requests[1].id
+    assert latest is not None and latest.id == requests[1].id

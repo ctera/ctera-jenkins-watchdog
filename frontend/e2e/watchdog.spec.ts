@@ -47,11 +47,75 @@ function scan(overrides: Record<string, unknown> = {}) {
     checks: [],
     llm_usage: { call_count: 0, total_tokens: 0, estimated_cost_usd: 0 },
     analysis: scanAnalysis(),
+    jenkins_failures: null,
     urls: {
       detail: "/api/v2/scans/scan-active",
       events: "/api/v2/scans/scan-active/events",
       cancel: "/api/v2/scans/scan-active/cancel",
     },
+    ...overrides,
+  };
+}
+
+function jenkinsFailureReport(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "report-1",
+    scan_id: "scan-failures",
+    mode: "regular",
+    status: "waiting_budget",
+    window_started_at: "2026-07-13T08:00:00Z",
+    window_ended_at: now,
+    collected_at: now,
+    jobs_discovered: 12,
+    failures_found: 2,
+    coverage_exceptions: [],
+    budget_reset_at: "2026-07-14T00:00:00Z",
+    error_summary: null,
+    created_at: now,
+    updated_at: now,
+    completed_at: null,
+    total_builds: 2,
+    offset: 0,
+    limit: 50,
+    counts: { explained: 1, waiting_budget: 1 },
+    builds: [
+      {
+        id: "report-build-1",
+        build_id: "build-1",
+        job_name: "Portal_Build_DAILY_MR_PATCH",
+        build_number: 12358,
+        result: "FAILURE",
+        url: "https://jenkins/job/portal/12358",
+        started_at: now,
+        duration_ms: 1_320_000,
+        status: "explained",
+        source: { provider: "gitlab", repository: "Portal/Backend", change_number: "6836", url: "http://git/mr/6836" },
+        investigation_request_id: "request-1",
+        investigation_status: "succeeded",
+        assessment: investigation().result,
+        error_summary: null,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: "report-build-2",
+        build_id: "build-2",
+        job_name: "busy-job",
+        build_number: 41,
+        result: "UNSTABLE",
+        url: "https://jenkins/job/busy-job/41",
+        started_at: now,
+        duration_ms: 180_000,
+        status: "waiting_budget",
+        source: { provider: null, repository: null, change_number: null, url: null },
+        investigation_request_id: "request-2",
+        investigation_status: null,
+        assessment: null,
+        error_summary: "daily budget exhausted",
+        created_at: now,
+        updated_at: now,
+      },
+    ],
     ...overrides,
   };
 }
@@ -236,6 +300,13 @@ async function installApi(
     }
     if (path === "/api/v2/scans") {
       await route.fulfill({ json: { items: [currentScan], next_cursor: null } });
+      return;
+    }
+    if (/\/api\/v2\/scans\/[^/]+\/jenkins-failures$/.test(path)) {
+      const failures = currentScan.jenkins_failures;
+      await route.fulfill(failures
+        ? { json: failures }
+        : { status: 404, json: { detail: { code: "scan_jenkins_failures_not_found" } } });
       return;
     }
     if (/\/api\/v2\/scans\/[^/]+$/.test(path)) {
@@ -500,66 +571,67 @@ test("scan detail explains when every candidate is budget deferred", async ({ pa
   await page.screenshot({ path: testInfo.outputPath("scan-budget-deferred.png"), fullPage: true });
 });
 
-test("scan detail displays every collected failure and partial agent result", async ({ page }, testInfo) => {
+test("operator opens a scan, selects a failed build, and reads its agent analysis", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium");
   test.setTimeout(60_000);
+  const failures = jenkinsFailureReport();
   await installApi(page, {
     scanOverrides: {
-      id: "scan-partial",
+      id: "scan-failures",
       status: "succeeded",
       stage: "completed",
       completed_at: now,
-      checks: [{
-        name: "jenkins_failed_builds",
-        status: "succeeded",
-        categories: ["jenkins_failed_build"],
-        started_at: now,
-        completed_at: now,
-        failure_summary: null,
-        summary: {
-          failed_build_count: 2,
-          failed_job_count: 2,
-          window_hours: 4,
-          recent_failed_builds: [
-            { job_name: "recovered-job", build_number: 8, result: "FAILURE", timestamp_ms: Date.parse(now), duration_minutes: 1.5, url: "https://jenkins/job/recovered-job/8" },
-            { job_name: "busy-job", build_number: 41, result: "FAILURE", timestamp_ms: Date.parse(now) - 60_000, duration_minutes: 3, url: "https://jenkins/job/busy-job/41" },
-          ],
+      jenkins_failures: failures,
+    },
+    buildOverrides: {
+      incident_id: "incident-1",
+      investigation_request: investigationRequest({ status: "succeeded", build_id: "build-1", investigation_id: "investigation-1", completed_at: now }),
+      latest_investigation: investigation({
+        result: {
+          root_cause: "TypeScript compilation failed because the merge request assigned a string to a numeric field.",
+          plain_language_summary: "The merge request contains an invalid TypeScript assignment.",
+          impact: "The merge request cannot be merged.",
+          evidence: ["Portal build #12358 console log: TS2322"],
+          suggested_fix: "Correct the field type and rerun the build.",
+          verification_steps: ["Rerun Portal build #12358 and confirm compilation succeeds."],
+          confidence: "high",
         },
-      }],
-      analysis: scanAnalysis({
-        status: "complete_with_issues",
-        candidate_count: 1,
-        selected_count: 1,
-        partial_count: 1,
-        items: [{
-          incident_id: "incident-1",
-          incident_title: "Compiler failure across MR builds",
-          severity: "critical",
-          outcome: "selected",
-          reason_code: "critical_failure",
-          reason: "Critical direct evidence requires agent investigation.",
-          request_id: "request-1",
-          request_status: "succeeded",
-          investigation_id: "investigation-1",
-          investigation_status: "partial",
-          error_summary: "investigation exploration limit reached",
-          completed_at: now,
-        }],
       }),
     },
   });
 
-  const scanResponse = page.waitForResponse((response) => response.url().endsWith("/api/v2/scans/scan-partial"));
-  await page.goto("/scans/scan-partial");
+  await page.goto("/scans");
+  const historyRow = page.getByRole("row").filter({ hasText: "1 of 2 investigations finished" }).last();
+  await expect(historyRow).toBeVisible();
+  await expect(historyRow.getByText("Waiting Budget", { exact: true }).first()).toBeVisible();
+  const scanResponse = page.waitForResponse((response) => response.url().endsWith("/api/v2/scans/scan-failures"));
+  await historyRow.click();
   await scanResponse;
+  await expect(page).toHaveURL(/\/scans\/scan-failures$/);
 
-  await expect(page.getByRole("heading", { name: "Failed builds in window" })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("2 failed builds across 2 jobs in the 4-hour collection window.")).toBeVisible();
-  await expect(page.getByText("recovered-job", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Failed Jenkins builds" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/2 failed builds found across 12 checked jobs/)).toBeVisible();
+  await expect(page.getByText("1 Explained", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 Waiting Budget", { exact: true })).toBeVisible();
+  await expect(page.getByText("Portal_Build_DAILY_MR_PATCH", { exact: true })).toBeVisible();
   await expect(page.getByText("busy-job", { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Open recovered-job build 8 in Jenkins" })).toHaveAttribute("href", "https://jenkins/job/recovered-job/8");
-  await expect(page.getByText("Partial", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("investigation exploration limit reached", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("scan-failed-builds.png"), fullPage: true });
+  const buildRequestPromise = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/v2/jenkins/builds/build-1");
+  await page.getByText("Portal_Build_DAILY_MR_PATCH", { exact: true }).click();
+  const buildRequest = await buildRequestPromise;
+
+  await expect(page).toHaveURL(/\/jenkins\/builds\/build-1\?scan=scan-failures$/);
+  expect(new URL(buildRequest.url()).searchParams.get("scan_id")).toBe("scan-failures");
+  await expect(page.getByText("TypeScript compilation failed because the merge request assigned a string to a numeric field.")).toBeVisible();
+  await expect(page.getByText("The merge request contains an invalid TypeScript assignment.")).toBeVisible();
+  await expect(page.getByText("Correct the field type and rerun the build.")).toBeVisible();
+  await expect(page.getByText("Rerun Portal build #12358 and confirm compilation succeeds.")).toBeVisible();
+  await expect(page.getByText("Portal build #12358 console log: TS2322")).toBeVisible();
+  await expect(page.getByText("Deterministic evidence:")).toHaveCount(0);
+  await expect(page.getByText("Compilation Error", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("build-agent-analysis.png"), fullPage: true });
+  await page.getByRole("button", { name: "Back to scan" }).click();
+  await expect(page).toHaveURL(/\/scans\/scan-failures$/);
 });
 
 test("operator can enqueue a regular scan", async ({ page }, testInfo) => {

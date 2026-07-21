@@ -608,6 +608,41 @@ async def test_report_requests_reserve_tokens_only_after_a_worker_claims_them(
 
 
 @pytest.mark.asyncio
+async def test_report_build_stops_after_its_dedicated_investigation(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    incident = await seed_incident(postgres_session_factory)
+    factory = uow_factory(postgres_session_factory)
+    queue = InvestigationQueueService(uow_factory=factory, now=lambda: NOW)
+    request = await queue.enqueue_incident(
+        incident.id,
+        source="jenkins_report",
+        force=True,
+        defer_budget=True,
+    )
+    assert request is not None
+    automation = Automation()
+    worker = InvestigationWorker(
+        owner="report-worker",
+        uow_factory=factory,
+        reasoning=ReasoningService(uow_factory=factory, reasoning=AgentReasoning(), now=lambda: NOW),
+        queue=queue,
+        automation=automation,
+        events=Events(),
+        now=lambda: NOW,
+        lease_seconds=60,
+        heartbeat_seconds=5,
+    )
+
+    completed = await worker.run_once()
+
+    assert completed is not None and completed.status is InvestigationRequestStatus.SUCCEEDED
+    assert automation.incidents == []
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        assert await uow.investigation_requests.active_for_incident(incident.id) is None
+
+
+@pytest.mark.asyncio
 async def test_successful_analysis_survives_automation_planning_error(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

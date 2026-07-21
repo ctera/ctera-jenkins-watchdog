@@ -93,6 +93,22 @@ class NeverDeliver:
         raise AssertionError(f"unexpected delivery for {action.id}")
 
 
+class JenkinsReports:
+    def __init__(self, report: dict | None = None) -> None:
+        self.report = report
+        self.calls: list[tuple[str, dict]] = []
+
+    async def detail_for_scan(self, scan_id: str, **filters):
+        self.calls.append((scan_id, filters))
+        return self.report
+
+    async def summaries_for_scans(self, scan_ids: tuple[str, ...]):
+        self.calls.append(("summaries", {"scan_ids": scan_ids}))
+        if self.report is None or self.report.get("scan_id") not in scan_ids:
+            return {}
+        return {self.report["scan_id"]: self.report}
+
+
 def factory_port(factory: async_sessionmaker[AsyncSession]):
     return lambda: SqlAlchemyUnitOfWork(factory)
 
@@ -210,6 +226,7 @@ def make_app(
     factory: async_sessionmaker[AsyncSession],
     *,
     reasoning: Reasoning | None = None,
+    jenkins_report: dict | None = None,
 ) -> tuple[FastAPI, SimpleNamespace]:
     app = FastAPI()
     notifier = ImmediateNotifier()
@@ -231,6 +248,7 @@ def make_app(
         investigation_queue=queue,
         selection_service=selection,
         incident_service=IncidentService(uow),
+        jenkins_reports=JenkinsReports(jenkins_report),
         make_delivery_worker=lambda owner: delivery,
     )
     app.state.container = container
@@ -272,6 +290,79 @@ async def test_scan_collection_detail_cancel_and_cursor_validation(
     assert first_cancel.json()["cancel_requested"] is True
     assert second_cancel.json() == first_cancel.json()
     assert [item.type for item in container.notifier.published].count("scan_cancel_requested") == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_detail_exposes_paginated_build_specific_jenkins_failures(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scan_id = await seed_terminal_scan(postgres_session_factory)
+    build_id = str(uuid.uuid4())
+    report = {
+        "id": str(uuid.uuid4()),
+        "scan_id": scan_id,
+        "mode": "regular",
+        "status": "investigating",
+        "window_started_at": NOW - timedelta(hours=4),
+        "window_ended_at": NOW,
+        "collected_at": NOW,
+        "jobs_discovered": 12,
+        "failures_found": 1,
+        "coverage_exceptions": [],
+        "budget_reset_at": None,
+        "error_summary": None,
+        "created_at": NOW,
+        "updated_at": NOW,
+        "completed_at": None,
+        "total_builds": 1,
+        "offset": 0,
+        "limit": 50,
+        "counts": {"explained": 1},
+        "builds": [
+            {
+                "id": str(uuid.uuid4()),
+                "build_id": build_id,
+                "job_name": "Portal/Backend",
+                "build_number": 42,
+                "result": "FAILURE",
+                "url": "https://jenkins.example/job/Portal/Backend/42",
+                "started_at": NOW,
+                "duration_ms": 90_000,
+                "status": "explained",
+                "source": {"repository": "Portal/Backend", "change_number": "6836"},
+                "investigation_request_id": str(uuid.uuid4()),
+                "investigation_status": "succeeded",
+                "assessment": {
+                    "root_cause": "The build used an incompatible compiler version.",
+                    "evidence": [{"source": "jenkins_console", "reference": "lines 120-134"}],
+                },
+                "error_summary": None,
+                "created_at": NOW,
+                "updated_at": NOW,
+            }
+        ],
+    }
+    app, container = make_app(postgres_session_factory, jenkins_report=report)
+
+    async with client(app) as api:
+        page = await api.get("/api/v2/scans")
+        detail = await api.get(f"/api/v2/scans/{scan_id}")
+        failures = await api.get(
+            f"/api/v2/scans/{scan_id}/jenkins-failures",
+            params={"limit": 10, "offset": 0, "status": "explained", "job": "Portal"},
+        )
+
+    assert detail.status_code == 200
+    assert page.json()["items"][0]["jenkins_failures"]["id"] == report["id"]
+    assert detail.json()["jenkins_failures"]["builds"][0]["build_id"] == build_id
+    assert failures.status_code == 200
+    assert failures.json()["counts"] == {"explained": 1}
+    assert failures.json()["builds"][0]["assessment"]["root_cause"].startswith("The build")
+    assert container.jenkins_reports.calls == [
+        ("summaries", {"scan_ids": (scan_id,)}),
+        (scan_id, {"limit": 50, "offset": 0}),
+        (scan_id, {"limit": 10, "offset": 0, "status": "explained", "job": "Portal"}),
+    ]
 
 
 @pytest.mark.asyncio

@@ -498,9 +498,13 @@ class JenkinsFailureReportRecord(Base):
     """A fixed Jenkins failure collection window and its durable coverage."""
 
     __tablename__ = "jenkins_failure_reports"
-    __table_args__ = (Index("ix_jenkins_failure_reports_created", "created_at", "id"),)
+    __table_args__ = (
+        Index("ix_jenkins_failure_reports_created", "created_at", "id"),
+        Index("uq_jenkins_failure_reports_scan", "scan_id", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    scan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

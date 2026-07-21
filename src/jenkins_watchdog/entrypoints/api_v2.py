@@ -81,6 +81,7 @@ class V2JenkinsFailureReportBuildResponse(BaseModel):
 
 class V2JenkinsFailureReportResponse(BaseModel):
     id: str
+    scan_id: str | None = None
     mode: str
     status: str
     window_started_at: datetime
@@ -158,6 +159,7 @@ class V2ScanResponse(BaseModel):
     checks: list["V2CheckExecutionResponse"] = Field(default_factory=list)
     llm_usage: dict[str, Any] = Field(default_factory=dict)
     analysis: V2ScanAnalysisResponse = Field(default_factory=V2ScanAnalysisResponse)
+    jenkins_failures: V2JenkinsFailureReportResponse | None = None
 
 
 class V2CheckExecutionResponse(BaseModel):
@@ -790,11 +792,19 @@ async def jenkins_failures(
 
 
 @router.get("/jenkins/builds/{build_id}", response_model=V2JenkinsBuildDetailResponse)
-async def jenkins_build_detail(request: Request, build_id: str) -> V2JenkinsBuildDetailResponse:
+async def jenkins_build_detail(
+    request: Request,
+    build_id: str,
+    scan_id: str | None = None,
+) -> V2JenkinsBuildDetailResponse:
     async with _container(request).uow_factory() as uow:
         detail = await uow.jenkins.build_detail(build_id)
         incident = await uow.incidents.get(str(detail["incident_id"])) if detail and detail.get("incident_id") else None
-        investigation_request = await uow.investigation_requests.latest_for_build(build_id)
+        investigation_request = (
+            await uow.investigation_requests.for_build_in_scan(build_id, scan_id)
+            if scan_id
+            else await uow.investigation_requests.latest_for_build(build_id)
+        )
         investigation = (
             await uow.investigations.get(investigation_request.investigation_id)
             if investigation_request and investigation_request.investigation_id
@@ -925,18 +935,31 @@ async def list_scans(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: str | None = None,
 ) -> V2ScanPage:
+    container = _container(request)
     try:
-        async with _container(request).uow_factory() as uow:
+        async with container.uow_factory() as uow:
             page = await uow.scans.list(limit=limit, cursor=cursor)
-            items = [
-                _scan_response(
-                    scan,
-                    analysis=await _scan_analysis_response(uow, scan),
-                )
+            scans_with_analysis = [
+                (scan, await _scan_analysis_response(uow, scan))
                 for scan in page.items
             ]
     except InvalidCursorError as exc:
         raise HTTPException(status_code=422, detail={"code": "invalid_cursor"}) from exc
+    reports = await container.jenkins_reports.summaries_for_scans(
+        tuple(scan.id for scan, _ in scans_with_analysis)
+    )
+    items = [
+        _scan_response(
+            scan,
+            analysis=analysis,
+            jenkins_failures=(
+                V2JenkinsFailureReportResponse.model_validate(report)
+                if (report := reports.get(scan.id)) is not None
+                else None
+            ),
+        )
+        for scan, analysis in scans_with_analysis
+    ]
     return V2ScanPage(
         items=items,
         next_cursor=page.next_cursor,
@@ -945,14 +968,50 @@ async def list_scans(
 
 @router.get("/scans/{scan_id}", response_model=V2ScanResponse)
 async def get_scan(request: Request, scan_id: str) -> V2ScanResponse:
-    async with _container(request).uow_factory() as uow:
+    container = _container(request)
+    async with container.uow_factory() as uow:
         scan = await uow.scans.get(scan_id)
         checks = await uow.checks.for_scan(scan_id) if scan else ()
         llm_usage = await uow.llm_calls.summary_for_scan(scan_id) if scan else {}
         analysis = await _scan_analysis_response(uow, scan) if scan else None
     if scan is None:
         raise HTTPException(status_code=404, detail={"code": "scan_not_found"})
-    return _scan_response(scan, checks=checks, llm_usage=llm_usage, analysis=analysis)
+    failures = await container.jenkins_reports.detail_for_scan(scan_id, limit=50, offset=0)
+    return _scan_response(
+        scan,
+        checks=checks,
+        llm_usage=llm_usage,
+        analysis=analysis,
+        jenkins_failures=(
+            V2JenkinsFailureReportResponse.model_validate(failures) if failures is not None else None
+        ),
+    )
+
+
+@router.get("/scans/{scan_id}/jenkins-failures", response_model=V2JenkinsFailureReportResponse)
+async def get_scan_jenkins_failures(
+    request: Request,
+    scan_id: str,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    status: str | None = None,
+    job: Annotated[str | None, Query(max_length=300)] = None,
+) -> V2JenkinsFailureReportResponse:
+    container = _container(request)
+    async with container.uow_factory() as uow:
+        scan = await uow.scans.get(scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail={"code": "scan_not_found"})
+    report = await container.jenkins_reports.detail_for_scan(
+        scan_id,
+        limit=limit,
+        offset=offset,
+        status=status,
+        job=job,
+    )
+    if report is None:
+        raise HTTPException(status_code=404, detail={"code": "scan_jenkins_failures_not_found"})
+    return V2JenkinsFailureReportResponse.model_validate(report)
 
 
 @router.post("/scans/{scan_id}/cancel", response_model=V2CancelResponse)
@@ -1452,6 +1511,7 @@ def _scan_response(
     checks: tuple[CheckResult, ...] = (),
     llm_usage: dict[str, Any] | None = None,
     analysis: V2ScanAnalysisResponse | None = None,
+    jenkins_failures: V2JenkinsFailureReportResponse | None = None,
 ) -> V2ScanResponse:
     return V2ScanResponse(
         id=scan.id,
@@ -1469,6 +1529,7 @@ def _scan_response(
         checks=[_check_response(check) for check in checks],
         llm_usage=llm_usage or {},
         analysis=analysis or _empty_scan_analysis(scan),
+        jenkins_failures=jenkins_failures,
         urls={
             "detail": f"/api/v2/scans/{scan.id}",
             "events": f"/api/v2/scans/{scan.id}/events",

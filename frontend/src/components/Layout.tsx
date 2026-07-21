@@ -17,7 +17,6 @@ import {
 } from "@mui/material";
 import RadarIcon from "@mui/icons-material/Radar";
 import DashboardOutlinedIcon from "@mui/icons-material/DashboardOutlined";
-import FactCheckOutlinedIcon from "@mui/icons-material/FactCheckOutlined";
 import ReportProblemOutlinedIcon from "@mui/icons-material/ReportProblemOutlined";
 import SendOutlinedIcon from "@mui/icons-material/SendOutlined";
 import ForumOutlinedIcon from "@mui/icons-material/ForumOutlined";
@@ -27,16 +26,15 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 const drawerWidth = 248;
 
 const navItems = [
-  { label: "Failure reports", path: "/jenkins/reports", icon: <FactCheckOutlinedIcon /> },
-  { label: "Jenkins", path: "/overview", icon: <DashboardOutlinedIcon /> },
   { label: "Scans", path: "/scans", icon: <RadarIcon /> },
+  { label: "Jenkins", path: "/overview", icon: <DashboardOutlinedIcon /> },
   { label: "Incidents", path: "/incidents", icon: <ReportProblemOutlinedIcon /> },
   { label: "Actions", path: "/actions", icon: <SendOutlinedIcon /> },
   { label: "Assistant", path: "/assistant", icon: <ForumOutlinedIcon /> },
 ];
 
 function selectedPath(pathname: string): string {
-  return navItems.find((item) => pathname.startsWith(item.path))?.path ?? "/jenkins/reports";
+  return navItems.find((item) => pathname.startsWith(item.path))?.path ?? "/scans";
 }
 
 export default function Layout() {

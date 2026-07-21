@@ -65,17 +65,39 @@ port_owner() {
 stop_pid() {
   local pidfile="$1"
   [ -f "$pidfile" ] || return 0
-  local pid
+  local pid pgid target
   pid=$(cat "$pidfile")
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
+  pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+  target="$pid"
+  [ "$pgid" = "$pid" ] && target="-$pid"
+  if kill -0 -- "$target" 2>/dev/null; then
+    kill -- "$target" 2>/dev/null || true
     for _ in $(seq 1 10); do
-      kill -0 "$pid" 2>/dev/null || break
+      kill -0 -- "$target" 2>/dev/null || break
       sleep 0.5
     done
-    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+    kill -0 -- "$target" 2>/dev/null && kill -9 -- "$target" 2>/dev/null || true
   fi
   rm -f "$pidfile"
+}
+
+start_background() {
+  local pidfile="$1" logfile="$2"
+  shift 2
+  rm -f "$pidfile"
+  setsid -f sh -c '
+    pidfile=$1
+    logfile=$2
+    shift 2
+    echo $$ >"$pidfile"
+    exec "$@" >"$logfile" 2>&1
+  ' sh "$pidfile" "$logfile" "$@" </dev/null
+  for _ in $(seq 1 20); do
+    is_alive "$pidfile" && return 0
+    sleep 0.1
+  done
+  echo "ERROR: process failed to start; check $logfile" >&2
+  return 1
 }
 
 compose_project() {
@@ -168,6 +190,23 @@ cmd_start() {
     return 0
   fi
 
+  # A partial prior start should be cleaned up before checking whether another
+  # process owns one of this worktree's ports.
+  stop_pid "$INSTANCE_DIR/backend.pid"
+  stop_pid "$INSTANCE_DIR/worker.pid"
+  stop_pid "$INSTANCE_DIR/frontend.pid"
+  local owner
+  owner=$(port_owner "$BACKEND_PORT")
+  if [ -n "$owner" ]; then
+    echo "ERROR: backend port $BACKEND_PORT is already in use by pid $owner." >&2
+    exit 1
+  fi
+  owner=$(port_owner "$FRONTEND_PORT")
+  if [ -n "$owner" ]; then
+    echo "ERROR: frontend port $FRONTEND_PORT is already in use by pid $owner." >&2
+    exit 1
+  fi
+
   require_docker
   ensure_backend_deps
   ensure_frontend_deps
@@ -188,35 +227,35 @@ cmd_start() {
   echo "==> Starting backend on :$BACKEND_PORT"
   (
     cd "$REPO_ROOT"
-    WATCHDOG_PORT="$BACKEND_PORT" \
-      WATCHDOG_VALKEY_HOST=localhost \
-      WATCHDOG_VALKEY_PORT="$VALKEY_PORT" \
-      WATCHDOG_DATABASE_URL="$database_url" \
-      WATCHDOG_SMTP_HOST=localhost \
-      WATCHDOG_SMTP_PORT="$MAILPIT_SMTP_PORT" \
-      WATCHDOG_RELOAD=true \
-      nohup "$VENV_PY" -m jenkins_watchdog >"$INSTANCE_DIR/backend.log" 2>&1 &
-    echo $! >"$INSTANCE_DIR/backend.pid"
+    start_background "$INSTANCE_DIR/backend.pid" "$INSTANCE_DIR/backend.log" \
+      env WATCHDOG_PORT="$BACKEND_PORT" \
+        WATCHDOG_VALKEY_HOST=localhost \
+        WATCHDOG_VALKEY_PORT="$VALKEY_PORT" \
+        WATCHDOG_DATABASE_URL="$database_url" \
+        WATCHDOG_SMTP_HOST=localhost \
+        WATCHDOG_SMTP_PORT="$MAILPIT_SMTP_PORT" \
+        WATCHDOG_RELOAD=true \
+        "$VENV_PY" -m jenkins_watchdog
   )
 
   echo "==> Starting worker"
   (
     cd "$REPO_ROOT"
-    WATCHDOG_VALKEY_HOST=localhost \
-      WATCHDOG_VALKEY_PORT="$VALKEY_PORT" \
-      WATCHDOG_DATABASE_URL="$database_url" \
-      WATCHDOG_SMTP_HOST=localhost \
-      WATCHDOG_SMTP_PORT="$MAILPIT_SMTP_PORT" \
-      nohup "$VENV_PY" -m jenkins_watchdog worker >"$INSTANCE_DIR/worker.log" 2>&1 &
-    echo $! >"$INSTANCE_DIR/worker.pid"
+    start_background "$INSTANCE_DIR/worker.pid" "$INSTANCE_DIR/worker.log" \
+      env WATCHDOG_VALKEY_HOST=localhost \
+        WATCHDOG_VALKEY_PORT="$VALKEY_PORT" \
+        WATCHDOG_DATABASE_URL="$database_url" \
+        WATCHDOG_SMTP_HOST=localhost \
+        WATCHDOG_SMTP_PORT="$MAILPIT_SMTP_PORT" \
+        "$VENV_PY" -m jenkins_watchdog worker
   )
 
   echo "==> Starting frontend on :$FRONTEND_PORT"
   (
     cd "$REPO_ROOT/frontend"
-    WATCHDOG_DEV_BACKEND_URL="http://localhost:$BACKEND_PORT" \
-      nohup npm run dev -- --port "$FRONTEND_PORT" --strictPort >"$INSTANCE_DIR/frontend.log" 2>&1 &
-    echo $! >"$INSTANCE_DIR/frontend.pid"
+    start_background "$INSTANCE_DIR/frontend.pid" "$INSTANCE_DIR/frontend.log" \
+      env WATCHDOG_DEV_BACKEND_URL="http://localhost:$BACKEND_PORT" \
+        npm run dev -- --port "$FRONTEND_PORT" --strictPort
   )
 
   write_meta "running"
@@ -230,7 +269,11 @@ cmd_start() {
     fi
     sleep 1
   done
-  [ "$healthy" -eq 1 ] || echo "WARNING: backend did not report healthy in time — check: $0 logs backend"
+  if [ "$healthy" -ne 1 ] || ! is_alive "$INSTANCE_DIR/worker.pid" || ! is_alive "$INSTANCE_DIR/frontend.pid"; then
+    echo "ERROR: one or more services failed to stay up; run: $0 logs" >&2
+    cmd_status
+    exit 1
+  fi
 
   cat <<EOF
 

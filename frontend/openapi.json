@@ -1932,6 +1932,290 @@
         "title": "V2JenkinsFailurePage",
         "type": "object"
       },
+      "V2JenkinsFailureReportBuildResponse": {
+        "properties": {
+          "assessment": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment"
+          },
+          "build_id": {
+            "title": "Build Id",
+            "type": "string"
+          },
+          "build_number": {
+            "title": "Build Number",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "investigation_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Request Id"
+          },
+          "investigation_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Status"
+          },
+          "job_name": {
+            "title": "Job Name",
+            "type": "string"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "source": {
+            "additionalProperties": true,
+            "title": "Source",
+            "type": "object"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "build_id",
+          "job_name",
+          "build_number",
+          "result",
+          "url",
+          "started_at",
+          "duration_ms",
+          "status",
+          "source",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "V2JenkinsFailureReportBuildResponse",
+        "type": "object"
+      },
+      "V2JenkinsFailureReportRequest": {
+        "properties": {
+          "mode": {
+            "default": "regular",
+            "enum": [
+              "regular",
+              "deep"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "V2JenkinsFailureReportRequest",
+        "type": "object"
+      },
+      "V2JenkinsFailureReportResponse": {
+        "properties": {
+          "budget_reset_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Reset At"
+          },
+          "builds": {
+            "items": {
+              "$ref": "#/components/schemas/V2JenkinsFailureReportBuildResponse"
+            },
+            "title": "Builds",
+            "type": "array"
+          },
+          "collected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collected At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "coverage_exceptions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Coverage Exceptions",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "failures_found": {
+            "title": "Failures Found",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jobs_discovered": {
+            "title": "Jobs Discovered",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total_builds": {
+            "default": 0,
+            "title": "Total Builds",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "window_ended_at": {
+            "format": "date-time",
+            "title": "Window Ended At",
+            "type": "string"
+          },
+          "window_started_at": {
+            "format": "date-time",
+            "title": "Window Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "status",
+          "window_started_at",
+          "window_ended_at",
+          "jobs_discovered",
+          "failures_found",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "V2JenkinsFailureReportResponse",
+        "type": "object"
+      },
       "V2JenkinsWorkspaceResponse": {
         "properties": {
           "active_executions": {
@@ -3196,6 +3480,16 @@
             "title": "Id",
             "type": "string"
           },
+          "jenkins_failures": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "llm_usage": {
             "additionalProperties": true,
             "title": "Llm Usage",
@@ -3990,6 +4284,22 @@
               "title": "Build Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "scan_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scan Id"
+            }
           }
         ],
         "responses": {
@@ -4186,6 +4496,183 @@
           }
         },
         "summary": "Jenkins Failures"
+      }
+    },
+    "/api/v2/jenkins/reports": {
+      "get": {
+        "operationId": "list_jenkins_failure_reports_api_v2_jenkins_reports_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+                  },
+                  "title": "Response List Jenkins Failure Reports Api V2 Jenkins Reports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jenkins Failure Reports"
+      },
+      "post": {
+        "operationId": "create_jenkins_failure_report_api_v2_jenkins_reports_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V2JenkinsFailureReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Jenkins Failure Report"
+      }
+    },
+    "/api/v2/jenkins/reports/{report_id}": {
+      "get": {
+        "operationId": "get_jenkins_failure_report_api_v2_jenkins_reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Jenkins Failure Report"
       }
     },
     "/api/v2/overview": {
@@ -4429,6 +4916,101 @@
           }
         },
         "summary": "Scan Events"
+      }
+    },
+    "/api/v2/scans/{scan_id}/jenkins-failures": {
+      "get": {
+        "operationId": "get_scan_jenkins_failures_api_v2_scans__scan_id__jenkins_failures_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "title": "Scan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scan Jenkins Failures"
       }
     },
     "/auth/callback": {

@@ -475,6 +475,7 @@ class InvestigationWorker:
             if (
                 completed.status is InvestigationRequestStatus.SUCCEEDED
                 and investigation.status is InvestigationStatus.SUCCEEDED
+                and request.source != "jenkins_report"
             ):
                 try:
                     await self._automation.plan(request.incident_id)

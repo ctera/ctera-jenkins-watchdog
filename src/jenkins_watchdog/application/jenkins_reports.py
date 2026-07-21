@@ -21,23 +21,69 @@ class JenkinsFailureReportService:
         self._source, self._uow_factory, self._queue, self._now = source, uow_factory, queue, now
         self._concurrency = max(1, concurrency)
 
-    async def create(self, *, mode: ScanMode) -> dict[str, Any]:
+    async def create(self, *, mode: ScanMode, scan_id: str | None = None) -> dict[str, Any]:
         end = self._now()
         start = end - timedelta(hours=24 if mode is ScanMode.DEEP else 4)
         async with self._uow_factory() as uow:
-            report = await uow.jenkins_reports.create(mode=mode.value, start=start, end=end, now=end)
+            report = await uow.jenkins_reports.create(
+                mode=mode.value,
+                start=start,
+                end=end,
+                now=end,
+                scan_id=scan_id,
+            )
             await uow.commit()
         try:
-            await self._collect(report["id"], cutoff=start, end=end, mode=mode)
+            await self._collect(report["id"], cutoff=start, end=end, mode=mode, scan_id=scan_id)
         except Exception as exc:
             async with self._uow_factory() as uow:
                 await uow.jenkins_reports.fail(report["id"], summary=f"{type(exc).__name__}: {exc}", now=self._now())
                 await uow.commit()
         return (await self.detail(report["id"], limit=50, offset=0)) or report
 
+    async def ensure_for_scan(self, scan_id: str, *, mode: ScanMode) -> dict[str, Any]:
+        async with self._uow_factory() as uow:
+            existing = await uow.jenkins_reports.for_scan(scan_id)
+        if existing is not None:
+            return (await self.detail(existing["id"], limit=50, offset=0)) or existing
+        return await self.create(mode=mode, scan_id=scan_id)
+
+    async def detail_for_scan(
+        self,
+        scan_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        job: str | None = None,
+    ) -> dict[str, Any] | None:
+        async with self._uow_factory() as uow:
+            report = await uow.jenkins_reports.for_scan(scan_id)
+        if report is None:
+            return None
+        return await self.detail(report["id"], limit=limit, offset=offset, status=status, job=job)
+
     async def list(self, *, limit: int = 25) -> list[dict[str, Any]]:
         async with self._uow_factory() as uow:
             return await uow.jenkins_reports.list(limit=limit)
+
+    async def summaries_for_scans(self, scan_ids: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+        summaries: dict[str, dict[str, Any]] = {}
+        async with self._uow_factory() as uow:
+            for scan_id in scan_ids:
+                report = await uow.jenkins_reports.for_scan(scan_id)
+                if report is None:
+                    continue
+                report = await uow.jenkins_reports.refresh(report["id"], now=self._now())
+                if report is None:
+                    continue
+                counts = await uow.jenkins_reports.status_counts(report["id"])
+                summaries[scan_id] = report | {
+                    "total_builds": report["failures_found"],
+                    "counts": counts,
+                }
+            await uow.commit()
+        return summaries
 
     async def detail(self, report_id: str, *, limit: int, offset: int, status: str | None = None, job: str | None = None) -> dict[str, Any] | None:
         async with self._uow_factory() as uow:
@@ -49,7 +95,15 @@ class JenkinsFailureReportService:
             await uow.commit()
         return report | {"builds": items, "total_builds": total, "offset": offset, "limit": limit, "counts": counts}
 
-    async def _collect(self, report_id: str, *, cutoff: datetime, end: datetime, mode: ScanMode) -> None:
+    async def _collect(
+        self,
+        report_id: str,
+        *,
+        cutoff: datetime,
+        end: datetime,
+        mode: ScanMode,
+        scan_id: str | None,
+    ) -> None:
         jobs = await self._source.discover_jobs()
         leaves = tuple(job for job in jobs if not job.is_container)
         now = self._now()
@@ -93,19 +147,33 @@ class JenkinsFailureReportService:
             await uow.jenkins_reports.set_collected(report_id, jobs_discovered=len(leaves), failures_found=len(rows), coverage_exceptions=coverage, now=now)
             await uow.commit()
         for row_id, build_id in rows:
-            await self._enqueue_build(report_id=report_id, row_id=row_id, build_id=build_id, mode=mode)
+            await self._enqueue_build(
+                report_id=report_id,
+                row_id=row_id,
+                build_id=build_id,
+                mode=mode,
+                scan_id=scan_id,
+            )
 
-    async def _enqueue_build(self, *, report_id: str, row_id: str, build_id: str, mode: ScanMode) -> None:
+    async def _enqueue_build(
+        self,
+        *,
+        report_id: str,
+        row_id: str,
+        build_id: str,
+        mode: ScanMode,
+        scan_id: str | None,
+    ) -> None:
         now = self._now()
         async with self._uow_factory() as uow:
             build = await uow.jenkins.build_detail(build_id)
             if build is None:
                 return
-            observation = FindingObservation(scan_id=f"jenkins-report:{report_id}", check_name="jenkins_failure_report", rule_id="jenkins.failure.report.v1", resource_id=f"{build['job_name']}#{build['build_number']}", severity=Severity.CRITICAL if build["result"] == "FAILURE" else Severity.WARNING, category="jenkins_build", summary=f"Jenkins build {build['job_name']} #{build['build_number']} finished {build['result']}", observed_at=build["started_at"], evidence={"build_id": build_id, "result": build["result"], "url": build["url"]})
+            observation = FindingObservation(scan_id=scan_id or f"jenkins-report:{report_id}", check_name="jenkins_failure_report", rule_id="jenkins.failure.report.v1", resource_id=f"{build['job_name']}#{build['build_number']}", severity=Severity.CRITICAL if build["result"] == "FAILURE" else Severity.WARNING, category="jenkins_build", summary=f"Jenkins build {build['job_name']} #{build['build_number']} finished {build['result']}", observed_at=build["started_at"], evidence={"build_id": build_id, "result": build["result"], "url": build["url"]})
             incident = Incident.open_new(id=str(uuid4()), correlation_rule_id="jenkins_failure_report_build", correlation_key=f"{report_id}:{build_id}", observation=observation, opened_at=now, title=observation.summary)
             await uow.incidents.save(incident)
             await uow.commit()
-        request = await self._queue.enqueue_incident(incident.id, source="jenkins_report", mode=mode, priority=100, build_id=build_id, force=True, budget_kind=InvestigationBudgetKind.AUTOMATIC, defer_budget=True)
+        request = await self._queue.enqueue_incident(incident.id, source="jenkins_report", mode=mode, priority=100, scan_id=scan_id, build_id=build_id, force=True, budget_kind=InvestigationBudgetKind.AUTOMATIC, defer_budget=True)
         if request:
             async with self._uow_factory() as uow:
                 await uow.jenkins_reports.attach_request(row_id, request.id, now=self._now())

@@ -35,9 +35,10 @@ export interface JenkinsFailureReportBuild {
 }
 
 export interface JenkinsFailureReport {
-  id: string; mode: "regular" | "deep"; status: string; window_started_at: string; window_ended_at: string;
+  id: string; scan_id?: string | null; mode: string; status: string; window_started_at: string; window_ended_at: string;
   collected_at?: string | null; jobs_discovered: number; failures_found: number;
   coverage_exceptions: Array<Record<string, unknown>>; budget_reset_at?: string | null;
+  created_at: string; updated_at: string; completed_at?: string | null; error_summary?: string | null;
   total_builds: number; offset: number; limit: number; counts: Record<string, number>; builds: JenkinsFailureReportBuild[];
 }
 
@@ -103,8 +104,8 @@ export function listJenkinsFailures(
   );
 }
 
-export function getJenkinsBuild(buildId: string): Promise<JenkinsBuildDetail> {
-  return request<JenkinsBuildDetail>(`/jenkins/builds/${encodeURIComponent(buildId)}`);
+export function getJenkinsBuild(buildId: string, scanId?: string): Promise<JenkinsBuildDetail> {
+  return request<JenkinsBuildDetail>(`/jenkins/builds/${encodeURIComponent(buildId)}${query({ scan_id: scanId })}`);
 }
 
 export function analyzeJenkinsBuild(
@@ -118,16 +119,8 @@ export function analyzeJenkinsBuild(
   });
 }
 
-export function createJenkinsFailureReport(mode: "regular" | "deep"): Promise<JenkinsFailureReport> {
-  return request<JenkinsFailureReport>("/jenkins/reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
-}
-
-export function listJenkinsFailureReports(limit = 25): Promise<JenkinsFailureReport[]> {
-  return request<JenkinsFailureReport[]>(`/jenkins/reports${query({ limit })}`);
-}
-
-export function getJenkinsFailureReport(reportId: string, offset = 0, limit = 50, filters: { status?: string; job?: string } = {}): Promise<JenkinsFailureReport> {
-  return request<JenkinsFailureReport>(`/jenkins/reports/${encodeURIComponent(reportId)}${query({ offset, limit, ...filters })}`);
+export function getScanJenkinsFailures(scanId: string, offset = 0, limit = 50, filters: { status?: string; job?: string } = {}): Promise<JenkinsFailureReport> {
+  return request<JenkinsFailureReport>(`/scans/${encodeURIComponent(scanId)}/jenkins-failures${query({ offset, limit, ...filters })}`);
 }
 
 export async function createScan(mode: "regular" | "deep", categories: string[]): Promise<Scan> {

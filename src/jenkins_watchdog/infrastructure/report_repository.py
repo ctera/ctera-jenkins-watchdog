@@ -23,9 +23,18 @@ class SqlAlchemyJenkinsFailureReportRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create(self, *, mode: str, start: datetime, end: datetime, now: datetime) -> dict[str, Any]:
+    async def create(
+        self,
+        *,
+        mode: str,
+        start: datetime,
+        end: datetime,
+        now: datetime,
+        scan_id: str | None = None,
+    ) -> dict[str, Any]:
         record = JenkinsFailureReportRecord(
-            id=uuid.uuid4(), mode=mode, status="collecting", window_started_at=start,
+            id=uuid.uuid4(), scan_id=uuid.UUID(scan_id) if scan_id else None,
+            mode=mode, status="collecting", window_started_at=start,
             window_ended_at=end, coverage_exceptions=[], created_at=now, updated_at=now,
         )
         self._session.add(record)
@@ -37,6 +46,12 @@ class SqlAlchemyJenkinsFailureReportRepository:
             record = await self._session.get(JenkinsFailureReportRecord, uuid.UUID(report_id))
         except ValueError:
             return None
+        return _report(record) if record else None
+
+    async def for_scan(self, scan_id: str) -> dict[str, Any] | None:
+        record = await self._session.scalar(
+            select(JenkinsFailureReportRecord).where(JenkinsFailureReportRecord.scan_id == uuid.UUID(scan_id))
+        )
         return _report(record) if record else None
 
     async def list(self, *, limit: int = 25) -> list[dict[str, Any]]:
@@ -90,7 +105,7 @@ class SqlAlchemyJenkinsFailureReportRepository:
         report = await self._session.get(JenkinsFailureReportRecord, uuid.UUID(report_id))
         if report is None:
             return None
-        if report.status in {"collecting", "failed", "cancelled"}:
+        if report.status in {"collecting", "complete", "failed", "cancelled"}:
             return _report(report)
         rows = (await self._session.scalars(
             select(JenkinsFailureReportBuildRecord).where(JenkinsFailureReportBuildRecord.report_id == report.id)
@@ -180,7 +195,8 @@ class SqlAlchemyJenkinsFailureReportRepository:
 
 
 def _report(record: JenkinsFailureReportRecord) -> dict[str, Any]:
-    return {"id": str(record.id), "mode": record.mode, "status": record.status, "window_started_at": record.window_started_at,
+    return {"id": str(record.id), "scan_id": str(record.scan_id) if record.scan_id else None,
+            "mode": record.mode, "status": record.status, "window_started_at": record.window_started_at,
             "window_ended_at": record.window_ended_at, "collected_at": record.collected_at, "jobs_discovered": record.jobs_discovered,
             "failures_found": record.failures_found, "coverage_exceptions": list(record.coverage_exceptions or []),
             "budget_reset_at": record.budget_reset_at, "error_summary": record.error_summary, "created_at": record.created_at,

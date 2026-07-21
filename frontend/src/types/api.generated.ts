@@ -259,6 +259,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/jenkins/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Jenkins Failure Reports */
+        get: operations["list_jenkins_failure_reports_api_v2_jenkins_reports_get"];
+        put?: never;
+        /** Create Jenkins Failure Report */
+        post: operations["create_jenkins_failure_report_api_v2_jenkins_reports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/jenkins/reports/{report_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Jenkins Failure Report */
+        get: operations["get_jenkins_failure_report_api_v2_jenkins_reports__report_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v2/overview": {
         parameters: {
             query?: never;
@@ -337,6 +372,23 @@ export interface paths {
         };
         /** Scan Events */
         get: operations["scan_events_api_v2_scans__scan_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/scans/{scan_id}/jenkins-failures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Scan Jenkins Failures */
+        get: operations["get_scan_jenkins_failures_api_v2_scans__scan_id__jenkins_failures_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1153,6 +1205,131 @@ export interface components {
             /** Total Count */
             total_count: number;
         };
+        /** V2JenkinsFailureReportBuildResponse */
+        V2JenkinsFailureReportBuildResponse: {
+            /** Assessment */
+            assessment?: {
+                [key: string]: unknown;
+            } | null;
+            /** Build Id */
+            build_id: string;
+            /** Build Number */
+            build_number: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error Summary */
+            error_summary?: string | null;
+            /** Id */
+            id: string;
+            /** Investigation Request Id */
+            investigation_request_id?: string | null;
+            /** Investigation Status */
+            investigation_status?: string | null;
+            /** Job Name */
+            job_name: string;
+            /** Result */
+            result: string;
+            /** Source */
+            source: {
+                [key: string]: unknown;
+            };
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Url */
+            url: string;
+        };
+        /** V2JenkinsFailureReportRequest */
+        V2JenkinsFailureReportRequest: {
+            /**
+             * Mode
+             * @default regular
+             * @enum {string}
+             */
+            mode: "regular" | "deep";
+        };
+        /** V2JenkinsFailureReportResponse */
+        V2JenkinsFailureReportResponse: {
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Builds */
+            builds?: components["schemas"]["V2JenkinsFailureReportBuildResponse"][];
+            /** Collected At */
+            collected_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            };
+            /** Coverage Exceptions */
+            coverage_exceptions?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error Summary */
+            error_summary?: string | null;
+            /** Failures Found */
+            failures_found: number;
+            /** Id */
+            id: string;
+            /** Jobs Discovered */
+            jobs_discovered: number;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /** Mode */
+            mode: string;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+            /** Scan Id */
+            scan_id?: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Total Builds
+             * @default 0
+             */
+            total_builds: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Window Ended At
+             * Format: date-time
+             */
+            window_ended_at: string;
+            /**
+             * Window Started At
+             * Format: date-time
+             */
+            window_started_at: string;
+        };
         /** V2JenkinsWorkspaceResponse */
         V2JenkinsWorkspaceResponse: {
             /** Active Executions */
@@ -1625,6 +1802,7 @@ export interface components {
             failure_summary: string | null;
             /** Id */
             id: string;
+            jenkins_failures?: components["schemas"]["V2JenkinsFailureReportResponse"] | null;
             /** Llm Usage */
             llm_usage?: {
                 [key: string]: unknown;
@@ -2064,7 +2242,9 @@ export interface operations {
     };
     jenkins_build_detail_api_v2_jenkins_builds__build_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                scan_id?: string | null;
+            };
             header?: never;
             path: {
                 build_id: string;
@@ -2151,6 +2331,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["V2JenkinsFailurePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_jenkins_failure_reports_api_v2_jenkins_reports_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2JenkinsFailureReportResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_jenkins_failure_report_api_v2_jenkins_reports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V2JenkinsFailureReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2JenkinsFailureReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_jenkins_failure_report_api_v2_jenkins_reports__report_id__get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                status?: string | null;
+                job?: string | null;
+            };
+            header?: never;
+            path: {
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2JenkinsFailureReportResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2331,6 +2611,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_scan_jenkins_failures_api_v2_scans__scan_id__jenkins_failures_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                status?: string | null;
+                job?: string | null;
+            };
+            header?: never;
+            path: {
+                scan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V2JenkinsFailureReportResponse"];
                 };
             };
             /** @description Validation Error */

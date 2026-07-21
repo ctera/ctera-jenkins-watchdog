@@ -32,7 +32,7 @@ import PageHeader from "../components/PageHeader";
 import { EmptyPanel, ErrorPanel, LoadingPanel } from "../components/StatePanel";
 import StatusChip from "../components/StatusChip";
 import { useScanEvents } from "../hooks/useScanEvents";
-import { ApiError, createScan, listScans, type Scan } from "../services/api";
+import { ApiError, createScan, listScans, type JenkinsFailureReport, type Scan } from "../services/api";
 import { formatDate, formatRelative, titleCase } from "../utils/format";
 import {
   analysisProgress,
@@ -103,7 +103,10 @@ export default function Scans() {
 
   useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(() => void refresh(), 2_500);
+    const timer = window.setInterval(
+      () => void refresh(),
+      active.jenkins_failures?.status === "waiting_budget" ? 60_000 : 2_500,
+    );
     return () => window.clearInterval(timer);
   }, [active, refresh]);
 
@@ -130,7 +133,9 @@ export default function Scans() {
   }
 
   const progress = active
-    ? isCollectionActive(active)
+    ? active.jenkins_failures
+      ? reportProgress(active.jenkins_failures as JenkinsFailureReport)
+      : isCollectionActive(active)
       ? ((STAGE_INDEX[active.stage] ?? 0) / 7) * 100
       : analysisProgress(active.analysis)
     : 0;
@@ -207,7 +212,9 @@ export default function Scans() {
                     variant="outlined"
                     label={isCollectionActive(active)
                       ? scanStageLabel(active.stage)
-                      : `${(active.analysis?.succeeded_count ?? 0) + (active.analysis?.partial_count ?? 0)} of ${active.analysis?.selected_count ?? 0} investigations finished`}
+                      : active.jenkins_failures
+                        ? reportProgressLabel(active.jenkins_failures as JenkinsFailureReport)
+                        : `${(active.analysis?.succeeded_count ?? 0) + (active.analysis?.partial_count ?? 0)} of ${active.analysis?.selected_count ?? 0} investigations finished`}
                   />
                 </Stack>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
@@ -268,10 +275,19 @@ export default function Scans() {
                       {isCollectionActive(scan) && <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>{scanStageLabel(scan.stage)}</Typography>}
                     </TableCell>
                     <TableCell>
-                      {scan.analysis?.status && scan.analysis.status !== "not_started"
+                      {scan.jenkins_failures
+                        ? (
+                          <>
+                            <StatusChip value={scan.jenkins_failures.status} />
+                            <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
+                              {reportProgressLabel(scan.jenkins_failures as JenkinsFailureReport)}
+                            </Typography>
+                          </>
+                        )
+                        : scan.analysis?.status && scan.analysis.status !== "not_started"
                         ? <StatusChip value={scan.analysis.status} />
                         : <Typography variant="body2" color="text.secondary">No candidates</Typography>}
-                      {Boolean(scan.analysis?.candidate_count) && (
+                      {!scan.jenkins_failures && Boolean(scan.analysis?.candidate_count) && (
                         <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
                           {scan.analysis?.status === "budget_deferred"
                             ? `${scan.analysis.budget_deferred_count} of ${scan.analysis.candidate_count} budget deferred`
@@ -301,4 +317,20 @@ function duration(scan: Scan): string {
   const seconds = Math.max(0, Math.round((end - new Date(scan.started_at).getTime()) / 1000));
   if (seconds >= 60) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   return `${seconds}s`;
+}
+
+function reportTerminalCount(report: JenkinsFailureReport): number {
+  return ["explained", "evidence_gap", "agent_failed", "cancelled"]
+    .reduce((total, key) => total + (report.counts[key] ?? 0), 0);
+}
+
+function reportProgress(report: JenkinsFailureReport): number {
+  if (!report.failures_found) return report.status === "collecting" ? 4 : 100;
+  return (reportTerminalCount(report) / report.failures_found) * 100;
+}
+
+function reportProgressLabel(report: JenkinsFailureReport): string {
+  if (report.status === "collecting") return "Collecting failed builds";
+  if (report.status === "failed") return "Collection failed";
+  return `${reportTerminalCount(report)} of ${report.failures_found} investigations finished`;
 }

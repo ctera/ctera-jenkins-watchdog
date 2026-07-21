@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from jenkins_watchdog.application.automation import AutomationService
 from jenkins_watchdog.application.events import EventService
@@ -12,6 +13,9 @@ from jenkins_watchdog.application.incidents import IncidentService
 from jenkins_watchdog.application.ports import CheckRunner, UnitOfWorkFactory
 from jenkins_watchdog.application.selection import AnalysisSelectionService
 from jenkins_watchdog.domain.model import AnalysisDecisionOutcome, CheckStatus, Scan, ScanStage
+
+if TYPE_CHECKING:
+    from jenkins_watchdog.application.jenkins_reports import JenkinsFailureReportService
 
 TERMINAL_CHECK_STATUSES = frozenset(
     {
@@ -39,6 +43,7 @@ class ScanPipeline:
         automation_service: AutomationService,
         events: EventService,
         now: Callable[[], datetime],
+        jenkins_reports: JenkinsFailureReportService | None = None,
         max_investigations: int = 12,
         max_deep_investigations: int = 20,
     ) -> None:
@@ -49,6 +54,7 @@ class ScanPipeline:
         self._automation_service = automation_service
         self._events = events
         self._now = now
+        self._jenkins_reports = jenkins_reports
         self._max_investigations = max(0, max_investigations)
         self._max_deep_investigations = max(0, max_deep_investigations)
 
@@ -56,9 +62,31 @@ class ScanPipeline:
         scan = await self._get_scan(scan_id)
         await self._raise_if_cancelled(scan)
         selected_checks = frozenset(self._check_runner.checks_for_categories(tuple(scan.categories)))
+        if self._jenkins_reports is not None:
+            # The fixed-window collector replaces the legacy summary-only failed-build check.
+            selected_checks -= {"jenkins_failed_builds"}
         successful_checks: set[str] = set()
 
         scan = await self._advance(scan, ScanStage.DETECTING)
+        if self._jenkins_reports is not None:
+            report = await self._jenkins_reports.ensure_for_scan(scan.id, mode=scan.mode)
+            await self._events.append(
+                scan.id,
+                "jenkins_failures_collected",
+                {
+                    "report_id": report["id"],
+                    "status": report["status"],
+                    "jobs_discovered": report["jobs_discovered"],
+                    "failures_found": report["failures_found"],
+                    "coverage_exception_count": len(report["coverage_exceptions"]),
+                },
+                now=self._now(),
+            )
+            if report["status"] == "failed":
+                return await self._fail_scan(
+                    scan,
+                    summary=f"Jenkins failure collection failed: {report.get('error_summary') or 'unknown error'}",
+                )
         for check_name in self._check_runner.check_names:
             await self._raise_if_cancelled(await self._get_scan(scan_id))
             if check_name not in selected_checks:
@@ -190,6 +218,20 @@ class ScanPipeline:
             now=now,
         )
         return completed
+
+    async def _fail_scan(self, scan: Scan, *, summary: str) -> Scan:
+        now = self._now()
+        failed = scan.fail(summary=summary, now=now)
+        async with self._uow_factory() as uow:
+            await uow.scans.save(failed)
+            await uow.commit()
+        await self._events.append(
+            scan.id,
+            "scan_failed",
+            {"failure_summary": summary},
+            now=now,
+        )
+        return failed
 
     async def _advance(self, scan: Scan, stage: ScanStage) -> Scan:
         advanced = scan.advance(stage, now=self._now())

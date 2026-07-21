@@ -12,7 +12,6 @@ const Incidents = lazy(() => import("./pages/Incidents"));
 const JenkinsBuildDetailPage = lazy(() => import("./pages/JenkinsBuildDetail"));
 const ScanDetailPage = lazy(() => import("./pages/ScanDetail"));
 const Scans = lazy(() => import("./pages/Scans"));
-const JenkinsFailureReports = lazy(() => import("./pages/JenkinsFailureReports"));
 
 function AuthGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<"loading" | "ok" | "unauthorized">("loading");
@@ -43,8 +42,8 @@ export default function App() {
       <Suspense fallback={<Box sx={{ minHeight: 240, display: "grid", placeItems: "center" }}><CircularProgress size={28} /></Box>}>
         <Routes>
           <Route element={<Layout />}>
-            <Route index element={<Navigate to="/jenkins/reports" replace />} />
-            <Route path="/jenkins/reports" element={<JenkinsFailureReports />} />
+            <Route index element={<Navigate to="/scans" replace />} />
+            <Route path="/jenkins/reports" element={<Navigate to="/scans" replace />} />
             <Route path="/overview" element={<Overview />} />
             <Route path="/jenkins/builds/:buildId" element={<JenkinsBuildDetailPage />} />
             <Route path="/scans" element={<Scans />} />
@@ -54,7 +53,7 @@ export default function App() {
             <Route path="/actions" element={<Actions />} />
             <Route path="/actions/:actionId" element={<ActionDetailPage />} />
             <Route path="/assistant" element={<Assistant />} />
-            <Route path="*" element={<Navigate to="/jenkins/reports" replace />} />
+            <Route path="*" element={<Navigate to="/scans" replace />} />
           </Route>
         </Routes>
       </Suspense>

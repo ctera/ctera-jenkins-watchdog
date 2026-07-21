@@ -96,6 +96,35 @@ class Runner:
         )
 
 
+class LegacyFailureRunner(Runner):
+    check_names = ("jenkins_failed_builds", "mixed_check")
+
+    def __init__(self) -> None:
+        super().__init__("empty")
+        self.called_checks: list[str] = []
+
+    async def run(self, scan_id: str, check_name: str, mode: ScanMode) -> CheckResult:
+        self.called_checks.append(check_name)
+        return await super().run(scan_id, check_name, mode)
+
+
+class RecordingFailureReports:
+    def __init__(self, *, status: str = "investigating") -> None:
+        self.calls: list[tuple[str, ScanMode]] = []
+        self.status = status
+
+    async def ensure_for_scan(self, scan_id: str, *, mode: ScanMode):
+        self.calls.append((scan_id, mode))
+        return {
+            "id": "report-1",
+            "status": self.status,
+            "jobs_discovered": 12,
+            "failures_found": 2,
+            "coverage_exceptions": [],
+            "error_summary": "ConnectTimeout" if self.status == "failed" else None,
+        }
+
+
 class CancellingRunner(Runner):
     def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
         super().__init__("finding")
@@ -241,6 +270,7 @@ def pipeline(
     reasoning=NoReasoning(),
     automation=None,
     investigation_queue=None,
+    jenkins_reports=None,
 ) -> ScanPipeline:
     factory_port = uow_factory(factory)
     return ScanPipeline(
@@ -251,7 +281,45 @@ def pipeline(
         automation_service=automation or NoAutomation(),
         events=EventService(factory_port, NullEventNotifier()),
         now=lambda: datetime.now(timezone.utc),
+        jenkins_reports=jenkins_reports,
     )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_collects_build_specific_failures_and_skips_legacy_failure_check(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scan_id = await enqueue(postgres_session_factory, ())
+    runner = LegacyFailureRunner()
+    reports = RecordingFailureReports()
+
+    completed = await pipeline(
+        postgres_session_factory,
+        runner,
+        jenkins_reports=reports,
+    ).execute(scan_id)
+
+    assert completed.status is ScanStatus.SUCCEEDED
+    assert reports.calls == [(scan_id, ScanMode.REGULAR)]
+    assert runner.called_checks == ["mixed_check"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_fails_scan_when_primary_jenkins_collection_fails(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scan_id = await enqueue(postgres_session_factory, ())
+    runner = LegacyFailureRunner()
+
+    completed = await pipeline(
+        postgres_session_factory,
+        runner,
+        jenkins_reports=RecordingFailureReports(status="failed"),
+    ).execute(scan_id)
+
+    assert completed.status is ScanStatus.FAILED
+    assert completed.failure_summary == "Jenkins failure collection failed: ConnectTimeout"
+    assert runner.called_checks == []
 
 
 @pytest.mark.asyncio

@@ -604,6 +604,23 @@ class SqlAlchemyInvestigationRequestRepository:
         )
         return investigation_request_from_record(record) if record else None
 
+    async def for_build_in_scan(self, build_id: str, scan_id: str) -> InvestigationRequest | None:
+        try:
+            item_id = _uuid(build_id)
+            item_scan_id = _uuid(scan_id)
+        except ValueError:
+            return None
+        record = await self._session.scalar(
+            select(InvestigationRequestRecord)
+            .where(
+                InvestigationRequestRecord.build_id == item_id,
+                InvestigationRequestRecord.scan_id == item_scan_id,
+            )
+            .order_by(InvestigationRequestRecord.created_at.desc(), InvestigationRequestRecord.id.desc())
+            .limit(1)
+        )
+        return investigation_request_from_record(record) if record else None
+
     async def for_scan(self, scan_id: str) -> tuple[InvestigationRequest, ...]:
         records = (
             await self._session.scalars(

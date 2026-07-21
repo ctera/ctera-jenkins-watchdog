@@ -7,8 +7,9 @@ Revises: 0007_scan_analysis_indexes
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0008_jenkins_failure_reports"
 down_revision: str | None = "0007_scan_analysis_indexes"

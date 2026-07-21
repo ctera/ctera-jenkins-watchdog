@@ -21,7 +21,7 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import PsychologyOutlinedIcon from "@mui/icons-material/PsychologyOutlined";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import MarkdownContent from "../components/MarkdownContent";
 import { SourceDetails } from "../components/SourceAttribution";
@@ -35,6 +35,8 @@ type UnknownRecord = Record<string, unknown>;
 export default function JenkinsBuildDetailPage() {
   const { buildId = "" } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const scanId = searchParams.get("scan");
   const [build, setBuild] = useState<JenkinsBuildDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -43,14 +45,14 @@ export default function JenkinsBuildDetailPage() {
 
   const load = useCallback(async () => {
     try {
-      setBuild(await getJenkinsBuild(buildId));
+      setBuild(await getJenkinsBuild(buildId, scanId ?? undefined));
       setError(null);
     } catch (requestError) {
       setError(requestError);
     } finally {
       setLoading(false);
     }
-  }, [buildId]);
+  }, [buildId, scanId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -92,33 +94,47 @@ export default function JenkinsBuildDetailPage() {
 
   return (
     <Box>
-      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate("/overview")} sx={{ mb: 1 }}>Jenkins failures</Button>
+      <Button
+        startIcon={<ArrowBackIcon />}
+        onClick={() => navigate(scanId ? `/scans/${encodeURIComponent(scanId)}` : "/overview")}
+        sx={{ mb: 1 }}
+      >
+        {scanId ? "Back to scan" : "Jenkins failures"}
+      </Button>
       <PageHeader
         title={`${breakableJobName(build.job_name)} #${build.build_number}`}
         subtitle={`${formatDate(build.started_at)} · ${duration(build.duration_ms)}`}
         actions={<Button component={Link} href={build.url} target="_blank" rel="noreferrer" variant="outlined" endIcon={<OpenInNewIcon />}>Open in Jenkins</Button>}
       />
 
-      <Alert severity={build.enrichment_status === "failed" ? "warning" : build.enrichment_status === "enriched" ? "success" : "info"} sx={{ mb: 2 }}>
-        Deterministic evidence: {titleCase(build.enrichment_status)}
-      </Alert>
+      {!scanId && (
+        <Alert severity={build.enrichment_status === "failed" ? "warning" : build.enrichment_status === "enriched" ? "success" : "info"} sx={{ mb: 2 }}>
+          Deterministic evidence: {titleCase(build.enrichment_status)}
+        </Alert>
+      )}
 
       <Paper variant="outlined" sx={{ mb: 2.5, overflow: "hidden" }}>
         <Stack direction={{ xs: "column", md: "row" }} alignItems={{ xs: "flex-start", md: "center" }} gap={1.25} sx={{ p: 2 }}>
           <StatusChip value={build.result.toLowerCase()} size="medium" />
-          <StatusChip value={build.novelty} size="medium" />
-          <Chip variant="outlined" label={titleCase(build.failure_classification)} />
-          {build.propagated_failure && <Chip variant="outlined" label="Propagated failure" />}
-          <Box sx={{ ml: { md: "auto" }, textAlign: { md: "right" } }}>
-            <Typography variant="caption" color="text.secondary">Priority</Typography>
-            <Typography variant="h5" color={build.priority_score >= 60 ? "error.main" : build.priority_score >= 30 ? "warning.main" : "text.primary"}>{build.priority_score}</Typography>
-          </Box>
+          {!scanId && <StatusChip value={build.novelty} size="medium" />}
+          {!scanId && <Chip variant="outlined" label={titleCase(build.failure_classification)} />}
+          {!scanId && build.propagated_failure && <Chip variant="outlined" label="Propagated failure" />}
+          {!scanId && (
+            <Box sx={{ ml: { md: "auto" }, textAlign: { md: "right" } }}>
+              <Typography variant="caption" color="text.secondary">Priority</Typography>
+              <Typography variant="h5" color={build.priority_score >= 60 ? "error.main" : build.priority_score >= 30 ? "warning.main" : "text.primary"}>{build.priority_score}</Typography>
+            </Box>
+          )}
         </Stack>
-        <Divider />
-        <Box sx={{ p: 2 }}>
-          <Typography variant="h6" sx={{ overflowWrap: "anywhere" }}>{build.failure_summary || `${titleCase(build.failure_classification)} in ${build.job_name}`}</Typography>
-          {(build.priority_reasons ?? []).length > 0 && <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ mt: 1.25 }}>{(build.priority_reasons ?? []).map((reason) => <Chip size="small" variant="outlined" key={reason} label={reason} />)}</Stack>}
-        </Box>
+        {!scanId && (
+          <>
+            <Divider />
+            <Box sx={{ p: 2 }}>
+              <Typography variant="h6" sx={{ overflowWrap: "anywhere" }}>{build.failure_summary || `${titleCase(build.failure_classification)} in ${build.job_name}`}</Typography>
+              {(build.priority_reasons ?? []).length > 0 && <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ mt: 1.25 }}>{(build.priority_reasons ?? []).map((reason) => <Chip size="small" variant="outlined" key={reason} label={reason} />)}</Stack>}
+            </Box>
+          </>
+        )}
       </Paper>
 
       <AgentAnalysis
@@ -163,11 +179,13 @@ export default function JenkinsBuildDetailPage() {
         </TableContainer>
       </Section>
 
-      <Section title="Failure evidence">
-        {errorLines.length > 0 ? (
-          <Box component="pre" sx={{ m: 0, p: 2, bgcolor: "#181d27", color: "#f5f5f5", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere", overflowX: "auto" }}>{errorLines.join("\n")}</Box>
-        ) : <Typography color="text.secondary" sx={{ p: 2 }}>No matching console error lines were retained.</Typography>}
-      </Section>
+      {!scanId && (
+        <Section title="Failure evidence">
+          {errorLines.length > 0 ? (
+            <Box component="pre" sx={{ m: 0, p: 2, bgcolor: "#181d27", color: "#f5f5f5", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere", overflowX: "auto" }}>{errorLines.join("\n")}</Box>
+          ) : <Typography color="text.secondary" sx={{ p: 2 }}>No matching console error lines were retained.</Typography>}
+        </Section>
+      )}
 
       <Section title="Pipeline stages">
         <TableContainer>
@@ -211,6 +229,8 @@ function AgentAnalysis({
   const investigation = build.latest_investigation;
   const result = asRecord(investigation?.result);
   const trace = asRecords(result.tool_trace);
+  const evidenceItems = assessmentItems(result.evidence);
+  const verificationSteps = assessmentItems(result.verification_steps);
   const hasAssessment = investigation?.status === "succeeded" || investigation?.status === "partial";
   const analysisPartial = investigation?.status === "partial";
   const analysisFailed = request?.status === "failed" || (!active && investigation?.status === "failed");
@@ -270,25 +290,44 @@ function AgentAnalysis({
           <Stack gap={2.25} sx={{ mt: 2.5 }}>
             {stringValue(result.quality_gate) && <Alert severity="warning">{stringValue(result.quality_gate)}</Alert>}
             <ReportField label="Root cause" value={result.root_cause} />
+            {stringValue(result.plain_language_summary) && (
+              <>
+                <Divider />
+                <ReportField label="Plain-language summary" value={result.plain_language_summary} />
+              </>
+            )}
+            {stringValue(result.strongest_supported_hypothesis) && (
+              <>
+                <Divider />
+                <ReportField label="Strongest supported hypothesis" value={result.strongest_supported_hypothesis} />
+              </>
+            )}
+            {stringValue(result.missing_evidence) && (
+              <>
+                <Divider />
+                <ReportField label="Missing evidence or access" value={result.missing_evidence} />
+              </>
+            )}
             <Divider />
             <ReportField label="Impact" value={result.impact} />
             <Divider />
             <ReportField label="Recommended action" value={result.suggested_fix} />
-            {stringValue(result.fix_verification) && (
+            {verificationSteps.length > 0 && (
+              <>
+                <Divider />
+                <AssessmentList label="Verification steps" items={verificationSteps} />
+              </>
+            )}
+            {!verificationSteps.length && stringValue(result.fix_verification) && (
               <>
                 <Divider />
                 <ReportField label="Verification" value={result.fix_verification} />
               </>
             )}
-            {Array.isArray(result.evidence) && result.evidence.length > 0 && (
+            {evidenceItems.length > 0 && (
               <>
                 <Divider />
-                <Box>
-                  <Typography variant="subtitle2" sx={{ mb: 0.75 }}>Evidence used</Typography>
-                  <Stack component="ul" gap={0.5} sx={{ m: 0, pl: 2.5 }}>
-                    {result.evidence.map((item, index) => <Typography component="li" variant="body2" key={index}>{stringValue(item)}</Typography>)}
-                  </Stack>
-                </Box>
+                <AssessmentList label="Evidence used" items={evidenceItems} />
               </>
             )}
             {trace.length > 0 && (
@@ -321,6 +360,17 @@ function ReportField({ label, value }: { label: string; value: unknown }) {
   return <Box><Typography variant="subtitle2" sx={{ mb: 0.75 }}>{label}</Typography><MarkdownContent content={stringValue(value) || "Not available"} /></Box>;
 }
 
+function AssessmentList({ label, items }: { label: string; items: string[] }) {
+  return (
+    <Box>
+      <Typography variant="subtitle2" sx={{ mb: 0.75 }}>{label}</Typography>
+      <Stack component="ol" gap={0.5} sx={{ m: 0, pl: 2.5 }}>
+        {items.map((item, index) => <Typography component="li" variant="body2" key={`${item}-${index}`}>{item}</Typography>)}
+      </Stack>
+    </Box>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return <Box sx={{ mb: 2.5 }}><Typography variant="h6" sx={{ mb: 1 }}>{title}</Typography><Paper variant="outlined" sx={{ overflow: "hidden" }}>{children}</Paper></Box>;
 }
@@ -351,6 +401,19 @@ function asRecords(value: unknown): UnknownRecord[] {
 
 function asRecordsOrStrings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function assessmentItems(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    if (typeof item === "string") return item;
+    const record = asRecord(item);
+    const source = stringValue(record.source);
+    const reference = stringValue(record.reference);
+    const detail = stringValue(record.detail) || stringValue(record.finding) || stringValue(record.summary) || stringValue(record.fact);
+    const parts = [source, reference, detail].filter(Boolean);
+    return parts.length ? parts.join(" · ") : JSON.stringify(item);
+  }).filter(Boolean);
 }
 
 function stringValue(value: unknown): string {

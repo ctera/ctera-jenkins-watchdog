@@ -384,6 +384,14 @@ def build_container(settings: Settings) -> Container:
             jenkins_failed_build_window_hours=settings.jenkins_failed_build_window_hours,
         ),
     )
+    from jenkins_watchdog.application.jenkins_reports import JenkinsFailureReportService
+    jenkins_reports = JenkinsFailureReportService(
+        source=jenkins_source,
+        uow_factory=uow_factory,
+        queue=investigation_queue,
+        now=_utcnow,
+        concurrency=settings.jenkins_sync_concurrency,
+    )
     pipeline = ScanPipeline(
         uow_factory=uow_factory,
         check_runner=check_runner,
@@ -392,16 +400,9 @@ def build_container(settings: Settings) -> Container:
         automation_service=automation_service,
         events=events,
         now=_utcnow,
+        jenkins_reports=jenkins_reports,
         max_investigations=settings.max_investigations_per_scan,
         max_deep_investigations=settings.max_deep_investigations_per_scan,
-    )
-    from jenkins_watchdog.application.jenkins_reports import JenkinsFailureReportService
-    jenkins_reports = JenkinsFailureReportService(
-        source=jenkins_source,
-        uow_factory=uow_factory,
-        queue=investigation_queue,
-        now=_utcnow,
-        concurrency=settings.jenkins_sync_concurrency,
     )
     return Container(
         settings=settings,
