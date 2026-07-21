@@ -887,9 +887,11 @@ def _extract_assessment(content: Any) -> dict[str, Any]:
         value["quality_gate"] = f"{existing_gate} {warning}".strip()
     else:
         value["confidence"] = confidence
-    value.setdefault("plain_language_summary", str(value["root_cause"]))
+    summary = value.get("plain_language_summary")
+    if not isinstance(summary, str) or not summary.strip():
+        value["plain_language_summary"] = str(value["root_cause"])
     verification_steps = value.get("verification_steps")
-    if not isinstance(verification_steps, list):
+    if not isinstance(verification_steps, list) or not verification_steps:
         fallback = value.get("fix_verification")
         value["verification_steps"] = [str(fallback)] if fallback else [
             "Run the affected Jenkins build again and confirm the cited failure is absent."

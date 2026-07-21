@@ -56,6 +56,21 @@ def test_structured_extraction_accepts_json_fence_and_handles_malformed_values()
     assert "unrecognized confidence" in conservative["quality_gate"]
 
 
+def test_structured_extraction_replaces_null_required_assessment_fields() -> None:
+    payload = (
+        '{"root_cause":"merge conflict","plain_language_summary":null,"evidence":[],"impact":"blocked",'
+        '"suggested_fix":"rebase","verification_steps":null,"actionability":"actionable",'
+        '"classification":"compilation_error","priority":"warning","confidence":"high"}'
+    )
+
+    assessment = _extract_assessment(payload)
+
+    assert assessment["plain_language_summary"] == "merge conflict"
+    assert assessment["verification_steps"] == [
+        "Run the affected Jenkins build again and confirm the cited failure is absent."
+    ]
+
+
 def test_platform_instructions_are_restored_from_the_shared_prompt() -> None:
     prompt = _investigation_system_prompt(ScanMode.REGULAR)
     assert "Pipeline failures first" in prompt
