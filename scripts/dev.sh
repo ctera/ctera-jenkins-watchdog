@@ -58,6 +58,10 @@ is_alive() {
   [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null
 }
 
+port_owner() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true
+}
+
 stop_pid() {
   local pidfile="$1"
   [ -f "$pidfile" ] || return 0
@@ -339,6 +343,11 @@ PY
   is_alive "$INSTANCE_DIR/backend.pid" && backend_state="up" || backend_state="down"
   is_alive "$INSTANCE_DIR/worker.pid" && worker_state="up" || worker_state="down"
   is_alive "$INSTANCE_DIR/frontend.pid" && frontend_state="up" || frontend_state="down"
+  local frontend_owner
+  frontend_owner=$(port_owner "$FRONTEND_PORT")
+  if [ "$frontend_state" = "down" ] && [ -n "$frontend_owner" ]; then
+    frontend_state="conflict (pid $frontend_owner)"
+  fi
   project=$(compose_project "$INSTANCE_ID")
   if [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$project" 2>/dev/null)" ]; then
     valkey_state="up"

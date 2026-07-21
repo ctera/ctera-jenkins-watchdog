@@ -46,13 +46,15 @@ class ReasoningService:
         on_progress: ReasoningProgress | None = None,
         budget_kind: InvestigationBudgetKind = InvestigationBudgetKind.AUTOMATIC,
         scan_id: str | None = None,
+        build_id: str | None = None,
     ) -> Investigation | None:
         async with self._uow_factory() as uow:
             incident = await uow.incidents.get(incident_id)
             if incident is None:
                 raise LookupError(f"incident {incident_id} does not exist")
             stored_observations = await uow.incidents.observations(incident_id)
-            builds = await uow.jenkins.builds_for_incident(incident_id)
+            build = await uow.jenkins.build_detail(build_id) if build_id else None
+            builds = (build,) if build else await uow.jenkins.builds_for_incident(incident_id)
             latest = await uow.investigations.latest_for_incident(incident_id)
         observations = stored_observations + jenkins_build_observations(builds)
         evidence_hash = evidence_digest(observations)

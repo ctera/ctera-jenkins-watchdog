@@ -27,6 +27,20 @@ export type JenkinsFailurePattern = Schemas["V2FailurePatternResponse"];
 export type JenkinsJobFamily = Schemas["V2JobFamilyResponse"];
 export type JenkinsMultibranchFamily = Schemas["V2MultibranchFamilyResponse"];
 
+export interface JenkinsFailureReportBuild {
+  id: string; build_id: string; job_name: string; build_number: number; result: string; url: string;
+  started_at: string; duration_ms: number; status: string; source: Record<string, unknown>;
+  investigation_request_id?: string | null; investigation_status?: string | null;
+  assessment?: Record<string, unknown> | null; error_summary?: string | null;
+}
+
+export interface JenkinsFailureReport {
+  id: string; mode: "regular" | "deep"; status: string; window_started_at: string; window_ended_at: string;
+  collected_at?: string | null; jobs_discovered: number; failures_found: number;
+  coverage_exceptions: Array<Record<string, unknown>>; budget_reset_at?: string | null;
+  total_builds: number; offset: number; limit: number; counts: Record<string, number>; builds: JenkinsFailureReportBuild[];
+}
+
 export interface ScanEventEnvelope {
   sequence: number;
   type: string;
@@ -102,6 +116,14 @@ export function analyzeJenkinsBuild(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mode }),
   });
+}
+
+export function createJenkinsFailureReport(mode: "regular" | "deep"): Promise<JenkinsFailureReport> {
+  return request<JenkinsFailureReport>("/jenkins/reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
+}
+
+export function getJenkinsFailureReport(reportId: string, offset = 0, limit = 50, filters: { status?: string; job?: string } = {}): Promise<JenkinsFailureReport> {
+  return request<JenkinsFailureReport>(`/jenkins/reports/${encodeURIComponent(reportId)}${query({ offset, limit, ...filters })}`);
 }
 
 export async function createScan(mode: "regular" | "deep", categories: string[]): Promise<Scan> {

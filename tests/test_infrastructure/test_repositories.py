@@ -39,6 +39,8 @@ def test_schema_contains_expected_business_tables() -> None:
         "jenkins_builds",
         "jenkins_build_edges",
         "jenkins_sync_state",
+        "jenkins_failure_reports",
+        "jenkins_failure_report_builds",
         "investigation_requests",
         "llm_calls",
         "analysis_decisions",

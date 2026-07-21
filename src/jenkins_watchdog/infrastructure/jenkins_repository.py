@@ -922,6 +922,16 @@ class SqlAlchemyJenkinsRepository:
             "downstream_builds": [_build_brief(item) for item in downstream],
         }
 
+    async def build_by_job_number(self, job_name: str, build_number: int) -> dict[str, Any] | None:
+        row = (await self._session.execute(
+            select(JenkinsBuildRecord, JenkinsJobRecord)
+            .join(JenkinsJobRecord, JenkinsJobRecord.full_name == JenkinsBuildRecord.job_full_name)
+            .where(JenkinsBuildRecord.job_full_name == job_name, JenkinsBuildRecord.build_number == build_number)
+        )).one_or_none()
+        if row is None:
+            return None
+        return _build_dict(*row)
+
     async def builds_for_incident(self, incident_id: str) -> tuple[dict[str, Any], ...]:
         try:
             item_id = uuid.UUID(incident_id)

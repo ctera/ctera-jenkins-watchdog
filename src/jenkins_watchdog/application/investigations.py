@@ -199,6 +199,7 @@ class InvestigationQueueService:
         requested_by: str | None = None,
         force: bool = False,
         budget_kind: InvestigationBudgetKind | None = None,
+        defer_budget: bool = False,
     ) -> InvestigationRequest | None:
         now = self._now()
         kind = budget_kind or (
@@ -216,7 +217,8 @@ class InvestigationQueueService:
             if active is not None:
                 return active
             observations = await uow.incidents.observations(incident_id)
-            builds = await uow.jenkins.builds_for_incident(incident_id)
+            build = await uow.jenkins.build_detail(build_id) if build_id else None
+            builds = (build,) if build else await uow.jenkins.builds_for_incident(incident_id)
             latest = await uow.investigations.latest_for_incident(incident_id)
             digest = evidence_digest(observations + jenkins_build_observations(builds))
             if not force and not should_reinvestigate(
@@ -226,12 +228,13 @@ class InvestigationQueueService:
                 now=now,
             ):
                 return None
-            await self._enforce_budget(
-                uow,
-                budget_kind=kind,
-                reserved_tokens=reserved_tokens,
-                now=now,
-            )
+            if not defer_budget:
+                await self._enforce_budget(
+                    uow,
+                    budget_kind=kind,
+                    reserved_tokens=reserved_tokens,
+                    now=now,
+                )
             request = InvestigationRequest(
                 id=str(uuid4()),
                 incident_id=incident.id,
@@ -404,13 +407,18 @@ class InvestigationWorker:
                     },
                     now=self._now(),
                 )
+            reasoning_kwargs: dict[str, Any] = {
+                "force": True,
+                "mode": request.mode,
+                "on_progress": progress,
+                "budget_kind": request.budget_kind,
+                "scan_id": request.scan_id,
+            }
+            if request.build_id:
+                reasoning_kwargs["build_id"] = request.build_id
             investigation = await self._reasoning.investigate_if_needed(
                 request.incident_id,
-                force=True,
-                mode=request.mode,
-                on_progress=progress,
-                budget_kind=request.budget_kind,
-                scan_id=request.scan_id,
+                **reasoning_kwargs,
             )
             now = self._now()
             if investigation is None:

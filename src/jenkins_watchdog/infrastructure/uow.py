@@ -7,6 +7,7 @@ from types import TracebackType
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from jenkins_watchdog.infrastructure.jenkins_repository import SqlAlchemyJenkinsRepository
+from jenkins_watchdog.infrastructure.report_repository import SqlAlchemyJenkinsFailureReportRepository
 from jenkins_watchdog.infrastructure.repositories import (
     SqlAlchemyActionRepository,
     SqlAlchemyAnalysisDecisionRepository,
@@ -41,6 +42,7 @@ class SqlAlchemyUnitOfWork:
         self.delivery_attempts = SqlAlchemyDeliveryAttemptRepository(self._session)
         self.events = SqlAlchemyEventRepository(self._session)
         self.jenkins = SqlAlchemyJenkinsRepository(self._session)
+        self.jenkins_reports = SqlAlchemyJenkinsFailureReportRepository(self._session)
         return self
 
     async def __aexit__(

@@ -56,6 +56,51 @@ class V2ScanRequest(BaseModel):
     categories: list[str] | None = Field(default=None)
 
 
+class V2JenkinsFailureReportRequest(BaseModel):
+    mode: Literal["regular", "deep"] = "regular"
+
+
+class V2JenkinsFailureReportBuildResponse(BaseModel):
+    id: str
+    build_id: str
+    job_name: str
+    build_number: int
+    result: str
+    url: str
+    started_at: datetime
+    duration_ms: int
+    status: str
+    source: dict[str, Any]
+    investigation_request_id: str | None = None
+    investigation_status: str | None = None
+    assessment: dict[str, Any] | None = None
+    error_summary: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class V2JenkinsFailureReportResponse(BaseModel):
+    id: str
+    mode: str
+    status: str
+    window_started_at: datetime
+    window_ended_at: datetime
+    collected_at: datetime | None = None
+    jobs_discovered: int
+    failures_found: int
+    coverage_exceptions: list[dict[str, Any]] = Field(default_factory=list)
+    budget_reset_at: datetime | None = None
+    error_summary: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    total_builds: int = 0
+    offset: int = 0
+    limit: int = 50
+    counts: dict[str, int] = Field(default_factory=dict)
+    builds: list[V2JenkinsFailureReportBuildResponse] = Field(default_factory=list)
+
+
 class V2ScanAnalysisItemResponse(BaseModel):
     incident_id: str
     incident_title: str
@@ -749,10 +794,12 @@ async def jenkins_build_detail(request: Request, build_id: str) -> V2JenkinsBuil
     async with _container(request).uow_factory() as uow:
         detail = await uow.jenkins.build_detail(build_id)
         incident = await uow.incidents.get(str(detail["incident_id"])) if detail and detail.get("incident_id") else None
-        investigation_request = (
-            await uow.investigation_requests.latest_for_incident(incident.id) if incident else None
+        investigation_request = await uow.investigation_requests.latest_for_build(build_id)
+        investigation = (
+            await uow.investigations.get(investigation_request.investigation_id)
+            if investigation_request and investigation_request.investigation_id
+            else None
         )
-        investigation = await uow.investigations.latest_for_incident(incident.id) if incident else None
         model_calls = await uow.llm_calls.for_investigation(investigation.id) if investigation else ()
     if detail is None:
         raise HTTPException(status_code=404, detail={"code": "jenkins_build_not_found"})
@@ -812,6 +859,39 @@ async def analyze_jenkins_build(
     if queued is None:
         raise HTTPException(status_code=503, detail={"code": "investigation_unavailable"})
     return _investigation_request_response(queued)
+
+
+@router.post("/jenkins/reports", response_model=V2JenkinsFailureReportResponse, status_code=202)
+async def create_jenkins_failure_report(
+    request: Request, body: V2JenkinsFailureReportRequest,
+) -> V2JenkinsFailureReportResponse:
+    report = await _container(request).jenkins_reports.create(mode=ScanMode(body.mode))
+    return V2JenkinsFailureReportResponse.model_validate(report)
+
+
+@router.get("/jenkins/reports/{report_id}", response_model=V2JenkinsFailureReportResponse)
+async def get_jenkins_failure_report(
+    request: Request,
+    report_id: str,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    status: str | None = None,
+    job: Annotated[str | None, Query(max_length=300)] = None,
+) -> V2JenkinsFailureReportResponse:
+    report = await _container(request).jenkins_reports.detail(
+        report_id, limit=limit, offset=offset, status=status, job=job,
+    )
+    if report is None:
+        raise HTTPException(status_code=404, detail={"code": "jenkins_failure_report_not_found"})
+    return V2JenkinsFailureReportResponse.model_validate(report)
+
+
+@router.get("/jenkins/reports", response_model=list[V2JenkinsFailureReportResponse])
+async def list_jenkins_failure_reports(
+    request: Request, limit: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> list[V2JenkinsFailureReportResponse]:
+    reports = await _container(request).jenkins_reports.list(limit=limit)
+    return [V2JenkinsFailureReportResponse.model_validate(item) for item in reports]
 
 
 @router.post("/scans", response_model=V2ScanResponse, status_code=202)

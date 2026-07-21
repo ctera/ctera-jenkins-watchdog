@@ -61,6 +61,7 @@ class Container:
     delivery_router: DeliveryRouter
     pipeline: ScanPipeline
     jenkins_monitor: JenkinsMonitorService
+    jenkins_reports: object
     investigation_queue: InvestigationQueueService
     selection_service: AnalysisSelectionService
 
@@ -282,11 +283,12 @@ def build_container(settings: Settings) -> Container:
         gitlab_api_url=settings.gitlab_api_url,
         gitlab_token=settings.gitlab_token,
     )
+    jenkins_source = JenkinsSourceAdapter(
+        jenkins_client,
+        attributor=JenkinsSourceAttributor(source_profiles, source_verifier),
+    )
     jenkins_monitor = JenkinsMonitorService(
-        source=JenkinsSourceAdapter(
-            jenkins_client,
-            attributor=JenkinsSourceAttributor(source_profiles, source_verifier),
-        ),
+        source=jenkins_source,
         uow_factory=uow_factory,
         now=_utcnow,
         window_hours=settings.jenkins_sync_window_hours,
@@ -393,6 +395,14 @@ def build_container(settings: Settings) -> Container:
         max_investigations=settings.max_investigations_per_scan,
         max_deep_investigations=settings.max_deep_investigations_per_scan,
     )
+    from jenkins_watchdog.application.jenkins_reports import JenkinsFailureReportService
+    jenkins_reports = JenkinsFailureReportService(
+        source=jenkins_source,
+        uow_factory=uow_factory,
+        queue=investigation_queue,
+        now=_utcnow,
+        concurrency=settings.jenkins_sync_concurrency,
+    )
     return Container(
         settings=settings,
         engine=engine,
@@ -414,6 +424,7 @@ def build_container(settings: Settings) -> Container:
         delivery_router=delivery_router,
         pipeline=pipeline,
         jenkins_monitor=jenkins_monitor,
+        jenkins_reports=jenkins_reports,
         investigation_queue=investigation_queue,
         selection_service=selection_service,
     )

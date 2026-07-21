@@ -801,8 +801,9 @@ def _investigation_prompt(
     payload["mode"] = mode.value
     payload["operational_context"] = to_primitive(context or {})
     return (
-        "Investigate this incident to root cause. Use direct tools, then return keys root_cause, evidence (array), "
-        "impact, suggested_fix, fix_location, fix_verification, actionability (actionable|informational|unknown), "
+        "Investigate this incident to root cause. Use direct tools, then return keys root_cause, plain_language_summary, "
+        "evidence (array with source references), impact, suggested_fix, verification_steps, fix_location, fix_verification, "
+        "actionability (actionable|informational|unknown), "
         "classification (merge_request|infrastructure|test_failure|configuration|unknown), priority "
         "(low|warning|critical), and confidence (low|medium|high).\nInput: "
         f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}"
@@ -846,7 +847,7 @@ def _snapshot_payload(incident: Incident, observations: tuple[FindingObservation
 def _extraction_prompt(mode: ScanMode) -> str:
     verification = " Include fix_verification with concrete validation steps." if mode is ScanMode.DEEP else ""
     return (
-        "Extract root_cause, evidence (array of concrete facts), impact, suggested_fix, fix_location, "
+        "Extract root_cause, plain_language_summary, evidence (array of concrete facts with source references), impact, suggested_fix, verification_steps, fix_location, "
         "fix_verification, actionability, classification, priority, and confidence. High confidence requires direct "
         "evidence of the causal mechanism; pipeline failures require an actual console-log read. Do not invent facts."
         f"{verification}"
@@ -886,6 +887,13 @@ def _extract_assessment(content: Any) -> dict[str, Any]:
         value["quality_gate"] = f"{existing_gate} {warning}".strip()
     else:
         value["confidence"] = confidence
+    value.setdefault("plain_language_summary", str(value["root_cause"]))
+    verification_steps = value.get("verification_steps")
+    if not isinstance(verification_steps, list):
+        fallback = value.get("fix_verification")
+        value["verification_steps"] = [str(fallback)] if fallback else [
+            "Run the affected Jenkins build again and confirm the cited failure is absent."
+        ]
     value.setdefault("fix_location", None)
     value.setdefault("fix_verification", None)
     return value
@@ -912,10 +920,15 @@ def _partial_assessment(
         if len(evidence) >= 12:
             break
     return {
+        "status": "evidence_gap",
         "root_cause": "Root cause was not fully determined before the agent investigation stopped.",
         "evidence": evidence,
         "impact": f"The {incident.severity.value} incident remains active and requires review.",
         "suggested_fix": "Review the collected evidence and run a focused deep or manual investigation before changing the pipeline.",
+        "plain_language_summary": "The available evidence was insufficient for a proven root cause.",
+        "verification_steps": ["Obtain the missing Jenkins or infrastructure evidence listed above."],
+        "strongest_supported_hypothesis": "The gathered evidence identifies a failure but does not prove its causal mechanism.",
+        "missing_evidence": reason[:500],
         "fix_location": None,
         "fix_verification": None,
         "actionability": "unknown",
