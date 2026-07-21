@@ -46,14 +46,23 @@ def _job(name: str, *, container: bool = False) -> JenkinsJobSnapshot:
     )
 
 
-def _build(job: str, number: int, result: str, *, age_hours: int = 1) -> JenkinsBuildSnapshot:
+def _build(
+    job: str,
+    number: int,
+    result: str,
+    *,
+    age_hours: int = 1,
+    duration_ms: int = 60_000,
+    building: bool = False,
+) -> JenkinsBuildSnapshot:
     return JenkinsBuildSnapshot(
         job_full_name=job,
         number=number,
         result=result,
         url=f"https://jenkins.example/job/{job}/{number}/",
         started_at=NOW - timedelta(hours=age_hours),
-        duration_ms=60_000,
+        duration_ms=duration_ms,
+        building=building,
     )
 
 
@@ -164,6 +173,8 @@ async def test_report_collects_every_failed_build_and_surfaces_job_coverage_erro
                     _build(exact.full_name, 9, "ABORTED", age_hours=2),
                     _build(exact.full_name, 8, "SUCCESS", age_hours=3),
                     _build(exact.full_name, 7, "FAILURE", age_hours=5),
+                    _build(exact.full_name, 6, "FAILURE", duration_ms=2 * 60 * 60 * 1_000),
+                    _build(exact.full_name, 5, "FAILURE", building=True),
                 ),
                 JenkinsCoverage.EXACT,
             ),

@@ -56,12 +56,13 @@ export default function JenkinsBuildDetailPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const analysisActive = ["queued", "running"].includes(build?.investigation_request?.status ?? "");
+  const analysisStatus = requestPresentationStatus(build?.investigation_request);
+  const analysisActive = ["queued", "running", "waiting_budget"].includes(analysisStatus ?? "");
   useEffect(() => {
     if (!analysisActive) return;
-    const timer = window.setInterval(() => void load(), 2500);
+    const timer = window.setInterval(() => void load(), analysisStatus === "waiting_budget" ? 60_000 : 2_500);
     return () => window.clearInterval(timer);
-  }, [analysisActive, load]);
+  }, [analysisActive, analysisStatus, load]);
 
   async function analyze() {
     if (!build || analysisActive || analyzing) return;
@@ -140,6 +141,7 @@ export default function JenkinsBuildDetailPage() {
       <AgentAnalysis
         build={build}
         active={analysisActive}
+        requestStatus={analysisStatus}
         working={analyzing}
         mode={analysisMode}
         onMode={setAnalysisMode}
@@ -208,9 +210,22 @@ export default function JenkinsBuildDetailPage() {
   );
 }
 
+function requestPresentationStatus(request: JenkinsBuildDetail["investigation_request"]): string | undefined {
+  if (
+    request?.status === "queued"
+    && request.next_attempt_at
+    && new Date(request.next_attempt_at).getTime() > Date.now()
+    && /daily LLM .*budget exhausted/i.test(request.error_summary ?? "")
+  ) {
+    return "waiting_budget";
+  }
+  return request?.status;
+}
+
 function AgentAnalysis({
   build,
   active,
+  requestStatus,
   working,
   mode,
   onMode,
@@ -219,6 +234,7 @@ function AgentAnalysis({
 }: {
   build: JenkinsBuildDetail;
   active: boolean;
+  requestStatus: string | undefined;
   working: boolean;
   mode: "regular" | "deep";
   onMode: (mode: "regular" | "deep") => void;
@@ -236,8 +252,8 @@ function AgentAnalysis({
   const analysisFailed = request?.status === "failed" || (!active && investigation?.status === "failed");
   const failureDetail = request?.error_summary || investigation?.error_summary;
   const status = active || analysisFailed
-    ? request?.status ?? investigation?.status ?? "not_started"
-    : investigation?.status ?? request?.status ?? "not_started";
+    ? requestStatus ?? investigation?.status ?? "not_started"
+    : investigation?.status ?? requestStatus ?? "not_started";
 
   return (
     <Section title="Agent analysis">
@@ -264,14 +280,21 @@ function AgentAnalysis({
             onClick={onAnalyze}
             disabled={active || working}
           >
-            {active ? "Analysis in progress" : analysisFailed ? "Retry analysis" : hasAssessment ? "Analyze again" : "Analyze build"}
+            {status === "waiting_budget" ? "Waiting for budget" : active ? "Analysis in progress" : analysisFailed ? "Retry analysis" : hasAssessment ? "Analyze again" : "Analyze build"}
           </Button>
           {build.incident_id && (
             <Button variant="outlined" onClick={() => onOpenIncident(build.incident_id!)}>Open incident</Button>
           )}
         </Stack>
 
-        {request?.status === "queued" && <Alert severity="info" sx={{ mt: 2 }}>Agent analysis is queued.</Alert>}
+        {status === "queued" && <Alert severity="info" sx={{ mt: 2 }}>Agent analysis is queued.</Alert>}
+        {status === "waiting_budget" && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            Agent analysis is paused by the daily budget and will resume automatically
+            {request?.next_attempt_at ? ` after ${formatDate(request.next_attempt_at)}` : " after the next reset"}.
+            This build remains queued.
+          </Alert>
+        )}
         {request?.status === "running" && <Alert severity="info" sx={{ mt: 2 }}>Agent is gathering live evidence.</Alert>}
         {analysisPartial && (
           <Alert severity="warning" sx={{ mt: 2 }}>

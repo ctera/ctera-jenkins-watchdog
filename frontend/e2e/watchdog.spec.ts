@@ -369,7 +369,7 @@ async function installApi(
       await route.fulfill({ status: 202, json: queued });
       return;
     }
-    if (path === "/api/v2/jenkins/builds/build-1") {
+    if (/\/api\/v2\/jenkins\/builds\/[^/]+$/.test(path)) {
       await route.fulfill({ json: currentBuild });
       return;
     }
@@ -632,6 +632,38 @@ test("operator opens a scan, selects a failed build, and reads its agent analysi
   await page.screenshot({ path: testInfo.outputPath("build-agent-analysis.png"), fullPage: true });
   await page.getByRole("button", { name: "Back to scan" }).click();
   await expect(page).toHaveURL(/\/scans\/scan-failures$/);
+});
+
+test("scan build detail preserves the daily budget wait state", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium");
+  await installApi(page, {
+    buildOverrides: {
+      id: "build-2",
+      job_name: "busy-job",
+      build_number: 41,
+      result: "UNSTABLE",
+      incident_id: "incident-1",
+      investigation_request: investigationRequest({
+        id: "request-2",
+        source: "jenkins_report",
+        status: "queued",
+        scan_id: "scan-failures",
+        build_id: "build-2",
+        next_attempt_at: "2099-01-01T00:00:00Z",
+        error_summary: "automatic daily LLM cost budget exhausted",
+      }),
+      latest_investigation: null,
+    },
+  });
+
+  await page.goto("/jenkins/builds/build-2?scan=scan-failures");
+
+  await expect(page.getByRole("heading", { name: "busy-job #41" })).toBeVisible();
+  await expect(page.getByText("Waiting Budget", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Agent analysis is paused by the daily budget and will resume automatically after/)).toBeVisible();
+  await expect(page.getByText("This build remains queued.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Waiting for budget" })).toBeDisabled();
+  await expect(page.getByText("Agent analysis is queued.")).toHaveCount(0);
 });
 
 test("operator can enqueue a regular scan", async ({ page }, testInfo) => {

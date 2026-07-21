@@ -129,7 +129,12 @@ class JenkinsFailureReportService:
                     coverage.append({"job_name": job.full_name, "kind": page.coverage.value})
                 failed.extend(
                     build for build in page.builds
-                    if build.result in _FAILED and cutoff <= build.started_at <= end
+                    if (
+                        build.result in _FAILED
+                        and not build.building
+                        and cutoff <= build.started_at
+                        and build.started_at + timedelta(milliseconds=build.duration_ms) <= end
+                    )
                 )
             await uow.commit()
         rows: list[tuple[str, str]] = []
