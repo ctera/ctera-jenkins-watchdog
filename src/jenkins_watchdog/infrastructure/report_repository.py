@@ -163,6 +163,21 @@ class SqlAlchemyJenkinsFailureReportRepository:
             })
         return items, total
 
+    async def status_counts(self, report_id: str) -> dict[str, int]:
+        """Return report-wide status totals, independent of result pagination."""
+        report_uuid = uuid.UUID(report_id)
+        rows = (
+            await self._session.execute(
+                select(
+                    JenkinsFailureReportBuildRecord.status,
+                    func.count(JenkinsFailureReportBuildRecord.id),
+                )
+                .where(JenkinsFailureReportBuildRecord.report_id == report_uuid)
+                .group_by(JenkinsFailureReportBuildRecord.status)
+            )
+        ).all()
+        return {str(status): int(count) for status, count in rows}
+
 
 def _report(record: JenkinsFailureReportRecord) -> dict[str, Any]:
     return {"id": str(record.id), "mode": record.mode, "status": record.status, "window_started_at": record.window_started_at,

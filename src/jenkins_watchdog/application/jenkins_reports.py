@@ -45,10 +45,8 @@ class JenkinsFailureReportService:
             if report is None:
                 return None
             items, total = await uow.jenkins_reports.page(report_id, limit=limit, offset=offset, status=status, job=job)
+            counts = await uow.jenkins_reports.status_counts(report_id)
             await uow.commit()
-        counts: dict[str, int] = {}
-        for item in items:
-            counts[item["status"]] = counts.get(item["status"], 0) + 1
         return report | {"builds": items, "total_builds": total, "offset": offset, "limit": limit, "counts": counts}
 
     async def _collect(self, report_id: str, *, cutoff: datetime, end: datetime, mode: ScanMode) -> None:
