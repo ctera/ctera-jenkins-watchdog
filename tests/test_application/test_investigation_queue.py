@@ -502,6 +502,78 @@ async def test_worker_rechecks_daily_budget_and_defers_without_consuming_an_atte
 
 
 @pytest.mark.asyncio
+async def test_budget_deferred_request_automatically_resumes_after_daily_reset(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    incident = await seed_incident(postgres_session_factory)
+    factory = uow_factory(postgres_session_factory)
+    queue = InvestigationQueueService(
+        uow_factory=factory,
+        now=lambda: NOW,
+        token_budget=40,
+        daily_token_budget=100,
+        manual_token_reserve=0,
+    )
+    request = await queue.enqueue_incident(incident.id, source="jenkins_report", force=True, defer_budget=True)
+    assert request is not None
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        await uow.llm_calls.save_many(
+            (
+                LLMCall(
+                    id=str(uuid.uuid4()),
+                    purpose="investigation",
+                    model="test-model",
+                    prompt_tokens=60,
+                    completion_tokens=10,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                    total_tokens=70,
+                    created_at=NOW,
+                ),
+            )
+        )
+        await uow.commit()
+
+    deferred_worker = InvestigationWorker(
+        owner="worker-before-reset",
+        uow_factory=factory,
+        reasoning=SimpleNamespace(),  # type: ignore[arg-type]
+        queue=queue,
+        automation=Automation(),  # type: ignore[arg-type]
+        events=Events(),  # type: ignore[arg-type]
+        now=lambda: NOW,
+        lease_seconds=60,
+        heartbeat_seconds=5,
+    )
+    deferred = await deferred_worker.run_once()
+    reset_at = datetime(2026, 7, 16, tzinfo=timezone.utc)
+    assert deferred is not None and deferred.next_attempt_at == reset_at
+
+    resumed_queue = InvestigationQueueService(
+        uow_factory=factory,
+        now=lambda: reset_at,
+        token_budget=40,
+        daily_token_budget=100,
+        manual_token_reserve=0,
+    )
+    resumed_worker = InvestigationWorker(
+        owner="worker-after-reset",
+        uow_factory=factory,
+        reasoning=ReasoningService(uow_factory=factory, reasoning=AgentReasoning(), now=lambda: reset_at),
+        queue=resumed_queue,
+        automation=Automation(),
+        events=Events(),
+        now=lambda: reset_at,
+        lease_seconds=60,
+        heartbeat_seconds=5,
+    )
+    completed = await resumed_worker.run_once()
+
+    assert completed is not None and completed.status is InvestigationRequestStatus.SUCCEEDED
+    assert completed.attempt_count == 1
+
+
+@pytest.mark.asyncio
 async def test_report_requests_reserve_tokens_only_after_a_worker_claims_them(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
