@@ -502,6 +502,40 @@ async def test_worker_rechecks_daily_budget_and_defers_without_consuming_an_atte
 
 
 @pytest.mark.asyncio
+async def test_report_requests_reserve_tokens_only_after_a_worker_claims_them(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    incident = await seed_incident(postgres_session_factory)
+    factory = uow_factory(postgres_session_factory)
+    queue = InvestigationQueueService(
+        uow_factory=factory,
+        now=lambda: NOW,
+        token_budget=40,
+        daily_token_budget=1_000,
+        manual_token_reserve=0,
+    )
+    queued = await queue.enqueue_incident(
+        incident.id,
+        source="jenkins_report",
+        force=True,
+        defer_budget=True,
+    )
+    assert queued is not None and queued.reserved_tokens == 0
+
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        claimed = await uow.investigation_requests.claim(owner="report-worker", now=NOW, lease_seconds=60)
+        await uow.commit()
+    assert claimed is not None and claimed.reserved_tokens == 0
+
+    reserved = await queue.reserve_for_execution(claimed)
+    assert reserved.reserved_tokens == 40
+    async with SqlAlchemyUnitOfWork(postgres_session_factory) as uow:
+        persisted = await uow.investigation_requests.get(queued.id)
+    assert persisted is not None and persisted.status is InvestigationRequestStatus.RUNNING
+    assert persisted.reserved_tokens == 40
+
+
+@pytest.mark.asyncio
 async def test_successful_analysis_survives_automation_planning_error(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

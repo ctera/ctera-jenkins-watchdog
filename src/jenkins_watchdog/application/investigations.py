@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -248,7 +249,9 @@ class InvestigationQueueService:
                 build_id=build_id,
                 requested_by=requested_by,
                 budget_kind=kind,
-                reserved_tokens=reserved_tokens,
+                # Reports queue every failure. Reserving a full agent allowance for every
+                # waiting row would exhaust the daily budget before any row can start.
+                reserved_tokens=0 if defer_budget else reserved_tokens,
                 created_at=now,
                 updated_at=now,
                 next_attempt_at=now,
@@ -315,6 +318,29 @@ class InvestigationQueueService:
         async with self._uow_factory() as uow:
             return await uow.investigation_requests.latest_for_incident(incident_id)
 
+    async def reserve_for_execution(self, request: InvestigationRequest) -> InvestigationRequest:
+        """Atomically reserve an allowance only once a worker owns a request."""
+        if request.reserved_tokens:
+            await self.ensure_budget_available(budget_kind=request.budget_kind, reserved_tokens=0)
+            return request
+        now = self._now()
+        reserved_tokens = self._deep_reservation_tokens if request.mode is ScanMode.DEEP else self._reservation_tokens
+        async with self._uow_factory() as uow:
+            await uow.investigation_requests.lock_budget()
+            current = await uow.investigation_requests.get(request.id)
+            if current is None or current.status is not InvestigationRequestStatus.RUNNING:
+                raise RuntimeError(f"investigation request {request.id} is no longer owned")
+            await self._enforce_budget(
+                uow,
+                budget_kind=current.budget_kind,
+                reserved_tokens=reserved_tokens,
+                now=now,
+            )
+            reserved = replace(current, reserved_tokens=reserved_tokens, updated_at=now)
+            await uow.investigation_requests.save(reserved)
+            await uow.commit()
+            return reserved
+
 
 class InvestigationWorker:
     def __init__(
@@ -356,10 +382,7 @@ class InvestigationWorker:
             return None
 
         try:
-            await self._queue.ensure_budget_available(
-                budget_kind=request.budget_kind,
-                reserved_tokens=0,
-            )
+            request = await self._queue.reserve_for_execution(request)
         except DailyLLMBudgetExceeded as exc:
             deferred = request.defer_for_budget(
                 str(exc),
