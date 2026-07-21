@@ -122,6 +122,10 @@ export function createJenkinsFailureReport(mode: "regular" | "deep"): Promise<Je
   return request<JenkinsFailureReport>("/jenkins/reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
 }
 
+export function listJenkinsFailureReports(limit = 25): Promise<JenkinsFailureReport[]> {
+  return request<JenkinsFailureReport[]>(`/jenkins/reports${query({ limit })}`);
+}
+
 export function getJenkinsFailureReport(reportId: string, offset = 0, limit = 50, filters: { status?: string; job?: string } = {}): Promise<JenkinsFailureReport> {
   return request<JenkinsFailureReport>(`/jenkins/reports/${encodeURIComponent(reportId)}${query({ offset, limit, ...filters })}`);
 }
