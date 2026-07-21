@@ -135,6 +135,17 @@ class HistoryClient:
         return {"allBuilds": self.builds}
 
 
+class PagedHistoryClient:
+    def __init__(self, pages: tuple[list[dict[str, Any]], ...]) -> None:
+        self.pages = pages
+        self.calls: list[dict[str, Any]] = []
+
+    async def get_json(self, path: str, *, params=None):
+        del path
+        self.calls.append(params)
+        return {"allBuilds": self.pages[len(self.calls) - 1]}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("after_number", "first_build", "rows", "expected"),
@@ -186,6 +197,45 @@ async def test_build_history_reports_explicit_coverage(
         assert page.builds[0].result == "RUNNING"
         assert page.builds[0].building is True
         assert page.builds[0].duration_ms == 0
+
+
+@pytest.mark.asyncio
+async def test_build_history_pages_exhaustively_until_the_fixed_cutoff() -> None:
+    def rows(numbers: range, started_at: datetime) -> list[dict[str, Any]]:
+        return [
+            {
+                "number": number,
+                "result": "FAILURE" if number % 2 else "SUCCESS",
+                "timestamp": int(started_at.timestamp() * 1000),
+                "duration": 1_000,
+            }
+            for number in numbers
+        ]
+
+    client = PagedHistoryClient(
+        (
+            rows(range(250, 150, -1), NOW - timedelta(hours=1)),
+            rows(range(150, 50, -1), NOW - timedelta(hours=2)),
+            rows(range(50, 0, -1), NOW - timedelta(hours=5)),
+        )
+    )
+    adapter = JenkinsSourceAdapter(client)  # type: ignore[arg-type]
+
+    page = await adapter.build_history(
+        _job(first_build_number=1, last_build_number=250),
+        cutoff=NOW - timedelta(hours=4),
+        after_number=None,
+    )
+
+    assert page.coverage is JenkinsCoverage.EXACT
+    assert len(page.builds) == 200
+    assert page.builds[0].number == 51
+    assert page.builds[-1].number == 250
+    assert [call["tree"].rsplit("{", 1)[1] for call in client.calls] == [
+        "0,100}",
+        "100,200}",
+        "200,300}",
+    ]
 
 
 class EnrichmentClient:

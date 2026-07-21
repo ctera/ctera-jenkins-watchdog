@@ -108,6 +108,21 @@ class JenkinsReports:
             return {}
         return {self.report["scan_id"]: self.report}
 
+    async def create(self, *, mode: ScanMode):
+        self.calls.append(("create", {"mode": mode}))
+        assert self.report is not None
+        return self.report | {"mode": mode.value}
+
+    async def detail(self, report_id: str, **filters):
+        self.calls.append(("detail", {"report_id": report_id, **filters}))
+        if self.report is None or self.report["id"] != report_id:
+            return None
+        return self.report
+
+    async def list(self, *, limit: int):
+        self.calls.append(("list", {"limit": limit}))
+        return [self.report] if self.report is not None else []
+
 
 def factory_port(factory: async_sessionmaker[AsyncSession]):
     return lambda: SqlAlchemyUnitOfWork(factory)
@@ -362,6 +377,65 @@ async def test_scan_detail_exposes_paginated_build_specific_jenkins_failures(
         ("summaries", {"scan_ids": (scan_id,)}),
         (scan_id, {"limit": 50, "offset": 0}),
         (scan_id, {"limit": 10, "offset": 0, "status": "explained", "job": "Portal"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failure_report_api_dispatches_mode_and_pagination_without_losing_counts(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    report_id = str(uuid.uuid4())
+    report = {
+        "id": report_id,
+        "scan_id": None,
+        "mode": "regular",
+        "status": "waiting_budget",
+        "window_started_at": NOW - timedelta(hours=4),
+        "window_ended_at": NOW,
+        "collected_at": NOW,
+        "jobs_discovered": 120,
+        "failures_found": 71,
+        "coverage_exceptions": [{"job_name": "Restricted", "kind": "inaccessible"}],
+        "budget_reset_at": NOW + timedelta(hours=12),
+        "error_summary": None,
+        "created_at": NOW,
+        "updated_at": NOW,
+        "completed_at": None,
+        "total_builds": 71,
+        "offset": 50,
+        "limit": 25,
+        "counts": {"explained": 6, "waiting_budget": 65},
+        "builds": [],
+    }
+    app, container = make_app(postgres_session_factory, jenkins_report=report)
+
+    async with client(app) as api:
+        created = await api.post("/api/v2/jenkins/reports", json={"mode": "deep"})
+        page = await api.get(
+            f"/api/v2/jenkins/reports/{report_id}",
+            params={"limit": 25, "offset": 50, "status": "waiting_budget", "job": "Portal"},
+        )
+        reports = await api.get("/api/v2/jenkins/reports", params={"limit": 5})
+
+    assert created.status_code == 202
+    assert created.json()["mode"] == "deep"
+    assert page.status_code == 200
+    assert page.json()["total_builds"] == 71
+    assert page.json()["counts"] == {"explained": 6, "waiting_budget": 65}
+    assert len(reports.json()) == 1
+    assert container.jenkins_reports.calls == [
+        ("create", {"mode": ScanMode.DEEP}),
+        (
+            "detail",
+            {
+                "report_id": report_id,
+                "limit": 25,
+                "offset": 50,
+                "status": "waiting_budget",
+                "job": "Portal",
+            },
+        ),
+        ("list", {"limit": 5}),
     ]
 
 
