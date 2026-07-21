@@ -1,12 +1,13 @@
 image:
   repository: cteraacrdevops.azurecr.io/jenkins-watchdog
-  tag: jenkins-watchdog-0.2.0-1569a28
+  tag: 2.0.0-1569a28
   pullPolicy: Always
 
 imagePullSecrets:
   - name: acr-credentials
 
 replicas: 1
+workerReplicas: 1
 revisionHistoryLimit: 2
 
 resources:
@@ -16,6 +17,13 @@ resources:
   limits:
     memory: 512Mi
 
+workerResources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 768Mi
+
 config:
   port: "8000"
   logLevel: info
@@ -24,18 +32,52 @@ config:
   jenkinsAgentLabel: ""
   jenkinsNamespace: "jenkins"
   jenkinsFailedBuildWindowHours: "4"
+  jenkinsFailedBuildCheckTimeoutSeconds: "120"
+  jenkinsPipelinePatternCheckTimeoutSeconds: "60"
+  jenkinsMonitorEnabled: "true"
+  jenkinsSyncIntervalSeconds: "300"
+  jenkinsSyncWindowHours: "168"
+  jenkinsSyncConcurrency: "10"
+  jenkinsSyncEnrichmentLimit: "250"
+  jenkinsSyncLogLimit: "30"
+  jenkinsSourceAttributionLimit: "500"
+  jenkinsSourceProfilesPath: /app/config/source-profiles.yaml
+  automaticInvestigationsEnabled: "true"
+  automaticInvestigationMinPriority: "1"
+  automaticInvestigationBatchSize: "250"
   prometheusEndpoint: "http://prometheus.monitoring.svc.cluster.local:9090"
   prometheusEnabled: "false"
   valkeyHost: "valkey-primary.valkey.svc.cluster.local"
   valkeyPort: "6379"
   valkeySsl: "false"
+  databaseHost: ""
+  databasePort: "5432"
+  databaseUser: watchdog
+  databaseName: watchdog
+  routingConfigPath: /app/config/routing.yaml
+  automationTemplatesPath: /app/templates/automation
   llmModel: "anthropic/claude-sonnet-4-6"
   llmFallbackModels: "anthropic/claude-opus-4-6"
   llmTemperature: "0.1"
-  llmMaxTokens: "4096"
+  llmMaxTokens: "8192"
   llmMaxRetries: "2"
-  maxToolRounds: "10"
-  maxInvestigationsPerScan: "10"
+  llmScanTokenBudget: "200000"
+  llmDeepScanTokenBudget: "300000"
+  llmExpectedInvestigationTokens: "80000"
+  llmExpectedDeepInvestigationTokens: "120000"
+  llmDailyTokenBudget: "20000000"
+  llmManualTokenReserve: "4000000"
+  llmDailyCostBudgetUsd: "30.00"
+  llmManualCostReserveUsd: "5.00"
+  llmMaxTokenCostUsdPerMillion: "5.00"
+  llmTriageBatchSize: "50"
+  llmTriageTokenBudget: "8000"
+  maxToolRounds: "15"
+  maxDeepToolRounds: "25"
+  maxInvestigationsPerScan: "30"
+  maxDeepInvestigationsPerScan: "20"
+  investigationWorkerLeaseSeconds: "600"
+  investigationMaxAttempts: "3"
   oidcIssuer: ""
   oidcClientId: "jenkins-watchdog"
   oidcRedirectUri: ""
@@ -43,6 +85,39 @@ config:
   jiraBaseUrl: "https://cteranet.atlassian.net"
   jiraUserEmail: ""
   jiraProjects: "CI"
+  jiraEnabled: "false"
+  githubEnabled: "false"
+  githubApiUrl: "https://api.github.com"
+  gitlabEnabled: "false"
+  gitlabApiUrl: "https://gitlab.com/api/v4"
+  emailEnabled: "false"
+  smtpHost: mailpit
+  smtpPort: "1025"
+  smtpStartTls: "false"
+  smtpUsername: ""
+  emailFrom: jenkins-watchdog@localhost
+
+migration:
+  backoffLimit: 3
+
+schedules:
+  enabled: true
+  timeZone: Asia/Jerusalem
+  regular: "*/30 * * * *"
+  deep: "0 2 * * *"
+
+postgresql:
+  enabled: true
+  auth:
+    username: watchdog
+    database: watchdog
+    existingSecret: ""
+    secretKeys:
+      userPasswordKey: password
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
 
 service:
   type: ClusterIP
@@ -87,3 +162,7 @@ externalSecrets:
   jenkinsToken: ""
   oidcClientSecret: ""
   jiraApiToken: ""
+  githubToken: ""
+  gitlabToken: ""
+  smtpUsername: ""
+  smtpPassword: ""

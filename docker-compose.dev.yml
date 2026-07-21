@@ -1,5 +1,4 @@
-# Local-dev-only Valkey. Mirrors the production Valkey Helm release
-# (docs/valkey-deployment.md): no auth, no persistence, standalone.
+# Local v2 dependencies. Each worktree receives isolated host ports.
 #
 # Launched by scripts/dev.sh with a per-instance project name so each
 # git-worktree instance gets its own isolated container:
@@ -16,3 +15,35 @@ services:
       timeout: 2s
       retries: 15
     restart: unless-stopped
+
+  postgres:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_USER: watchdog
+      POSTGRES_PASSWORD: watchdog
+      POSTGRES_DB: watchdog
+    ports:
+      - "${WATCHDOG_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U watchdog -d watchdog"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.27.8
+    ports:
+      - "${WATCHDOG_MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${WATCHDOG_MAILPIT_UI_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

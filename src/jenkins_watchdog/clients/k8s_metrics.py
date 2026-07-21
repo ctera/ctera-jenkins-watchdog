@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from kubernetes.client.exceptions import ApiException
 
-from jenkins_watchdog.clients.k8s import get_core_v1, get_custom, run_sync
+from jenkins_watchdog.clients.k8s import KubernetesClient
 
 logger = logging.getLogger(__name__)
 
@@ -120,83 +120,70 @@ def _parse_container_usage(item: dict) -> ContainerUsage:
     )
 
 
-async def metrics_api_available() -> bool:
-    """Return True when metrics-server responds to the metrics API."""
-    try:
-        await list_node_metrics()
-        return True
-    except MetricsUnavailableError:
-        return False
-    except Exception as exc:
-        logger.warning("Metrics API probe failed: %s", exc)
-        return False
+class KubernetesMetricsClient:
+    def __init__(self, kubernetes: KubernetesClient) -> None:
+        self._kubernetes = kubernetes
 
+    async def available(self) -> bool:
+        try:
+            await self.list_node_metrics()
+            return True
+        except MetricsUnavailableError:
+            return False
+        except Exception as exc:
+            logger.warning("Metrics API probe failed: %s", exc)
+            return False
 
-async def list_pod_metrics(namespace: str) -> list[PodMetrics]:
-    """List pod resource usage in a namespace via metrics-server."""
-    custom = get_custom()
-    try:
-        result = await run_sync(
-            custom.list_namespaced_custom_object,
-            _METRICS_GROUP,
-            _METRICS_VERSION,
-            namespace,
-            "pods",
-            timeout_seconds=15,
-        )
-    except ApiException as exc:
-        _raise_if_unavailable(exc)
-
-    pods: list[PodMetrics] = []
-    for item in result.get("items", []):
-        metadata = item.get("metadata", {})
-        pods.append(
+    async def list_pod_metrics(self, namespace: str) -> list[PodMetrics]:
+        custom = self._kubernetes.custom_objects()
+        try:
+            result = await self._kubernetes.run_sync(
+                custom.list_namespaced_custom_object,
+                _METRICS_GROUP,
+                _METRICS_VERSION,
+                namespace,
+                "pods",
+                timeout=15,
+            )
+        except ApiException as exc:
+            _raise_if_unavailable(exc)
+        return [
             PodMetrics(
-                namespace=metadata.get("namespace", namespace),
-                name=metadata.get("name", ""),
-                containers=[_parse_container_usage(c) for c in item.get("containers", [])],
+                namespace=item.get("metadata", {}).get("namespace", namespace),
+                name=item.get("metadata", {}).get("name", ""),
+                containers=[_parse_container_usage(container) for container in item.get("containers", [])],
             )
-        )
-    return pods
+            for item in result.get("items", [])
+        ]
 
-
-async def list_node_metrics() -> list[NodeMetrics]:
-    """List node resource usage via metrics-server."""
-    custom = get_custom()
-    try:
-        result = await run_sync(
-            custom.list_cluster_custom_object,
-            _METRICS_GROUP,
-            _METRICS_VERSION,
-            "nodes",
-            timeout_seconds=15,
-        )
-    except ApiException as exc:
-        _raise_if_unavailable(exc)
-
-    nodes: list[NodeMetrics] = []
-    for item in result.get("items", []):
-        metadata = item.get("metadata", {})
-        usage = item.get("usage", {})
-        nodes.append(
+    async def list_node_metrics(self) -> list[NodeMetrics]:
+        custom = self._kubernetes.custom_objects()
+        try:
+            result = await self._kubernetes.run_sync(
+                custom.list_cluster_custom_object,
+                _METRICS_GROUP,
+                _METRICS_VERSION,
+                "nodes",
+                timeout=15,
+            )
+        except ApiException as exc:
+            _raise_if_unavailable(exc)
+        return [
             NodeMetrics(
-                name=metadata.get("name", ""),
-                cpu_cores=parse_cpu_quantity(usage.get("cpu")),
-                memory_bytes=parse_memory_quantity(usage.get("memory")),
+                name=item.get("metadata", {}).get("name", ""),
+                cpu_cores=parse_cpu_quantity(item.get("usage", {}).get("cpu")),
+                memory_bytes=parse_memory_quantity(item.get("usage", {}).get("memory")),
             )
-        )
-    return nodes
+            for item in result.get("items", [])
+        ]
 
-
-async def get_node_allocatable() -> dict[str, dict[str, float | int]]:
-    """Return allocatable CPU (cores) and memory (bytes) per node."""
-    v1 = get_core_v1()
-    nodes = await run_sync(v1.list_node, timeout_seconds=15)
-    allocatable: dict[str, dict[str, float | int]] = {}
-    for node in nodes.items:
-        raw = node.status.allocatable or {}
-        allocatable[node.metadata.name] = {
-            "cpu_cores": parse_cpu_quantity(raw.get("cpu")),
-            "memory_bytes": parse_memory_quantity(raw.get("memory")),
-        }
-    return allocatable
+    async def get_node_allocatable(self) -> dict[str, dict[str, float | int]]:
+        nodes = await self._kubernetes.run_sync(self._kubernetes.core_v1().list_node, timeout=15)
+        result: dict[str, dict[str, float | int]] = {}
+        for node in nodes.items:
+            raw = node.status.allocatable or {}
+            result[node.metadata.name] = {
+                "cpu_cores": parse_cpu_quantity(raw.get("cpu")),
+                "memory_bytes": parse_memory_quantity(raw.get("memory")),
+            }
+        return result

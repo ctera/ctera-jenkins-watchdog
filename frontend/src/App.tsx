@@ -1,59 +1,62 @@
-import { Routes, Route, Navigate } from "react-router-dom";
-import { useEffect, useState } from "react";
 import { Box, CircularProgress, Typography } from "@mui/material";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
-import Dashboard from "./pages/Dashboard";
-import Findings from "./pages/Findings";
-import JiraIssues from "./pages/JiraIssues";
-import Chat from "./pages/Chat";
-import { ScanProvider } from "./context/ScanContext";
 
-function AuthGate({ children }: { children: React.ReactNode }) {
+const Actions = lazy(() => import("./pages/Actions"));
+const Overview = lazy(() => import("./pages/Overview"));
+const ActionDetailPage = lazy(() => import("./pages/ActionDetail"));
+const Assistant = lazy(() => import("./pages/Assistant"));
+const IncidentDetailPage = lazy(() => import("./pages/IncidentDetail"));
+const Incidents = lazy(() => import("./pages/Incidents"));
+const JenkinsBuildDetailPage = lazy(() => import("./pages/JenkinsBuildDetail"));
+const ScanDetailPage = lazy(() => import("./pages/ScanDetail"));
+const Scans = lazy(() => import("./pages/Scans"));
+
+function AuthGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<"loading" | "ok" | "unauthorized">("loading");
 
   useEffect(() => {
     fetch("/auth/me")
-      .then((r) => {
-        if (r.ok) setStatus("ok");
-        else setStatus("unauthorized");
-      })
+      .then((response) => setStatus(response.ok ? "ok" : "unauthorized"))
       .catch(() => setStatus("unauthorized"));
   }, []);
 
   if (status === "loading") {
     return (
-      <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
-        <CircularProgress />
+      <Box sx={{ display: "grid", placeItems: "center", height: "100vh" }}>
+        <CircularProgress size={30} />
       </Box>
     );
   }
-
   if (status === "unauthorized") {
-    window.location.href = "/auth/login";
-    return (
-      <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", height: "100vh", gap: 2 }}>
-        <Typography variant="h6">Redirecting to login...</Typography>
-      </Box>
-    );
+    window.location.assign("/auth/login");
+    return <Typography sx={{ p: 3 }}>Redirecting to sign in</Typography>;
   }
-
-  return <>{children}</>;
+  return children;
 }
 
 export default function App() {
   return (
     <AuthGate>
-      <ScanProvider>
+      <Suspense fallback={<Box sx={{ minHeight: 240, display: "grid", placeItems: "center" }}><CircularProgress size={28} /></Box>}>
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/findings" element={<Findings />} />
-            <Route path="/jira" element={<JiraIssues />} />
-            <Route path="/chat" element={<Chat />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route index element={<Navigate to="/scans" replace />} />
+            <Route path="/jenkins/reports" element={<Navigate to="/scans" replace />} />
+            <Route path="/overview" element={<Overview />} />
+            <Route path="/jenkins/builds/:buildId" element={<JenkinsBuildDetailPage />} />
+            <Route path="/scans" element={<Scans />} />
+            <Route path="/scans/:scanId" element={<ScanDetailPage />} />
+            <Route path="/incidents" element={<Incidents />} />
+            <Route path="/incidents/:incidentId" element={<IncidentDetailPage />} />
+            <Route path="/actions" element={<Actions />} />
+            <Route path="/actions/:actionId" element={<ActionDetailPage />} />
+            <Route path="/assistant" element={<Assistant />} />
+            <Route path="*" element={<Navigate to="/scans" replace />} />
           </Route>
         </Routes>
-      </ScanProvider>
+      </Suspense>
     </AuthGate>
   );
 }

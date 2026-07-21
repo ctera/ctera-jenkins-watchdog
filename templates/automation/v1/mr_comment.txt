@@ -1,0 +1,6 @@
+Jenkins Watchdog detected a $severity incident for this change.
+
+Root cause: $root_cause
+Impact: $impact
+Suggested fix: $suggested_fix
+Confidence: $confidence

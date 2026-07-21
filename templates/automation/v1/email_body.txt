@@ -1,0 +1,7 @@
+Incident: $incident_id
+Severity: $severity
+Confidence: $confidence
+
+Root cause: $root_cause
+Impact: $impact
+Suggested fix: $suggested_fix

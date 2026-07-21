@@ -18,3 +18,7 @@ venv/
 .DS_Store
 node_modules/
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/tsconfig.tsbuildinfo
+helm/charts/

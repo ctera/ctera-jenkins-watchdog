@@ -1,4 +1,4 @@
-"""FastAPI application — on-demand scan, findings API, and SPA serving."""
+"""FastAPI application for the durable v2 API and SPA."""
 
 import logging
 import os
@@ -10,12 +10,12 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 
-from jenkins_watchdog.auth import is_auth_enabled, require_auth
-from jenkins_watchdog.auth import router as auth_router
-from jenkins_watchdog.clients.prometheus import close_prometheus_client
-from jenkins_watchdog.clients.valkey import close_valkey_client
-from jenkins_watchdog.config import settings
+from jenkins_watchdog.auth import OidcAuth
+from jenkins_watchdog.bootstrap import build_container, load_settings
+from jenkins_watchdog.entrypoints.api_v2 import router as api_v2_router
 
+settings = load_settings()
+authentication = OidcAuth(settings)
 logging.basicConfig(level=settings.log_level.upper(), format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 FRONTEND_DIR = Path(os.environ.get("WATCHDOG_FRONTEND_DIR", "/app/frontend/dist"))
@@ -25,14 +25,17 @@ PUBLIC_PATHS = {"/health", "/ready", "/auth/login", "/auth/callback", "/auth/log
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    await close_valkey_client()
-    await close_prometheus_client()
+    container = build_container(settings)
+    app.state.container = container
+    try:
+        yield
+    finally:
+        await container.close()
 
 
 app = FastAPI(
     title="Jenkins Watchdog",
-    version="0.1.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -42,9 +45,11 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     if any(path.startswith(p) for p in PUBLIC_PATHS):
         return await call_next(request)
-    if not is_auth_enabled():
+    if not authentication.enabled:
+        if settings.local_actor_email:
+            request.state.user = {"email": settings.local_actor_email, "name": "Local operator"}
         return await call_next(request)
-    user = require_auth(request)
+    user = authentication.require_auth(request)
     if not user:
         if path.startswith("/api/"):
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -53,15 +58,8 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-app.include_router(auth_router)
-
-from jenkins_watchdog.api.chat import router as chat_router  # noqa: E402
-from jenkins_watchdog.api.jira import router as jira_router  # noqa: E402
-from jenkins_watchdog.api.router import router  # noqa: E402
-
-app.include_router(router, prefix="/api")
-app.include_router(chat_router, prefix="/api")
-app.include_router(jira_router, prefix="/api")
+app.include_router(authentication.router)
+app.include_router(api_v2_router, prefix="/api/v2")
 
 
 @app.get("/health")
@@ -71,12 +69,10 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    from jenkins_watchdog.clients.valkey import get_valkey_client
     try:
-        client = await get_valkey_client()
-        await client.ping()
-    except Exception:
-        return JSONResponse({"status": "not ready", "reason": "valkey unreachable"}, status_code=503)
+        await app.state.container.ready()
+    except Exception as exc:
+        return JSONResponse({"status": "not ready", "reason": type(exc).__name__}, status_code=503)
     return {"status": "ready"}
 
 

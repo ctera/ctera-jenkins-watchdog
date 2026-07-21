@@ -1,56 +1,50 @@
-"""Prometheus client (direct HTTP, in-cluster, no auth)."""
+"""Small read-only Prometheus HTTP client."""
 
-import logging
+from __future__ import annotations
+
+from typing import Any
 
 import httpx
 
-from jenkins_watchdog.config import settings
 
-logger = logging.getLogger(__name__)
+class PrometheusClient:
+    def __init__(
+        self,
+        http: httpx.AsyncClient,
+        *,
+        endpoint: str,
+        enabled: bool,
+    ) -> None:
+        self._http = http
+        self._endpoint = endpoint.rstrip("/")
+        self._enabled = enabled and bool(endpoint)
 
-_client: httpx.AsyncClient | None = None
+    async def query(self, promql: str) -> list[dict[str, Any]]:
+        if not self._enabled:
+            return []
+        response = await self._http.get(f"{self._endpoint}/api/v1/query", params={"query": promql})
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("status") != "success":
+            raise RuntimeError(str(payload.get("error") or "Prometheus query failed"))
+        return list(payload.get("data", {}).get("result", []))
 
-
-def get_prometheus_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None:
-        _client = httpx.AsyncClient(
-            base_url=settings.prometheus_endpoint,
-            timeout=httpx.Timeout(settings.request_timeout_s, connect=5.0),
+    async def query_range(
+        self,
+        promql: str,
+        *,
+        start: str,
+        end: str,
+        step: str,
+    ) -> list[dict[str, Any]]:
+        if not self._enabled:
+            return []
+        response = await self._http.get(
+            f"{self._endpoint}/api/v1/query_range",
+            params={"query": promql, "start": start, "end": end, "step": step},
         )
-    return _client
-
-
-async def query_instant(promql: str) -> list[dict]:
-    """Execute an instant PromQL query."""
-    if not settings.prometheus_enabled or not settings.prometheus_endpoint:
-        return []
-    client = get_prometheus_client()
-    resp = await client.get("/api/v1/query", params={"query": promql})
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("status") == "success":
-        return data["data"]["result"]
-    logger.warning("Prometheus query failed: %s", data.get("error"))
-    return []
-
-
-async def query_range(promql: str, start: str, end: str, step: str = "5m") -> list[dict]:
-    """Execute a range PromQL query."""
-    client = get_prometheus_client()
-    resp = await client.get(
-        "/api/v1/query_range",
-        params={"query": promql, "start": start, "end": end, "step": step},
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("status") == "success":
-        return data["data"]["result"]
-    return []
-
-
-async def close_prometheus_client() -> None:
-    global _client
-    if _client:
-        await _client.aclose()
-        _client = None
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("status") != "success":
+            raise RuntimeError(str(payload.get("error") or "Prometheus range query failed"))
+        return list(payload.get("data", {}).get("result", []))

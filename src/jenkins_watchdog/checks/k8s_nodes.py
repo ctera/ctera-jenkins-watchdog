@@ -2,14 +2,12 @@
 
 import logging
 
-from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
+from jenkins_watchdog.checks.base import CheckReport, Finding
+from jenkins_watchdog.clients.k8s import KubernetesClient
 from jenkins_watchdog.clients.k8s_metrics import (
-    MetricsUnavailableError,
+    KubernetesMetricsClient,
     format_bytes,
     format_cores,
-    get_node_allocatable,
-    list_node_metrics,
     usage_pct,
 )
 
@@ -32,16 +30,23 @@ def _severity_for_pct(pct: float, warn: float, critical: float) -> str:
 class NodeCheck:
     name = "k8s_nodes"
 
-    async def run(self) -> list[Finding]:
+    def __init__(self, kubernetes: KubernetesClient, metrics: KubernetesMetricsClient) -> None:
+        self._kubernetes = kubernetes
+        self._metrics = metrics
+
+    async def run(self) -> CheckReport:
         findings: list[Finding] = []
-        v1 = get_core_v1()
-        nodes = await run_sync(v1.list_node, timeout_seconds=15)
+        v1 = self._kubernetes.core_v1()
+        nodes = await self._kubernetes.run_sync(v1.list_node, timeout=15)
+        ready_count = 0
 
         for node in nodes.items:
             name = node.metadata.name
             conditions = {c.type: c for c in (node.status.conditions or [])}
 
             ready_cond = conditions.get("Ready")
+            if ready_cond and ready_cond.status == "True":
+                ready_count += 1
             if ready_cond and ready_cond.status != "True":
                 findings.append(
                     Finding(
@@ -70,21 +75,22 @@ class NodeCheck:
                         )
                     )
 
-        findings.extend(await self._check_node_usage())
-        return findings
+        usage_findings, metrics_count = await self._check_node_usage()
+        findings.extend(usage_findings)
+        return CheckReport(
+            findings=findings,
+            summary={
+                "node_count": len(nodes.items),
+                "ready_node_count": ready_count,
+                "not_ready_node_count": len(nodes.items) - ready_count,
+                "metrics_node_count": metrics_count,
+            },
+        )
 
-    async def _check_node_usage(self) -> list[Finding]:
+    async def _check_node_usage(self) -> tuple[list[Finding], int]:
         findings: list[Finding] = []
-
-        try:
-            node_metrics = await list_node_metrics()
-            allocatable = await get_node_allocatable()
-        except MetricsUnavailableError:
-            logger.warning("Metrics-server unavailable — skipping node resource usage checks")
-            return []
-        except Exception as exc:
-            logger.warning("Failed to fetch node metrics: %s", exc)
-            return []
+        node_metrics = await self._metrics.list_node_metrics()
+        allocatable = await self._metrics.get_node_allocatable()
 
         for metrics in node_metrics:
             limits = allocatable.get(metrics.name)
@@ -129,4 +135,4 @@ class NodeCheck:
                     )
                 )
 
-        return findings
+        return findings, len(node_metrics)

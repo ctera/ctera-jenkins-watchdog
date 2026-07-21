@@ -27,10 +27,7 @@ def test_is_jenkins_agent_pod_by_name():
 
 def test_extract_agent_prefix_from_k8s_pod_suffix():
     assert extract_agent_prefix("esxdeploy-7d4f6b8c-xk2mq") == "esxdeploy"
-    assert (
-        extract_agent_prefix("agentcloudsyncregression-3052-z86w3-22bqb-msxrh")
-        == "agentcloudsyncregression-3052-z86w3"
-    )
+    assert extract_agent_prefix("agentcloudsyncregression-3052-z86w3-22bqb-msxrh") == "agentcloudsyncregression"
 
 
 def test_extract_agent_prefix_from_jenkins_label():

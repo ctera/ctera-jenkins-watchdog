@@ -1,0 +1,8 @@
+Watchdog incident: $incident_id
+Occurrence: $occurrence_number
+Confidence: $confidence
+
+Root cause: $root_cause
+Impact: $impact
+Suggested fix: $suggested_fix
+Source: $source

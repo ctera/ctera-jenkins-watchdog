@@ -1,0 +1,15 @@
+[
+  {
+    "content": "{\"root_cause\":\"compiler\",\"evidence\":[\"line 4\"],\"impact\":\"build blocked\",\"suggested_fix\":\"repair type\",\"actionability\":\"actionable\",\"classification\":\"merge_request\",\"priority\":\"warning\",\"confidence\":\"medium\"}",
+    "valid": true,
+    "confidence": "medium"
+  },
+  {
+    "content": "{\"root_cause\":\"missing fields\"}",
+    "valid": false
+  },
+  {
+    "content": "not-json",
+    "valid": false
+  }
+]

@@ -11,6 +11,9 @@ defaults, so the first/primary checkout is unaffected):
     backend  = 8000 + N*10
     frontend = 3000 + N*10
     valkey   = 6379 + N*10
+    postgres = 5432 + N*10
+    mailpit SMTP = 1025 + N*10
+    mailpit UI   = 8025 + N*10
 """
 
 import argparse
@@ -28,6 +31,7 @@ REGISTRY_PATH = STATE_ROOT / "instances.json"
 LOCK_PATH = STATE_ROOT / "instances.lock"
 
 BACKEND_BASE, FRONTEND_BASE, VALKEY_BASE, STRIDE = 8000, 3000, 6379, 10
+POSTGRES_BASE, MAILPIT_SMTP_BASE, MAILPIT_UI_BASE = 5432, 1025, 8025
 
 
 def instance_id(worktree: str) -> str:
@@ -42,6 +46,9 @@ def _ports(offset: int) -> dict:
         "backend_port": BACKEND_BASE + offset * STRIDE,
         "frontend_port": FRONTEND_BASE + offset * STRIDE,
         "valkey_port": VALKEY_BASE + offset * STRIDE,
+        "postgres_port": POSTGRES_BASE + offset * STRIDE,
+        "mailpit_smtp_port": MAILPIT_SMTP_BASE + offset * STRIDE,
+        "mailpit_ui_port": MAILPIT_UI_BASE + offset * STRIDE,
     }
 
 
@@ -87,6 +94,10 @@ def cmd_allocate(worktree: str) -> None:
         registry = _load_registry()
         existing = registry["instances"].get(path)
         if existing is not None:
+            ports = _ports(existing["offset"])
+            if any(existing.get(name) != value for name, value in ports.items()):
+                existing.update(ports)
+                _save_registry(registry)
             print(json.dumps(existing))
             return
 

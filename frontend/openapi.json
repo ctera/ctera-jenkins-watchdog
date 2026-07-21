@@ -1,0 +1,5157 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "V2ActionDetailResponse": {
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/V2ActionResponse"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/V2DeliveryAttemptResponse"
+            },
+            "title": "Attempts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "action",
+          "attempts"
+        ],
+        "title": "V2ActionDetailResponse",
+        "type": "object"
+      },
+      "V2ActionPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/V2ActionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "V2ActionPage",
+        "type": "object"
+      },
+      "V2ActionResponse": {
+        "properties": {
+          "action_type": {
+            "title": "Action Type",
+            "type": "string"
+          },
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "destination": {
+            "title": "Destination",
+            "type": "string"
+          },
+          "external_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Reference"
+          },
+          "failure_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Summary"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "occurrence_id": {
+            "title": "Occurrence Id",
+            "type": "string"
+          },
+          "rendered_payload": {
+            "additionalProperties": true,
+            "title": "Rendered Payload",
+            "type": "object"
+          },
+          "retry_cycle": {
+            "title": "Retry Cycle",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "template_version": {
+            "title": "Template Version",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "incident_id",
+          "occurrence_id",
+          "action_type",
+          "destination",
+          "status",
+          "rendered_payload",
+          "template_version",
+          "external_reference",
+          "attempt_count",
+          "retry_cycle",
+          "next_attempt_at",
+          "failure_summary",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "title": "V2ActionResponse",
+        "type": "object"
+      },
+      "V2AnalysisDecisionResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "evidence_hash": {
+            "title": "Evidence Hash",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "reason_code",
+          "reason",
+          "source",
+          "mode",
+          "priority",
+          "evidence_hash",
+          "scan_id",
+          "request_id",
+          "created_at"
+        ],
+        "title": "V2AnalysisDecisionResponse",
+        "type": "object"
+      },
+      "V2AnalyzeBuildRequest": {
+        "properties": {
+          "mode": {
+            "default": "regular",
+            "enum": [
+              "regular",
+              "deep"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "V2AnalyzeBuildRequest",
+        "type": "object"
+      },
+      "V2CancelResponse": {
+        "properties": {
+          "cancel_requested": {
+            "title": "Cancel Requested",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "cancel_requested"
+        ],
+        "title": "V2CancelResponse",
+        "type": "object"
+      },
+      "V2ChatRequest": {
+        "properties": {
+          "history": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "maxItems": 20,
+            "title": "History",
+            "type": "array"
+          },
+          "incident_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incident Id"
+          },
+          "message": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "V2ChatRequest",
+        "type": "object"
+      },
+      "V2ChatResponse": {
+        "properties": {
+          "as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "coverage_status": {
+            "default": "unknown",
+            "title": "Coverage Status",
+            "type": "string"
+          },
+          "references": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "References",
+            "type": "array"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "V2ChatResponse",
+        "type": "object"
+      },
+      "V2CheckExecutionResponse": {
+        "properties": {
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "failure_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Summary"
+          },
+          "finding_count": {
+            "title": "Finding Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "title": "Summary",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "categories",
+          "finding_count",
+          "summary",
+          "failure_summary",
+          "started_at",
+          "completed_at"
+        ],
+        "title": "V2CheckExecutionResponse",
+        "type": "object"
+      },
+      "V2DeliveryAttemptResponse": {
+        "properties": {
+          "attempt_number": {
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "response_metadata": {
+            "additionalProperties": true,
+            "title": "Response Metadata",
+            "type": "object"
+          },
+          "retry_cycle": {
+            "title": "Retry Cycle",
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "retry_cycle",
+          "attempt_number",
+          "status",
+          "response_metadata",
+          "error_summary",
+          "started_at",
+          "completed_at"
+        ],
+        "title": "V2DeliveryAttemptResponse",
+        "type": "object"
+      },
+      "V2FailurePatternResponse": {
+        "properties": {
+          "affected_jobs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Jobs",
+            "type": "array"
+          },
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "failed_wall_hours": {
+            "title": "Failed Wall Hours",
+            "type": "number"
+          },
+          "first_seen_at": {
+            "format": "date-time",
+            "title": "First Seen At",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "latest_build_id": {
+            "title": "Latest Build Id",
+            "type": "string"
+          },
+          "occurrence_count": {
+            "title": "Occurrence Count",
+            "type": "integer"
+          },
+          "priority_score": {
+            "title": "Priority Score",
+            "type": "integer"
+          },
+          "signature": {
+            "title": "Signature",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signature",
+          "title",
+          "classification",
+          "occurrence_count",
+          "affected_jobs",
+          "first_seen_at",
+          "last_seen_at",
+          "failed_wall_hours",
+          "priority_score",
+          "latest_build_id"
+        ],
+        "title": "V2FailurePatternResponse",
+        "type": "object"
+      },
+      "V2IncidentDetailResponse": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/V2ActionResponse"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "analysis_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2AnalysisDecisionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_observations": {
+            "items": {
+              "$ref": "#/components/schemas/V2ObservationResponse"
+            },
+            "title": "Current Observations",
+            "type": "array"
+          },
+          "incident": {
+            "$ref": "#/components/schemas/V2IncidentResponse"
+          },
+          "investigation_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2InvestigationRequestResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jenkins_builds": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Jenkins Builds",
+            "type": "array"
+          },
+          "latest_investigation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2InvestigationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/V2ObservationResponse"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "occurrences": {
+            "items": {
+              "$ref": "#/components/schemas/V2OccurrenceResponse"
+            },
+            "title": "Occurrences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "incident",
+          "observations",
+          "occurrences",
+          "latest_investigation",
+          "actions"
+        ],
+        "title": "V2IncidentDetailResponse",
+        "type": "object"
+      },
+      "V2IncidentPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/V2IncidentResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "V2IncidentPage",
+        "type": "object"
+      },
+      "V2IncidentResponse": {
+        "properties": {
+          "actionability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionability"
+          },
+          "affected_resource_count": {
+            "default": 0,
+            "title": "Affected Resource Count",
+            "type": "integer"
+          },
+          "classification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classification"
+          },
+          "correlation_key": {
+            "title": "Correlation Key",
+            "type": "string"
+          },
+          "correlation_rule_id": {
+            "title": "Correlation Rule Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_observation_count": {
+            "default": 0,
+            "title": "Current Observation Count",
+            "type": "integer"
+          },
+          "domain": {
+            "default": "unknown",
+            "title": "Domain",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "occurrence_number": {
+            "title": "Occurrence Number",
+            "type": "integer"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "source": {
+            "additionalProperties": true,
+            "title": "Source",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "suppressed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suppressed At"
+          },
+          "suppressed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suppressed By"
+          },
+          "suppressed_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suppressed Reason"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "severity",
+          "title",
+          "correlation_rule_id",
+          "correlation_key",
+          "source",
+          "actionability",
+          "classification",
+          "priority",
+          "created_at",
+          "updated_at",
+          "resolved_at",
+          "suppressed_reason",
+          "suppressed_by",
+          "suppressed_at",
+          "occurrence_number"
+        ],
+        "title": "V2IncidentResponse",
+        "type": "object"
+      },
+      "V2InvestigationRequestResponse": {
+        "properties": {
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "budget_kind": {
+            "title": "Budget Kind",
+            "type": "string"
+          },
+          "build_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Id"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "evidence_hash": {
+            "title": "Evidence Hash",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "investigation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Id"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "occurrence_id": {
+            "title": "Occurrence Id",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "requested_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested By"
+          },
+          "reserved_tokens": {
+            "title": "Reserved Tokens",
+            "type": "integer"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "incident_id",
+          "occurrence_id",
+          "mode",
+          "source",
+          "priority",
+          "evidence_hash",
+          "status",
+          "scan_id",
+          "build_id",
+          "requested_by",
+          "budget_kind",
+          "reserved_tokens",
+          "attempt_count",
+          "next_attempt_at",
+          "investigation_id",
+          "error_summary",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "title": "V2InvestigationRequestResponse",
+        "type": "object"
+      },
+      "V2InvestigationResponse": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "evidence_hash": {
+            "title": "Evidence Hash",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_version": {
+            "title": "Input Version",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "model_calls": {
+            "items": {
+              "$ref": "#/components/schemas/V2LLMCallResponse"
+            },
+            "title": "Model Calls",
+            "type": "array"
+          },
+          "prompt_version": {
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "usage": {
+            "additionalProperties": true,
+            "title": "Usage",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "evidence_hash",
+          "input_version",
+          "prompt_version",
+          "model",
+          "confidence",
+          "usage",
+          "result",
+          "error_summary",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "V2InvestigationResponse",
+        "type": "object"
+      },
+      "V2JenkinsBuildDetailResponse": {
+        "properties": {
+          "build_number": {
+            "title": "Build Number",
+            "type": "integer"
+          },
+          "building": {
+            "default": false,
+            "title": "Building",
+            "type": "boolean"
+          },
+          "change_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Number"
+          },
+          "change_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Url"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "coverage": {
+            "default": "unknown",
+            "title": "Coverage",
+            "type": "string"
+          },
+          "downstream_builds": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Downstream Builds",
+            "type": "array"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "enrichment_status": {
+            "default": "pending",
+            "title": "Enrichment Status",
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "failed_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Stage"
+          },
+          "failure_classification": {
+            "default": "unknown",
+            "title": "Failure Classification",
+            "type": "string"
+          },
+          "failure_signature": {
+            "default": "",
+            "title": "Failure Signature",
+            "type": "string"
+          },
+          "failure_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Summary"
+          },
+          "head_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Name"
+          },
+          "head_type": {
+            "default": "unknown",
+            "title": "Head Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incident": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2IncidentResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "incident_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incident Id"
+          },
+          "investigation_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2InvestigationRequestResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job_name": {
+            "title": "Job Name",
+            "type": "string"
+          },
+          "job_type": {
+            "default": "other",
+            "title": "Job Type",
+            "type": "string"
+          },
+          "latest_investigation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2InvestigationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "logical_run_key": {
+            "title": "Logical Run Key",
+            "type": "string"
+          },
+          "novelty": {
+            "default": "unclassified",
+            "title": "Novelty",
+            "type": "string"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "priority_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Priority Reasons",
+            "type": "array"
+          },
+          "priority_score": {
+            "default": 0,
+            "title": "Priority Score",
+            "type": "integer"
+          },
+          "propagated_failure": {
+            "default": false,
+            "title": "Propagated Failure",
+            "type": "boolean"
+          },
+          "recovered": {
+            "default": false,
+            "title": "Recovered",
+            "type": "boolean"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "root_build_number": {
+            "title": "Root Build Number",
+            "type": "integer"
+          },
+          "root_job": {
+            "title": "Root Job",
+            "type": "string"
+          },
+          "source_allow_mr_comments": {
+            "default": false,
+            "title": "Source Allow Mr Comments",
+            "type": "boolean"
+          },
+          "source_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Branch"
+          },
+          "source_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit Sha"
+          },
+          "source_kind": {
+            "default": "unresolved",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Profile Id"
+          },
+          "source_profile_registered": {
+            "default": false,
+            "title": "Source Profile Registered",
+            "type": "boolean"
+          },
+          "source_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Provider"
+          },
+          "source_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Reason"
+          },
+          "source_resolution_method": {
+            "default": "none",
+            "title": "Source Resolution Method",
+            "type": "string"
+          },
+          "source_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source State"
+          },
+          "source_status": {
+            "default": "pending",
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Verified At"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "trigger_kind": {
+            "default": "unknown",
+            "title": "Trigger Kind",
+            "type": "string"
+          },
+          "upstream_builds": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Upstream Builds",
+            "type": "array"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_name",
+          "build_number",
+          "result",
+          "url",
+          "started_at",
+          "duration_ms",
+          "root_job",
+          "root_build_number",
+          "logical_run_key",
+          "evidence",
+          "upstream_builds",
+          "downstream_builds"
+        ],
+        "title": "V2JenkinsBuildDetailResponse",
+        "type": "object"
+      },
+      "V2JenkinsBuildResponse": {
+        "properties": {
+          "build_number": {
+            "title": "Build Number",
+            "type": "integer"
+          },
+          "building": {
+            "default": false,
+            "title": "Building",
+            "type": "boolean"
+          },
+          "change_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Number"
+          },
+          "change_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Url"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "coverage": {
+            "default": "unknown",
+            "title": "Coverage",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "enrichment_status": {
+            "default": "pending",
+            "title": "Enrichment Status",
+            "type": "string"
+          },
+          "failed_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Stage"
+          },
+          "failure_classification": {
+            "default": "unknown",
+            "title": "Failure Classification",
+            "type": "string"
+          },
+          "failure_signature": {
+            "default": "",
+            "title": "Failure Signature",
+            "type": "string"
+          },
+          "failure_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Summary"
+          },
+          "head_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Name"
+          },
+          "head_type": {
+            "default": "unknown",
+            "title": "Head Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incident_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incident Id"
+          },
+          "job_name": {
+            "title": "Job Name",
+            "type": "string"
+          },
+          "job_type": {
+            "default": "other",
+            "title": "Job Type",
+            "type": "string"
+          },
+          "logical_run_key": {
+            "title": "Logical Run Key",
+            "type": "string"
+          },
+          "novelty": {
+            "default": "unclassified",
+            "title": "Novelty",
+            "type": "string"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "priority_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Priority Reasons",
+            "type": "array"
+          },
+          "priority_score": {
+            "default": 0,
+            "title": "Priority Score",
+            "type": "integer"
+          },
+          "propagated_failure": {
+            "default": false,
+            "title": "Propagated Failure",
+            "type": "boolean"
+          },
+          "recovered": {
+            "default": false,
+            "title": "Recovered",
+            "type": "boolean"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "root_build_number": {
+            "title": "Root Build Number",
+            "type": "integer"
+          },
+          "root_job": {
+            "title": "Root Job",
+            "type": "string"
+          },
+          "source_allow_mr_comments": {
+            "default": false,
+            "title": "Source Allow Mr Comments",
+            "type": "boolean"
+          },
+          "source_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Branch"
+          },
+          "source_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit Sha"
+          },
+          "source_kind": {
+            "default": "unresolved",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Profile Id"
+          },
+          "source_profile_registered": {
+            "default": false,
+            "title": "Source Profile Registered",
+            "type": "boolean"
+          },
+          "source_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Provider"
+          },
+          "source_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Reason"
+          },
+          "source_resolution_method": {
+            "default": "none",
+            "title": "Source Resolution Method",
+            "type": "string"
+          },
+          "source_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source State"
+          },
+          "source_status": {
+            "default": "pending",
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Verified At"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "trigger_kind": {
+            "default": "unknown",
+            "title": "Trigger Kind",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_name",
+          "build_number",
+          "result",
+          "url",
+          "started_at",
+          "duration_ms",
+          "root_job",
+          "root_build_number",
+          "logical_run_key"
+        ],
+        "title": "V2JenkinsBuildResponse",
+        "type": "object"
+      },
+      "V2JenkinsFailurePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/V2JenkinsBuildResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "total_count"
+        ],
+        "title": "V2JenkinsFailurePage",
+        "type": "object"
+      },
+      "V2JenkinsFailureReportBuildResponse": {
+        "properties": {
+          "assessment": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment"
+          },
+          "build_id": {
+            "title": "Build Id",
+            "type": "string"
+          },
+          "build_number": {
+            "title": "Build Number",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "investigation_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Request Id"
+          },
+          "investigation_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Status"
+          },
+          "job_name": {
+            "title": "Job Name",
+            "type": "string"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "source": {
+            "additionalProperties": true,
+            "title": "Source",
+            "type": "object"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "build_id",
+          "job_name",
+          "build_number",
+          "result",
+          "url",
+          "started_at",
+          "duration_ms",
+          "status",
+          "source",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "V2JenkinsFailureReportBuildResponse",
+        "type": "object"
+      },
+      "V2JenkinsFailureReportRequest": {
+        "properties": {
+          "mode": {
+            "default": "regular",
+            "enum": [
+              "regular",
+              "deep"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "V2JenkinsFailureReportRequest",
+        "type": "object"
+      },
+      "V2JenkinsFailureReportResponse": {
+        "properties": {
+          "budget_reset_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Reset At"
+          },
+          "builds": {
+            "items": {
+              "$ref": "#/components/schemas/V2JenkinsFailureReportBuildResponse"
+            },
+            "title": "Builds",
+            "type": "array"
+          },
+          "collected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collected At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "coverage_exceptions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Coverage Exceptions",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "failures_found": {
+            "title": "Failures Found",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jobs_discovered": {
+            "title": "Jobs Discovered",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total_builds": {
+            "default": 0,
+            "title": "Total Builds",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "window_ended_at": {
+            "format": "date-time",
+            "title": "Window Ended At",
+            "type": "string"
+          },
+          "window_started_at": {
+            "format": "date-time",
+            "title": "Window Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "status",
+          "window_started_at",
+          "window_ended_at",
+          "jobs_discovered",
+          "failures_found",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "V2JenkinsFailureReportResponse",
+        "type": "object"
+      },
+      "V2JenkinsWorkspaceResponse": {
+        "properties": {
+          "active_executions": {
+            "items": {
+              "$ref": "#/components/schemas/V2LogicalExecutionResponse"
+            },
+            "title": "Active Executions",
+            "type": "array"
+          },
+          "busy_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/V2JobFamilyResponse"
+            },
+            "title": "Busy Jobs",
+            "type": "array"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "multibranch": {
+            "items": {
+              "$ref": "#/components/schemas/V2MultibranchFamilyResponse"
+            },
+            "title": "Multibranch",
+            "type": "array"
+          },
+          "new_failures": {
+            "items": {
+              "$ref": "#/components/schemas/V2JenkinsBuildResponse"
+            },
+            "title": "New Failures",
+            "type": "array"
+          },
+          "recurring_patterns": {
+            "items": {
+              "$ref": "#/components/schemas/V2FailurePatternResponse"
+            },
+            "title": "Recurring Patterns",
+            "type": "array"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "title": "Summary",
+            "type": "object"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "generated_at",
+          "window_hours",
+          "summary",
+          "new_failures",
+          "active_executions",
+          "recurring_patterns",
+          "busy_jobs",
+          "multibranch"
+        ],
+        "title": "V2JenkinsWorkspaceResponse",
+        "type": "object"
+      },
+      "V2JobFamilyResponse": {
+        "properties": {
+          "change_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Number"
+          },
+          "coverage": {
+            "title": "Coverage",
+            "type": "string"
+          },
+          "failure_rate": {
+            "title": "Failure Rate",
+            "type": "number"
+          },
+          "head_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Name"
+          },
+          "head_type": {
+            "title": "Head Type",
+            "type": "string"
+          },
+          "job_name": {
+            "title": "Job Name",
+            "type": "string"
+          },
+          "job_type": {
+            "title": "Job Type",
+            "type": "string"
+          },
+          "last_build_at": {
+            "format": "date-time",
+            "title": "Last Build At",
+            "type": "string"
+          },
+          "latest_result": {
+            "title": "Latest Result",
+            "type": "string"
+          },
+          "median_duration_minutes": {
+            "title": "Median Duration Minutes",
+            "type": "number"
+          },
+          "p95_duration_minutes": {
+            "title": "P95 Duration Minutes",
+            "type": "number"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "result_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Result Counts",
+            "type": "object"
+          },
+          "run_count": {
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "source_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Branch"
+          },
+          "source_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit Sha"
+          },
+          "source_kind": {
+            "default": "unresolved",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Profile Id"
+          },
+          "source_profile_registered": {
+            "default": false,
+            "title": "Source Profile Registered",
+            "type": "boolean"
+          },
+          "source_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Provider"
+          },
+          "source_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Reason"
+          },
+          "source_status": {
+            "default": "pending",
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "wall_hours": {
+            "title": "Wall Hours",
+            "type": "number"
+          }
+        },
+        "required": [
+          "job_name",
+          "job_type",
+          "head_type",
+          "url",
+          "coverage",
+          "run_count",
+          "result_counts",
+          "failure_rate",
+          "wall_hours",
+          "median_duration_minutes",
+          "p95_duration_minutes",
+          "latest_result",
+          "last_build_at"
+        ],
+        "title": "V2JobFamilyResponse",
+        "type": "object"
+      },
+      "V2LLMCallResponse": {
+        "properties": {
+          "cache_creation_input_tokens": {
+            "title": "Cache Creation Input Tokens",
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "title": "Cache Read Input Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_source": {
+            "title": "Cost Source",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "purpose",
+          "model",
+          "prompt_tokens",
+          "completion_tokens",
+          "cache_read_input_tokens",
+          "cache_creation_input_tokens",
+          "total_tokens",
+          "estimated_cost_usd",
+          "cost_source",
+          "created_at"
+        ],
+        "title": "V2LLMCallResponse",
+        "type": "object"
+      },
+      "V2LogicalExecutionResponse": {
+        "properties": {
+          "affected_build_count": {
+            "title": "Affected Build Count",
+            "type": "integer"
+          },
+          "builds": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Builds",
+            "type": "array"
+          },
+          "change_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Number"
+          },
+          "change_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Url"
+          },
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "format": "date-time",
+            "title": "First Seen At",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "logical_run_key": {
+            "title": "Logical Run Key",
+            "type": "string"
+          },
+          "primary_build_id": {
+            "title": "Primary Build Id",
+            "type": "string"
+          },
+          "priority_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Priority Reasons",
+            "type": "array"
+          },
+          "priority_score": {
+            "title": "Priority Score",
+            "type": "integer"
+          },
+          "propagated_build_count": {
+            "title": "Propagated Build Count",
+            "type": "integer"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "root_build_number": {
+            "title": "Root Build Number",
+            "type": "integer"
+          },
+          "root_job": {
+            "title": "Root Job",
+            "type": "string"
+          },
+          "source_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Branch"
+          },
+          "source_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit Sha"
+          },
+          "source_kind": {
+            "default": "unresolved",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Profile Id"
+          },
+          "source_profile_registered": {
+            "default": false,
+            "title": "Source Profile Registered",
+            "type": "boolean"
+          },
+          "source_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Provider"
+          },
+          "source_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Reason"
+          },
+          "source_resolution_method": {
+            "default": "none",
+            "title": "Source Resolution Method",
+            "type": "string"
+          },
+          "source_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source State"
+          },
+          "source_status": {
+            "default": "pending",
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Verified At"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "logical_run_key",
+          "title",
+          "classification",
+          "priority_score",
+          "priority_reasons",
+          "first_seen_at",
+          "last_seen_at",
+          "root_job",
+          "root_build_number",
+          "affected_build_count",
+          "propagated_build_count",
+          "builds",
+          "primary_build_id"
+        ],
+        "title": "V2LogicalExecutionResponse",
+        "type": "object"
+      },
+      "V2MultibranchFamilyResponse": {
+        "properties": {
+          "active_child_count": {
+            "title": "Active Child Count",
+            "type": "integer"
+          },
+          "child_count": {
+            "title": "Child Count",
+            "type": "integer"
+          },
+          "children": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Children",
+            "type": "array"
+          },
+          "head_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Head Counts",
+            "type": "object"
+          },
+          "parent": {
+            "title": "Parent",
+            "type": "string"
+          },
+          "result_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Result Counts",
+            "type": "object"
+          },
+          "run_count": {
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "parent",
+          "url",
+          "child_count",
+          "active_child_count",
+          "run_count",
+          "result_counts",
+          "head_counts",
+          "children"
+        ],
+        "title": "V2MultibranchFamilyResponse",
+        "type": "object"
+      },
+      "V2ObservationResponse": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "check_name": {
+            "title": "Check Name",
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "identity_dimensions": {
+            "additionalProperties": true,
+            "title": "Identity Dimensions",
+            "type": "object"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "scan_id": {
+            "title": "Scan Id",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "stable_identity": {
+            "title": "Stable Identity",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scan_id",
+          "check_name",
+          "stable_identity",
+          "rule_id",
+          "resource_id",
+          "category",
+          "severity",
+          "summary",
+          "observed_at",
+          "identity_dimensions",
+          "evidence"
+        ],
+        "title": "V2ObservationResponse",
+        "type": "object"
+      },
+      "V2OccurrenceResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Observed At"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "observation_identities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Observation Identities",
+            "type": "array"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "responsible_checks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Responsible Checks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "number",
+          "opened_at",
+          "last_observed_at",
+          "resolved_at",
+          "responsible_checks",
+          "observation_identities"
+        ],
+        "title": "V2OccurrenceResponse",
+        "type": "object"
+      },
+      "V2OverviewResponse": {
+        "properties": {
+          "active_incident_count": {
+            "title": "Active Incident Count",
+            "type": "integer"
+          },
+          "affected_resource_count": {
+            "title": "Affected Resource Count",
+            "type": "integer"
+          },
+          "coverage_status": {
+            "title": "Coverage Status",
+            "type": "string"
+          },
+          "critical_incident_count": {
+            "title": "Critical Incident Count",
+            "type": "integer"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "jenkins": {
+            "additionalProperties": true,
+            "title": "Jenkins",
+            "type": "object"
+          },
+          "kubernetes": {
+            "additionalProperties": true,
+            "title": "Kubernetes",
+            "type": "object"
+          },
+          "latest_scan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2ScanResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "llm_usage": {
+            "additionalProperties": true,
+            "title": "Llm Usage",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "top_incidents": {
+            "items": {
+              "$ref": "#/components/schemas/V2IncidentResponse"
+            },
+            "title": "Top Incidents",
+            "type": "array"
+          },
+          "warning_incident_count": {
+            "title": "Warning Incident Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "environment",
+          "status",
+          "generated_at",
+          "latest_scan",
+          "coverage_status",
+          "active_incident_count",
+          "critical_incident_count",
+          "warning_incident_count",
+          "affected_resource_count",
+          "jenkins",
+          "kubernetes",
+          "top_incidents"
+        ],
+        "title": "V2OverviewResponse",
+        "type": "object"
+      },
+      "V2ScanAnalysisItemResponse": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "incident_title": {
+            "title": "Incident Title",
+            "type": "string"
+          },
+          "investigation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Id"
+          },
+          "investigation_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Investigation Status"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "request_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Status"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "incident_title",
+          "severity",
+          "outcome",
+          "reason_code",
+          "reason"
+        ],
+        "title": "V2ScanAnalysisItemResponse",
+        "type": "object"
+      },
+      "V2ScanAnalysisResponse": {
+        "properties": {
+          "active_count": {
+            "default": 0,
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "budget_deferred_count": {
+            "default": 0,
+            "title": "Budget Deferred Count",
+            "type": "integer"
+          },
+          "budget_limit_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Limit Tokens"
+          },
+          "budget_limit_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Limit Usd"
+          },
+          "budget_metric": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Metric"
+          },
+          "budget_projected_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Projected Tokens"
+          },
+          "budget_projected_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Projected Usd"
+          },
+          "budget_reset_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Reset At"
+          },
+          "budget_spent_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Spent Tokens"
+          },
+          "budget_spent_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Spent Usd"
+          },
+          "candidate_count": {
+            "default": 0,
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "deferred_count": {
+            "default": 0,
+            "title": "Deferred Count",
+            "type": "integer"
+          },
+          "failed_count": {
+            "default": 0,
+            "title": "Failed Count",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/V2ScanAnalysisItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "manual_only_count": {
+            "default": 0,
+            "title": "Manual Only Count",
+            "type": "integer"
+          },
+          "partial_count": {
+            "default": 0,
+            "title": "Partial Count",
+            "type": "integer"
+          },
+          "queued_count": {
+            "default": 0,
+            "title": "Queued Count",
+            "type": "integer"
+          },
+          "reused_count": {
+            "default": 0,
+            "title": "Reused Count",
+            "type": "integer"
+          },
+          "running_count": {
+            "default": 0,
+            "title": "Running Count",
+            "type": "integer"
+          },
+          "selected_count": {
+            "default": 0,
+            "title": "Selected Count",
+            "type": "integer"
+          },
+          "status": {
+            "default": "not_started",
+            "enum": [
+              "not_started",
+              "selecting",
+              "queued",
+              "running",
+              "complete",
+              "complete_with_issues",
+              "budget_deferred"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "succeeded_count": {
+            "default": 0,
+            "title": "Succeeded Count",
+            "type": "integer"
+          }
+        },
+        "title": "V2ScanAnalysisResponse",
+        "type": "object"
+      },
+      "V2ScanPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/V2ScanResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "V2ScanPage",
+        "type": "object"
+      },
+      "V2ScanRequest": {
+        "properties": {
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categories"
+          },
+          "mode": {
+            "default": "regular",
+            "enum": [
+              "regular",
+              "deep"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "V2ScanRequest",
+        "type": "object"
+      },
+      "V2ScanResponse": {
+        "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/V2ScanAnalysisResponse"
+          },
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/V2CheckExecutionResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "coverage_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Status"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "failure_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Summary"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jenkins_failures": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "llm_usage": {
+            "additionalProperties": true,
+            "title": "Llm Usage",
+            "type": "object"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "urls": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Urls",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "stage",
+          "mode",
+          "categories",
+          "created_at",
+          "started_at",
+          "completed_at",
+          "cancel_requested_at",
+          "attempt_count",
+          "failure_summary",
+          "urls"
+        ],
+        "title": "V2ScanResponse",
+        "type": "object"
+      },
+      "V2SuppressionRequest": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "V2SuppressionRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Jenkins Watchdog",
+    "version": "2.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v2/actions": {
+      "get": {
+        "operationId": "list_actions_api_v2_actions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending",
+                    "running",
+                    "retry_scheduled",
+                    "succeeded",
+                    "permanently_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "email",
+                    "jira_create",
+                    "jira_update",
+                    "github_comment",
+                    "gitlab_comment"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "incident_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Incident Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2ActionPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Actions"
+      }
+    },
+    "/api/v2/actions/{action_id}": {
+      "get": {
+        "operationId": "get_action_api_v2_actions__action_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2ActionDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Action"
+      }
+    },
+    "/api/v2/actions/{action_id}/retry": {
+      "post": {
+        "operationId": "retry_action_api_v2_actions__action_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2ActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Action"
+      }
+    },
+    "/api/v2/chat": {
+      "post": {
+        "operationId": "chat_api_v2_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V2ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2ChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat"
+      }
+    },
+    "/api/v2/chat/stream": {
+      "post": {
+        "operationId": "chat_stream_api_v2_chat_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V2ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat Stream"
+      }
+    },
+    "/api/v2/incidents": {
+      "get": {
+        "operationId": "list_incidents_api_v2_incidents_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "resolved",
+                    "suppressed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "severity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "low",
+                    "warning",
+                    "critical"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Severity"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "merge_request",
+                    "repository",
+                    "pipeline",
+                    "multiple",
+                    "infrastructure",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2IncidentPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Incidents"
+      }
+    },
+    "/api/v2/incidents/{incident_id}": {
+      "get": {
+        "operationId": "get_incident_api_v2_incidents__incident_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2IncidentDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Incident"
+      }
+    },
+    "/api/v2/incidents/{incident_id}/chat": {
+      "post": {
+        "operationId": "incident_chat_api_v2_incidents__incident_id__chat_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V2ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2ChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Incident Chat"
+      }
+    },
+    "/api/v2/incidents/{incident_id}/reinvestigate": {
+      "post": {
+        "operationId": "reinvestigate_incident_api_v2_incidents__incident_id__reinvestigate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2InvestigationRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reinvestigate Incident"
+      }
+    },
+    "/api/v2/incidents/{incident_id}/suppress": {
+      "post": {
+        "operationId": "suppress_incident_api_v2_incidents__incident_id__suppress_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V2SuppressionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2IncidentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suppress Incident"
+      }
+    },
+    "/api/v2/incidents/{incident_id}/unsuppress": {
+      "post": {
+        "operationId": "unsuppress_incident_api_v2_incidents__incident_id__unsuppress_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2IncidentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unsuppress Incident"
+      }
+    },
+    "/api/v2/jenkins": {
+      "get": {
+        "operationId": "jenkins_workspace_api_v2_jenkins_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "default": 168,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Window Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Jenkins Workspace"
+      }
+    },
+    "/api/v2/jenkins/builds/{build_id}": {
+      "get": {
+        "operationId": "jenkins_build_detail_api_v2_jenkins_builds__build_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "build_id",
+            "required": true,
+            "schema": {
+              "title": "Build Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scan_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsBuildDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Jenkins Build Detail"
+      }
+    },
+    "/api/v2/jenkins/builds/{build_id}/analyze": {
+      "post": {
+        "operationId": "analyze_jenkins_build_api_v2_jenkins_builds__build_id__analyze_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "build_id",
+            "required": true,
+            "schema": {
+              "title": "Build Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V2AnalyzeBuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2InvestigationRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Analyze Jenkins Build"
+      }
+    },
+    "/api/v2/jenkins/failures": {
+      "get": {
+        "operationId": "jenkins_failures_api_v2_jenkins_failures_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "default": 168,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Window Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "all",
+                "new"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "result",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "FAILURE",
+                    "UNSTABLE",
+                    "ABORTED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Result"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsFailurePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Jenkins Failures"
+      }
+    },
+    "/api/v2/jenkins/reports": {
+      "get": {
+        "operationId": "list_jenkins_failure_reports_api_v2_jenkins_reports_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+                  },
+                  "title": "Response List Jenkins Failure Reports Api V2 Jenkins Reports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jenkins Failure Reports"
+      },
+      "post": {
+        "operationId": "create_jenkins_failure_report_api_v2_jenkins_reports_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V2JenkinsFailureReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Jenkins Failure Report"
+      }
+    },
+    "/api/v2/jenkins/reports/{report_id}": {
+      "get": {
+        "operationId": "get_jenkins_failure_report_api_v2_jenkins_reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Jenkins Failure Report"
+      }
+    },
+    "/api/v2/overview": {
+      "get": {
+        "operationId": "overview_api_v2_overview_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2OverviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Overview"
+      }
+    },
+    "/api/v2/scans": {
+      "get": {
+        "operationId": "list_scans_api_v2_scans_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2ScanPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Scans"
+      },
+      "post": {
+        "operationId": "enqueue_scan_api_v2_scans_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V2ScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Scan"
+      }
+    },
+    "/api/v2/scans/{scan_id}": {
+      "get": {
+        "operationId": "get_scan_api_v2_scans__scan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scan"
+      }
+    },
+    "/api/v2/scans/{scan_id}/cancel": {
+      "post": {
+        "operationId": "cancel_scan_api_v2_scans__scan_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2CancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Scan"
+      }
+    },
+    "/api/v2/scans/{scan_id}/events": {
+      "get": {
+        "operationId": "scan_events_api_v2_scans__scan_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "title": "Scan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scan Events"
+      }
+    },
+    "/api/v2/scans/{scan_id}/jenkins-failures": {
+      "get": {
+        "operationId": "get_scan_jenkins_failures_api_v2_scans__scan_id__jenkins_failures_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "title": "Scan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JenkinsFailureReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scan Jenkins Failures"
+      }
+    },
+    "/auth/callback": {
+      "get": {
+        "operationId": "callback_auth_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "State",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Callback",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/login": {
+      "get": {
+        "operationId": "login_auth_login_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/logout": {
+      "get": {
+        "operationId": "logout_auth_logout_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "operationId": "me_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready"
+      }
+    }
+  }
+}

@@ -1,80 +1,97 @@
-name: Build and Push
+name: Build, Push, and Deploy
 
 on:
   push:
     branches: [main]
     paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'helm/values.yaml'
+      - "helm/values.yaml"
 
 permissions:
   contents: write
 
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_USER: watchdog
+          POSTGRES_PASSWORD: watchdog
+          POSTGRES_DB: watchdog
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U watchdog -d watchdog"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+    env:
+      WATCHDOG_DATABASE_URL: postgresql+asyncpg://watchdog:watchdog@localhost:5432/watchdog
+      WATCHDOG_TEST_DATABASE_URL: postgresql+asyncpg://watchdog:watchdog@localhost:5432/watchdog
+      WATCHDOG_VALKEY_HOST: localhost
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
+          cache: pip
       - run: pip install -e ".[dev]"
-      - run: pytest tests/ -v --tb=short
+      - run: ruff check src tests scripts
+      - run: mypy
+      - run: python -m jenkins_watchdog migrate
+      - run: alembic check
+      - run: |
+          pytest --cov=jenkins_watchdog --cov-report=json:/tmp/coverage.json
+          python scripts/check_coverage.py /tmp/coverage.json
 
   build-and-push:
-    needs: test
+    needs: verify
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: "22"
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Build frontend
+      - run: pip install PyYAML
+      - run: npm ci && npm run build
         working-directory: frontend
-        run: npm ci && npm run build
-
-      - name: Compute image tag
+      - name: Compute exact image tag
         id: tag
         run: |
-          VERSION=$(grep '^version' pyproject.toml | head -1 | cut -d'"' -f2)
+          VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           IMAGE_TAG="${VERSION}-${GITHUB_SHA::7}"
-          FULL_ACR_TAG="jenkins-watchdog-${IMAGE_TAG}"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "acr_tag=${FULL_ACR_TAG}" >> "$GITHUB_OUTPUT"
-          echo "Image tag: ${FULL_ACR_TAG}"
-
-      - name: Log in to ACR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: cteraacrdevops.azurecr.io
           username: cteraacrdevops
           password: ${{ secrets.ACR_PASSWORD }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: linux/amd64
           tags: cteraacrdevops.azurecr.io/jenkins-watchdog:${{ steps.tag.outputs.image_tag }}
-
-      - name: Update Helm values
+      - name: Record exact chart image tag
         env:
-          ACR_TAG: ${{ steps.tag.outputs.acr_tag }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
         run: |
-          sed -i "s|tag:.*|tag: ${ACR_TAG}|" helm/values.yaml
+          python scripts/set_chart_image.py "$IMAGE_TAG"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add helm/values.yaml
-          git diff --cached --quiet && exit 0
-          git commit -m "ci: update image tag to ${ACR_TAG}"
+          git diff --cached --quiet || git commit -m "ci: deploy ${IMAGE_TAG}"
           git push
 
   deploy:
@@ -82,28 +99,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: azure/setup-kubectl@v4
-
       - uses: azure/setup-helm@v4
-
+      - run: helm repo add bitnami https://charts.bitnami.com/bitnami
+      - run: helm dependency build helm
       - name: Configure kubeconfig
         run: |
           KUBECONFIG_PATH="${RUNNER_TEMP}/kubeconfig"
-          printf '%s\n' "${{ secrets.K3S_KUBECONFIG }}" > "${KUBECONFIG_PATH}"
-          chmod 600 "${KUBECONFIG_PATH}"
+          printf '%s\n' "${{ secrets.K3S_KUBECONFIG }}" > "$KUBECONFIG_PATH"
+          chmod 600 "$KUBECONFIG_PATH"
           echo "KUBECONFIG=${KUBECONFIG_PATH}" >> "$GITHUB_ENV"
-
-      - name: Deploy to k3s
+      - name: Deploy migration, API, worker, schedules, and frontend
         env:
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
           helm upgrade --install jenkins-watchdog ./helm \
-            --namespace jenkins-watchdog \
-            --set "image.tag=${IMAGE_TAG}"
-
-      - name: Verify rollout
+            --namespace jenkins-watchdog --create-namespace \
+            --set "image.tag=${IMAGE_TAG}" --timeout 10m
+      - name: Verify both rollouts and schema head
         run: |
-          kubectl rollout status deployment/jenkins-watchdog \
-            -n jenkins-watchdog \
-            --timeout=120s
+          kubectl rollout status deployment/jenkins-watchdog -n jenkins-watchdog --timeout=300s
+          kubectl rollout status deployment/jenkins-watchdog-worker -n jenkins-watchdog --timeout=300s
+          kubectl exec -n jenkins-watchdog deployment/jenkins-watchdog -- \
+            python -m jenkins_watchdog schema-check
+          kubectl get cronjob -n jenkins-watchdog jenkins-watchdog-regular jenkins-watchdog-deep
