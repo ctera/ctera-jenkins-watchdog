@@ -67,14 +67,14 @@ jobs:
 
       - name: Update Helm values
         env:
-          ACR_TAG: ${{ steps.tag.outputs.acr_tag }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
         run: |
-          sed -i "s|tag:.*|tag: ${ACR_TAG}|" helm/values.yaml
+          sed -i "s|tag:.*|tag: ${IMAGE_TAG}|" helm/values.yaml
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add helm/values.yaml
           git diff --cached --quiet && exit 0
-          git commit -m "ci: update image tag to ${ACR_TAG}"
+          git commit -m "ci: update image tag to ${IMAGE_TAG}"
           git push
 
   deploy:
