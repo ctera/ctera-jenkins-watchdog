@@ -20,7 +20,16 @@ async def _scheduler_loop():
     regular_interval = settings.scheduler_scan_interval_minutes * 60
     deep_interval = settings.scheduler_deep_scan_interval_minutes * 60
 
-    await asyncio.sleep(60)
+    await asyncio.sleep(10)
+
+    try:
+        from jenkins_watchdog.state import release_lock
+        await release_lock()
+        logger.info("[scheduler] Cleared any stale lock from previous run")
+    except Exception:
+        pass
+
+    await asyncio.sleep(50)
 
     while True:
         try:
