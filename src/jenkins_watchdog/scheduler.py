@@ -28,14 +28,14 @@ async def _scheduler_loop():
 
             if deep_interval > 0 and (now - _last_deep_scan) >= deep_interval:
                 logger.info("[scheduler] Starting scheduled deep scan")
-                await _run_scheduled_scan(deep=True)
-                _last_deep_scan = time.monotonic()
-                _last_regular_scan = time.monotonic()
+                if await _run_scheduled_scan(deep=True):
+                    _last_deep_scan = time.monotonic()
+                    _last_regular_scan = time.monotonic()
 
             elif regular_interval > 0 and (now - _last_regular_scan) >= regular_interval:
                 logger.info("[scheduler] Starting scheduled regular scan")
-                await _run_scheduled_scan(deep=False)
-                _last_regular_scan = time.monotonic()
+                if await _run_scheduled_scan(deep=False):
+                    _last_regular_scan = time.monotonic()
 
             await asyncio.sleep(30)
 
@@ -47,8 +47,8 @@ async def _scheduler_loop():
             await asyncio.sleep(60)
 
 
-async def _run_scheduled_scan(deep: bool = False):
-    """Run a scan programmatically (same pipeline as the API scan)."""
+async def _run_scheduled_scan(deep: bool = False) -> bool:
+    """Run a scan programmatically. Returns True if the scan actually ran."""
     from jenkins_watchdog.checks.registry import run_all_checks
     from jenkins_watchdog.api.router import deduplicate_findings, correlate_findings, priority_score
     from jenkins_watchdog.reasoning.context import gather_cluster_context
@@ -66,7 +66,7 @@ async def _run_scheduled_scan(deep: bool = False):
 
     if not await acquire_lock():
         logger.info("[scheduler] Scan lock busy — skipping scheduled scan")
-        return
+        return False
 
     scan_id = str(uuid.uuid4())[:8]
     started_at = datetime.now(timezone.utc)
@@ -147,8 +147,11 @@ async def _run_scheduled_scan(deep: bool = False):
         if settings.auto_jira_enabled:
             await _auto_create_jira_bugs(findings, investigations, diff)
 
+        return True
+
     except Exception as e:
         logger.exception("[scheduler] Scheduled scan failed: %s", e)
+        return False
     finally:
         try:
             reset_scan_options(token)
