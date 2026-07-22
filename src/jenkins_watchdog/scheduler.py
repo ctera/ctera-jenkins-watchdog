@@ -47,6 +47,15 @@ async def _scheduler_loop():
             await asyncio.sleep(60)
 
 
+async def _is_cancelled() -> bool:
+    try:
+        from jenkins_watchdog.clients.valkey import get_valkey_client
+        client = await get_valkey_client()
+        return bool(await client.get("watchdog:scan:cancelled"))
+    except Exception:
+        return False
+
+
 async def _run_scheduled_scan(deep: bool = False) -> bool:
     """Run a scan programmatically. Returns True if the scan actually ran."""
     from jenkins_watchdog.checks.registry import run_all_checks
@@ -116,9 +125,16 @@ async def _run_scheduled_scan(deep: bool = False) -> bool:
         to_investigate.sort(key=priority_score, reverse=True)
         to_investigate = to_investigate[:scan_opts.max_investigations_per_scan]
 
+        max_scheduled = 10 if deep else scan_opts.max_investigations_per_scan
+        to_investigate = to_investigate[:max_scheduled]
+
         investigations: dict[str, Investigation] = {}
         for finding in to_investigate:
             await refresh_lock()
+            cancelled = await _is_cancelled()
+            if cancelled:
+                logger.info("[scheduler] Scan cancelled — stopping investigations")
+                break
             try:
                 result = await investigate_finding(
                     finding, cluster_context=cluster_context, all_findings=findings,
