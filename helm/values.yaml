@@ -11,10 +11,10 @@ revisionHistoryLimit: 2
 
 resources:
   requests:
-    memory: 256Mi
+    memory: 512Mi
     cpu: 100m
   limits:
-    memory: 512Mi
+    memory: 1Gi
 
 config:
   port: "8000"

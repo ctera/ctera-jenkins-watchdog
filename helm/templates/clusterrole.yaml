@@ -6,7 +6,7 @@ metadata:
     {{- include "jenkins-watchdog.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [pods, pods/log, nodes, events, services, configmaps, secrets, namespaces, endpoints]
+    resources: [pods, pods/log, nodes, events, services, configmaps, secrets, namespaces, endpoints, persistentvolumeclaims, persistentvolumes]
     verbs: [get, list, watch]
   - apiGroups: [apps]
     resources: [deployments, replicasets, daemonsets, statefulsets]
@@ -16,4 +16,10 @@ rules:
     verbs: [get, list]
   - apiGroups: [policy]
     resources: [poddisruptionbudgets]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods, nodes]
+    verbs: [get, list]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates, issuers, clusterissuers]
     verbs: [get, list]
