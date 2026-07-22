@@ -24,8 +24,8 @@ config:
   jenkinsAgentLabel: ""
   jenkinsNamespace: "jenkins"
   jenkinsFailedBuildWindowHours: "4"
-  prometheusEndpoint: "http://prometheus.monitoring.svc.cluster.local:9090"
-  prometheusEnabled: "false"
+  prometheusEndpoint: "https://prometheus.ctera.dev"
+  prometheusEnabled: "true"
   valkeyHost: "valkey-primary.valkey.svc.cluster.local"
   valkeyPort: "6379"
   valkeySsl: "false"
@@ -43,6 +43,13 @@ config:
   jiraBaseUrl: "https://cteranet.atlassian.net"
   jiraUserEmail: ""
   jiraProjects: "CI"
+  schedulerEnabled: "true"
+  schedulerScanIntervalMinutes: "60"
+  schedulerDeepScanIntervalMinutes: "1440"
+  autoJiraEnabled: "true"
+  autoJiraProject: "CI"
+  autoJiraAssigneeEmail: "keynan.levi@ctera.com"
+  autoJiraSeverityThreshold: "critical"
 
 service:
   type: ClusterIP

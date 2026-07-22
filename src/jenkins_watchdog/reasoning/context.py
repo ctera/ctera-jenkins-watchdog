@@ -5,6 +5,8 @@ import logging
 from jenkins_watchdog.checks.agent_utils import list_jenkins_agent_pods
 from jenkins_watchdog.clients.jenkins import get_queue_info, get_recent_failed_builds, get_running_builds
 from jenkins_watchdog.clients.k8s import get_core_v1, run_sync
+from jenkins_watchdog.clients.prometheus import query_instant
+from jenkins_watchdog.config import settings
 from jenkins_watchdog.scan_options import get_scan_options
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,24 @@ async def gather_cluster_context() -> str:
             sections.append("Top failing jobs:\n" + "\n".join(job_lines) + "\n")
     except Exception as e:
         logger.warning("Failed to gather Jenkins context: %s", e)
+
+    try:
+        if settings.prometheus_enabled:
+            alerts = await query_instant('ALERTS{alertstate="firing"}')
+            if alerts:
+                alert_lines = []
+                for a in alerts[:15]:
+                    metric = a.get("metric", {})
+                    name = metric.get("alertname", "unknown")
+                    severity = metric.get("severity", "")
+                    ns = metric.get("namespace", "")
+                    alert_lines.append(f"  - [{severity}] {name}" + (f" (ns={ns})" if ns else ""))
+                sections.append(
+                    f"## Firing Prometheus Alerts\n"
+                    + "\n".join(alert_lines) + "\n"
+                )
+    except Exception as e:
+        logger.warning("Failed to gather Prometheus alerts: %s", e)
 
     if sections:
         sections.append("Use this context to avoid redundant queries and to correlate infrastructure vs pipeline issues.\n")

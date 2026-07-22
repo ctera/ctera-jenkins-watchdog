@@ -19,6 +19,8 @@ INCIDENT_PREFIX = "watchdog:incidents:"
 INCIDENT_TTL = 43200
 HISTORY_KEY = "watchdog:history:scans"
 MAX_HISTORY = 50
+DISMISSED_KEY = "watchdog:dismissed"
+DISMISSED_TTL = 2592000  # 30 days
 
 
 @dataclass
@@ -193,6 +195,48 @@ async def get_last_run_info() -> dict:
     if data:
         return json.loads(data)
     return {}
+
+
+async def dismiss_fingerprint_with_details(
+    fingerprint: str, reason: str = "", auto: bool = False, symptom: str = ""
+) -> None:
+    client = await get_valkey_client()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    value = json.dumps({"reason": reason, "auto": auto, "symptom": symptom, "timestamp": now_iso})
+    await client.hset(DISMISSED_KEY, fingerprint, value)
+    await client.expire(DISMISSED_KEY, DISMISSED_TTL)
+
+
+async def get_dismissed_fingerprints() -> set[str]:
+    client = await get_valkey_client()
+    data = await client.hgetall(DISMISSED_KEY)
+    return set(data.keys()) if data else set()
+
+
+async def get_dismissed_details() -> list[dict]:
+    client = await get_valkey_client()
+    data = await client.hgetall(DISMISSED_KEY)
+    if not data:
+        return []
+    result = []
+    for fp, raw in data.items():
+        try:
+            details = json.loads(raw)
+        except json.JSONDecodeError:
+            details = {}
+        result.append({
+            "fingerprint": fp,
+            "reason": details.get("reason", ""),
+            "auto": details.get("auto", False),
+            "symptom": details.get("symptom", ""),
+            "timestamp": details.get("timestamp", ""),
+        })
+    return result
+
+
+async def undismiss_fingerprint(fingerprint: str) -> None:
+    client = await get_valkey_client()
+    await client.hdel(DISMISSED_KEY, fingerprint)
 
 
 def compute_diff(previous: list[dict], current: list) -> FindingsDiff:

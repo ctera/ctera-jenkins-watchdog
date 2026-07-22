@@ -23,26 +23,60 @@ def register_checks() -> None:
 
     from jenkins_watchdog.checks.agent_connectivity import AgentConnectivityCheck
     from jenkins_watchdog.checks.agent_errors import AgentErrorCheck
+    from jenkins_watchdog.checks.agent_offline import AgentOfflineCheck
     from jenkins_watchdog.checks.agent_pods import AgentPodCheck
     from jenkins_watchdog.checks.agent_resources import AgentResourceCheck
+    from jenkins_watchdog.checks.build_duration import BuildDurationCheck
+    from jenkins_watchdog.checks.build_log_size import BuildLogSizeCheck
+    from jenkins_watchdog.checks.certs import CertCheck
+    from jenkins_watchdog.checks.controller_health import ControllerHealthCheck
+    from jenkins_watchdog.checks.credential_health import CredentialHealthCheck
+    from jenkins_watchdog.checks.disabled_jobs import DisabledJobCheck
+    from jenkins_watchdog.checks.executor_utilization import ExecutorUtilizationCheck
+    from jenkins_watchdog.checks.flaky_tests import FlakyTestCheck
     from jenkins_watchdog.checks.jenkins_failed_builds import JenkinsFailedBuildCheck
     from jenkins_watchdog.checks.jenkins_jobs import JenkinsJobCheck
     from jenkins_watchdog.checks.jenkins_pipeline_patterns import JenkinsPipelinePatternCheck
     from jenkins_watchdog.checks.k8s_events import K8sEventsCheck
     from jenkins_watchdog.checks.k8s_nodes import NodeCheck
     from jenkins_watchdog.checks.k8s_workloads import WorkloadCheck
+    from jenkins_watchdog.checks.plugin_health import PluginHealthCheck
+    from jenkins_watchdog.checks.pod_resources import PodResourceCheck
+    from jenkins_watchdog.checks.pvc_health import PVCHealthCheck
+    from jenkins_watchdog.checks.scm_polling import SCMPollingCheck
+    from jenkins_watchdog.checks.stale_branches import StaleBranchCheck
+    from jenkins_watchdog.checks.zombie_builds import ZombieBuildCheck
 
     _checks = [
+        # Jenkins agent checks
         AgentPodCheck(),
         AgentResourceCheck(),
         AgentErrorCheck(),
         AgentConnectivityCheck(),
+        AgentOfflineCheck(),
+        # Jenkins job/build checks
         JenkinsJobCheck(),
         JenkinsFailedBuildCheck(),
         JenkinsPipelinePatternCheck(),
+        ExecutorUtilizationCheck(),
+        BuildDurationCheck(),
+        BuildLogSizeCheck(),
+        ZombieBuildCheck(),
+        DisabledJobCheck(),
+        FlakyTestCheck(),
+        SCMPollingCheck(),
+        StaleBranchCheck(),
+        # Jenkins controller checks
+        ControllerHealthCheck(),
+        PluginHealthCheck(),
+        CredentialHealthCheck(),
+        # K8s cluster checks
         NodeCheck(),
         WorkloadCheck(),
         K8sEventsCheck(),
+        CertCheck(),
+        PodResourceCheck(),
+        PVCHealthCheck(),
     ]
 
 

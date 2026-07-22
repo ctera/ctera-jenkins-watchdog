@@ -31,3 +31,10 @@ data:
   WATCHDOG_JIRA_BASE_URL: {{ .Values.config.jiraBaseUrl | quote }}
   WATCHDOG_JIRA_USER_EMAIL: {{ .Values.config.jiraUserEmail | quote }}
   WATCHDOG_JIRA_PROJECTS: {{ .Values.config.jiraProjects | quote }}
+  WATCHDOG_SCHEDULER_ENABLED: {{ .Values.config.schedulerEnabled | quote }}
+  WATCHDOG_SCHEDULER_SCAN_INTERVAL_MINUTES: {{ .Values.config.schedulerScanIntervalMinutes | quote }}
+  WATCHDOG_SCHEDULER_DEEP_SCAN_INTERVAL_MINUTES: {{ .Values.config.schedulerDeepScanIntervalMinutes | quote }}
+  WATCHDOG_AUTO_JIRA_ENABLED: {{ .Values.config.autoJiraEnabled | quote }}
+  WATCHDOG_AUTO_JIRA_PROJECT: {{ .Values.config.autoJiraProject | quote }}
+  WATCHDOG_AUTO_JIRA_ASSIGNEE_EMAIL: {{ .Values.config.autoJiraAssigneeEmail | quote }}
+  WATCHDOG_AUTO_JIRA_SEVERITY_THRESHOLD: {{ .Values.config.autoJiraSeverityThreshold | quote }}

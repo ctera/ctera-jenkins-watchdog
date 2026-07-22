@@ -1,4 +1,4 @@
-"""Kubernetes workload health checks — Jenkins-related deployments and statefulsets."""
+"""Kubernetes workload health checks — deployments and statefulsets across all namespaces."""
 
 import logging
 
@@ -19,8 +19,6 @@ class WorkloadCheck:
         for dep in deployments.items:
             ns = dep.metadata.namespace
             name = dep.metadata.name
-            if not self._is_jenkins_related(name, dep.metadata.labels or {}):
-                continue
 
             desired = dep.spec.replicas or 0
             available = dep.status.available_replicas or 0
@@ -58,8 +56,6 @@ class WorkloadCheck:
         for sts in statefulsets.items:
             ns = sts.metadata.namespace
             name = sts.metadata.name
-            if not self._is_jenkins_related(name, sts.metadata.labels or {}):
-                continue
 
             desired = sts.spec.replicas or 0
             ready = sts.status.ready_replicas or 0
@@ -76,13 +72,3 @@ class WorkloadCheck:
                 )
 
         return findings
-
-    def _is_jenkins_related(self, name: str, labels: dict) -> bool:
-        name_lower = name.lower()
-        if any(kw in name_lower for kw in ("jenkins", "jnlp")):
-            return True
-        if labels.get("app") == "jenkins":
-            return True
-        if labels.get("app.kubernetes.io/name") == "jenkins":
-            return True
-        return False

@@ -160,6 +160,33 @@ async def list_pod_metrics(namespace: str) -> list[PodMetrics]:
     return pods
 
 
+async def list_all_pod_metrics() -> list[PodMetrics]:
+    """List pod resource usage across all namespaces via metrics-server."""
+    custom = get_custom()
+    try:
+        result = await run_sync(
+            custom.list_cluster_custom_object,
+            _METRICS_GROUP,
+            _METRICS_VERSION,
+            "pods",
+            timeout_seconds=15,
+        )
+    except ApiException as exc:
+        _raise_if_unavailable(exc)
+
+    pods: list[PodMetrics] = []
+    for item in result.get("items", []):
+        metadata = item.get("metadata", {})
+        pods.append(
+            PodMetrics(
+                namespace=metadata.get("namespace", ""),
+                name=metadata.get("name", ""),
+                containers=[_parse_container_usage(c) for c in item.get("containers", [])],
+            )
+        )
+    return pods
+
+
 async def list_node_metrics() -> list[NodeMetrics]:
     """List node resource usage via metrics-server."""
     custom = get_custom()

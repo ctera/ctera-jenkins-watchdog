@@ -53,9 +53,25 @@ class Settings(BaseSettings):
     jira_api_token: str = ""
     jira_projects: str = "CI"
 
+    # Source code tools
+    github_token: str = ""
+    github_org: str = "ctera"
+    gitlab_url: str = ""
+    gitlab_token: str = ""
+    gitlab_group: str = ""
+
     # Agent
     max_tool_rounds: int = 15
     max_investigations_per_scan: int = 12
+
+    # Scheduler
+    scheduler_enabled: bool = False
+    scheduler_scan_interval_minutes: int = 60
+    scheduler_deep_scan_interval_minutes: int = 1440
+    auto_jira_enabled: bool = False
+    auto_jira_project: str = "CI"
+    auto_jira_assignee_email: str = ""
+    auto_jira_severity_threshold: str = "critical"
 
     model_config = {"env_prefix": "WATCHDOG_", "env_file": ".env", "env_file_encoding": "utf-8"}
 

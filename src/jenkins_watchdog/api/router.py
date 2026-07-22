@@ -31,6 +31,9 @@ from jenkins_watchdog.state import (
     acquire_lock,
     clear_scan_cancel,
     compute_diff,
+    dismiss_fingerprint_with_details,
+    get_dismissed_details,
+    get_dismissed_fingerprints,
     get_last_run_info,
     get_previous_findings,
     get_scan_history,
@@ -41,6 +44,7 @@ from jenkins_watchdog.state import (
     request_scan_cancel,
     store_investigations,
     store_run_result,
+    undismiss_fingerprint,
 )
 
 logger = logging.getLogger(__name__)
@@ -300,6 +304,10 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
         findings = await run_all_checks(_scan_cancel_event)
         if _scan_cancel_event and _scan_cancel_event.is_set():
             raise asyncio.CancelledError()
+
+        dismissed = await get_dismissed_fingerprints()
+        findings = [f for f in findings if f.fingerprint not in dismissed]
+
         await event_queue.put({
             "type": "detection_complete",
             "total_findings": len(findings),
@@ -322,6 +330,14 @@ async def _run_scan_background(request: ScanRequest, event_queue: asyncio.Queue)
 
             dismissed_fps = {d.finding.fingerprint for d in triage_result.dismissed}
             findings = [f for f in findings if f.fingerprint not in dismissed_fps]
+
+            for d in triage_result.dismissed:
+                await dismiss_fingerprint_with_details(
+                    d.finding.fingerprint,
+                    reason=d.reason,
+                    auto=True,
+                    symptom=d.finding.symptom,
+                )
 
             await event_queue.put({
                 "type": "triage_complete",
@@ -536,32 +552,62 @@ async def get_history(limit: int = 20):
     return {"scans": history, "count": len(history)}
 
 
+@router.get("/findings/dismissed")
+async def get_dismissed_findings():
+    dismissed = await get_dismissed_details()
+    return {"dismissed": dismissed, "count": len(dismissed)}
+
+
 @router.delete("/findings/{fingerprint}")
-async def dismiss_finding(fingerprint: str):
-    """Remove a specific finding and its investigation from state."""
+async def dismiss_finding(fingerprint: str, reason: str = "Manually dismissed"):
     from jenkins_watchdog.state import FINDINGS_KEY
 
     client = await get_valkey_client()
     raw = await client.get(FINDINGS_KEY)
     if not raw:
-        return {"status": "not_found", "remaining": 0}
+        return {"status": "not_found"}
 
     findings = json.loads(raw)
-    original_count = len(findings)
-    findings = [f for f in findings if f.get("fingerprint") != fingerprint]
+    found = False
+    for f in findings:
+        if f.get("fingerprint") == fingerprint:
+            f["status"] = "dismissed"
+            found = True
+            break
 
-    if len(findings) == original_count:
-        return {"status": "not_found", "remaining": len(findings)}
+    if not found:
+        return {"status": "not_found"}
 
     await client.set(FINDINGS_KEY, json.dumps(findings, default=str), ex=604800)
+    await dismiss_fingerprint_with_details(fingerprint, reason=reason)
 
-    inv_raw = await client.get(INVESTIGATIONS_KEY)
-    if inv_raw:
-        investigations = json.loads(inv_raw)
-        investigations.pop(fingerprint, None)
-        await client.set(INVESTIGATIONS_KEY, json.dumps(investigations, default=str), ex=604800)
+    return {"status": "dismissed", "reason": reason}
 
-    return {"status": "dismissed", "remaining": len(findings)}
+
+@router.post("/findings/{fingerprint}/undismiss")
+async def undismiss_finding(fingerprint: str):
+    from jenkins_watchdog.state import FINDINGS_KEY
+
+    client = await get_valkey_client()
+    raw = await client.get(FINDINGS_KEY)
+    if not raw:
+        return {"status": "not_found"}
+
+    findings = json.loads(raw)
+    found = False
+    for f in findings:
+        if f.get("fingerprint") == fingerprint:
+            f["status"] = "ongoing"
+            found = True
+            break
+
+    if not found:
+        return {"status": "not_found"}
+
+    await client.set(FINDINGS_KEY, json.dumps(findings, default=str), ex=604800)
+    await undismiss_fingerprint(fingerprint)
+
+    return {"status": "restored"}
 
 
 @router.delete("/reset")
@@ -572,3 +618,292 @@ async def reset_state():
     client = await get_valkey_client()
     await client.delete(INVESTIGATIONS_KEY, FINDINGS_KEY, HISTORY_KEY, LAST_RUN_KEY)
     return {"status": "reset", "message": "All state cleared. Next scan will treat all findings as new."}
+
+
+import litellm
+from pydantic import BaseModel
+
+from jenkins_watchdog.config import settings
+from jenkins_watchdog.reasoning.engine import _parse_investigation
+from jenkins_watchdog.tools import ALL_TOOL_DEFINITIONS, execute_tool
+
+_FINDING_CHAT_TTL = 604800
+_FINDING_CHAT_KEY_PREFIX = "watchdog:chat:finding:"
+
+_FINDING_CHAT_SYSTEM = """You are an expert Jenkins CI/CD and Kubernetes platform engineer investigating a production issue.
+You have access to tools that query real-time state: Kubernetes API, Jenkins API, and Prometheus metrics.
+
+When the user asks about this issue:
+1. Use the available tools to gather real evidence
+2. Correlate findings across multiple data sources
+3. Provide specific, actionable answers with evidence
+
+## Finding you are discussing:
+Resource: {resource}
+Symptom: {symptom}
+Severity: {severity}
+Category: {category}
+Context: {context}
+
+## Your previous investigation:
+Root Cause: {root_cause}
+Evidence: {evidence}
+Impact: {impact}
+Suggested Fix: {suggested_fix}
+{fix_location}
+Confidence: {confidence}
+
+## Raw reasoning from your investigation:
+{raw_reasoning}
+
+The user may challenge your conclusions, provide corrections, or ask you to dig deeper.
+Use your tools to verify claims and re-examine evidence when asked."""
+
+_CORRECTION_PROMPT = """Based on the conversation above, produce a CORRECTED investigation.
+Extract the corrected findings into this exact JSON format:
+
+{"root_cause":"...","evidence":["..."],"impact":"...","suggested_fix":"...","fix_location":"...","confidence":"high|medium|low"}
+
+Incorporate corrections from the conversation. Keep validated evidence, remove debunked evidence.
+Return ONLY the JSON object, no other text."""
+
+
+class FindingChatRequest(BaseModel):
+    message: str
+
+
+def _finding_chat_key(fingerprint: str) -> str:
+    return f"{_FINDING_CHAT_KEY_PREFIX}{fingerprint}"
+
+
+def _finding_chat_model_chain() -> list[str]:
+    models = [settings.llm_model]
+    if settings.llm_fallback_models:
+        models.extend(m.strip() for m in settings.llm_fallback_models.split(",") if m.strip())
+    return models
+
+
+async def _load_finding_chat_messages(fingerprint: str) -> list[dict] | None:
+    client = await get_valkey_client()
+    data = await client.get(_finding_chat_key(fingerprint))
+    if data:
+        return json.loads(data)
+    return None
+
+
+async def _save_finding_chat_messages(fingerprint: str, messages: list[dict]) -> None:
+    client = await get_valkey_client()
+    await client.set(
+        _finding_chat_key(fingerprint),
+        json.dumps(messages, default=str),
+        ex=_FINDING_CHAT_TTL,
+    )
+
+
+async def _get_finding_dict(fingerprint: str) -> dict | None:
+    from jenkins_watchdog.state import FINDINGS_KEY
+
+    client = await get_valkey_client()
+    raw = await client.get(FINDINGS_KEY)
+    if not raw:
+        return None
+    for finding in json.loads(raw):
+        if finding.get("fingerprint") == fingerprint:
+            return finding
+    return None
+
+
+async def _get_investigation_dict(fingerprint: str) -> dict | None:
+    investigations = await get_stored_investigations()
+    return investigations.get(fingerprint)
+
+
+def _format_finding_chat_system_prompt(finding: dict, investigation: dict | None) -> str:
+    inv = investigation or {}
+    evidence = inv.get("evidence") or []
+    evidence_text = "\n".join(f"- {item}" for item in evidence) if evidence else "None"
+    fix_location = ""
+    if inv.get("fix_location"):
+        fix_location = f"Fix Location: {inv['fix_location']}"
+    context = json.dumps(finding.get("context") or {}, indent=2, default=str)
+    return _FINDING_CHAT_SYSTEM.format(
+        resource=finding.get("resource", ""),
+        symptom=finding.get("symptom", ""),
+        severity=finding.get("severity", ""),
+        category=finding.get("category", ""),
+        context=context,
+        root_cause=inv.get("root_cause") or "Not yet investigated",
+        evidence=evidence_text,
+        impact=inv.get("impact") or "Unknown",
+        suggested_fix=inv.get("suggested_fix") or "None",
+        fix_location=fix_location,
+        confidence=inv.get("confidence") or "unknown",
+        raw_reasoning=inv.get("raw_reasoning") or "None",
+    )
+
+
+def _visible_chat_messages(messages: list[dict]) -> list[dict]:
+    visible = []
+    for message in messages:
+        role = message.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        content = message.get("content")
+        if not content:
+            continue
+        visible.append({"role": role, "content": content})
+    return visible
+
+
+async def _init_finding_chat_messages(fingerprint: str) -> list[dict] | None:
+    finding = await _get_finding_dict(fingerprint)
+    if not finding:
+        return None
+    investigation = await _get_investigation_dict(fingerprint)
+    return [{"role": "system", "content": _format_finding_chat_system_prompt(finding, investigation)}]
+
+
+async def _call_finding_chat_llm(
+    model_chain: list[str],
+    messages: list[dict],
+    *,
+    tools: list[dict] | None = ALL_TOOL_DEFINITIONS,
+):
+    last_error = None
+    for model in model_chain:
+        try:
+            kwargs = {
+                "model": model,
+                "messages": messages,
+                "temperature": settings.llm_temperature,
+                "max_tokens": settings.llm_max_tokens,
+                "api_key": settings.anthropic_api_key,
+            }
+            if tools is not None:
+                kwargs["tools"] = tools
+            return await litellm.acompletion(**kwargs)
+        except Exception as e:
+            last_error = e
+            logger.warning("Finding chat LLM call failed for model %s: %s", model, e)
+            await asyncio.sleep(1)
+    raise last_error or RuntimeError("All models failed")
+
+
+def _merge_investigation(existing: dict | None, corrected: Investigation, fingerprint: str) -> dict:
+    merged = corrected.model_dump()
+    merged["finding_fingerprint"] = fingerprint
+    if existing:
+        for field in ("tools_used", "prompt_tokens", "completion_tokens", "estimated_cost_usd", "raw_reasoning"):
+            if field in existing:
+                merged[field] = existing[field]
+    return merged
+
+
+@router.get("/findings/{fingerprint}/chat")
+async def get_finding_chat(fingerprint: str):
+    messages = await _load_finding_chat_messages(fingerprint)
+    if not messages:
+        return {"messages": []}
+    return {"messages": _visible_chat_messages(messages)}
+
+
+@router.post("/findings/{fingerprint}/chat")
+async def finding_chat(fingerprint: str, request: FindingChatRequest):
+    messages = await _load_finding_chat_messages(fingerprint)
+    if messages is None:
+        messages = await _init_finding_chat_messages(fingerprint)
+        if messages is None:
+            async def _not_found_stream():
+                yield {"data": json.dumps({"type": "error", "message": f"Finding not found: {fingerprint}"})}
+            return _scan_sse(_not_found_stream())
+
+    messages.append({"role": "user", "content": request.message})
+
+    async def event_stream():
+        model_chain = _finding_chat_model_chain()
+
+        for _ in range(settings.max_tool_rounds):
+            try:
+                response = await _call_finding_chat_llm(model_chain, messages)
+            except Exception as e:
+                yield {"data": json.dumps({"type": "error", "content": str(e)})}
+                return
+
+            choice = response.choices[0].message
+            content = choice.content or ""
+            tool_calls = choice.tool_calls or []
+
+            assistant_msg: dict = {"role": "assistant", "content": content or None}
+            if tool_calls:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in tool_calls
+                ]
+            messages.append(assistant_msg)
+
+            if content:
+                yield {"data": json.dumps({"type": "token", "content": content})}
+
+            if not tool_calls:
+                await _save_finding_chat_messages(fingerprint, messages)
+                yield {"data": json.dumps({"type": "done", "fingerprint": fingerprint})}
+                return
+
+            for tc in tool_calls:
+                tool_name = tc.function.name
+                try:
+                    tool_args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    tool_args = {}
+
+                yield {"data": json.dumps({"type": "tool_start", "tool_name": tool_name, "tool_args": tool_args})}
+
+                result = await execute_tool(tool_name, tool_args)
+                success = not result.startswith("Error") and not result.startswith("Unknown tool")
+
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+                yield {"data": json.dumps({"type": "tool_result", "tool_name": tool_name, "success": success})}
+
+        await _save_finding_chat_messages(fingerprint, messages)
+        yield {"data": json.dumps({"type": "token", "content": "\n\n(Reached tool call limit — showing partial results)"})}
+        yield {"data": json.dumps({"type": "done", "fingerprint": fingerprint})}
+
+    return _scan_sse(event_stream())
+
+
+@router.post("/findings/{fingerprint}/reinvestigate")
+async def reinvestigate_finding(fingerprint: str):
+    messages = await _load_finding_chat_messages(fingerprint)
+    if not messages:
+        return {"status": "error", "message": "No chat session found for this finding"}
+
+    finding = await _get_finding_dict(fingerprint)
+    if not finding:
+        return {"status": "error", "message": f"Finding not found: {fingerprint}"}
+
+    existing = await _get_investigation_dict(fingerprint)
+    messages.append({"role": "user", "content": _CORRECTION_PROMPT})
+
+    try:
+        response = await _call_finding_chat_llm(_finding_chat_model_chain(), messages, tools=None)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+    content = response.choices[0].message.content or ""
+    messages.append({"role": "assistant", "content": content})
+    await _save_finding_chat_messages(fingerprint, messages)
+
+    tools_used = (existing or {}).get("tools_used", [])
+    corrected = _parse_investigation(content, fingerprint, tools_used)
+    merged = _merge_investigation(existing, corrected, fingerprint)
+
+    client = await get_valkey_client()
+    investigations = await get_stored_investigations()
+    investigations[fingerprint] = merged
+    await client.set(INVESTIGATIONS_KEY, json.dumps(investigations, default=str), ex=_FINDING_CHAT_TTL)
+
+    return {"status": "corrected", "investigation": merged}

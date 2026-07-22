@@ -21,10 +21,16 @@ from jenkins_watchdog.tools.prometheus import (
 from jenkins_watchdog.tools.prometheus import (
     TOOL_HANDLERS as PROM_HANDLERS,
 )
+from jenkins_watchdog.tools.source_code import (
+    TOOL_DEFINITIONS as SOURCE_TOOLS,
+)
+from jenkins_watchdog.tools.source_code import (
+    TOOL_HANDLERS as SOURCE_HANDLERS,
+)
 
 logger = logging.getLogger(__name__)
 
-_RAW_TOOLS: list[dict] = K8S_TOOLS + PROM_TOOLS + JENKINS_TOOLS
+_RAW_TOOLS: list[dict] = K8S_TOOLS + PROM_TOOLS + JENKINS_TOOLS + SOURCE_TOOLS
 
 
 def _to_openai_format(tool: dict) -> dict:
@@ -45,6 +51,7 @@ _ALL_HANDLERS: dict[str, Any] = {}
 _ALL_HANDLERS.update(K8S_HANDLERS)
 _ALL_HANDLERS.update(PROM_HANDLERS)
 _ALL_HANDLERS.update(JENKINS_HANDLERS)
+_ALL_HANDLERS.update(SOURCE_HANDLERS)
 
 
 async def execute_tool(tool_name: str, arguments: dict) -> str:

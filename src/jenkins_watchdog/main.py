@@ -25,7 +25,11 @@ PUBLIC_PATHS = {"/health", "/ready", "/auth/login", "/auth/callback", "/auth/log
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from jenkins_watchdog.scheduler import start_scheduler
+    start_scheduler()
     yield
+    from jenkins_watchdog.scheduler import stop_scheduler
+    stop_scheduler()
     await close_valkey_client()
     await close_prometheus_client()
 
