@@ -197,6 +197,14 @@ async def get_last_run_info() -> dict:
     return {}
 
 
+async def get_last_run() -> dict | None:
+    client = await get_valkey_client()
+    data = await client.get(LAST_RUN_KEY)
+    if data:
+        return json.loads(data)
+    return None
+
+
 async def dismiss_fingerprint_with_details(
     fingerprint: str, reason: str = "", auto: bool = False, symptom: str = ""
 ) -> None:

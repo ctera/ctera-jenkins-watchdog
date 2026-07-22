@@ -1,6 +1,7 @@
 """Background scan scheduler — runs periodic regular and deep scans."""
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -86,6 +87,18 @@ async def _run_scheduled_scan(deep: bool = False) -> bool:
         logger.info("[scheduler] Scan lock busy — skipping scheduled scan")
         return False
 
+    from jenkins_watchdog.clients.valkey import get_valkey_client
+    client = await get_valkey_client()
+    await client.set(
+        "watchdog:scan:progress",
+        json.dumps({
+            "phase": "checks",
+            "deep": deep,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }),
+        ex=3600,
+    )
+
     scan_id = str(uuid.uuid4())[:8]
     started_at = datetime.now(timezone.utc)
     token = None
@@ -137,7 +150,19 @@ async def _run_scheduled_scan(deep: bool = False) -> bool:
         max_scheduled = 10 if deep else scan_opts.max_investigations_per_scan
         to_investigate = to_investigate[:max_scheduled]
 
+        await client.set(
+            "watchdog:scan:progress",
+            json.dumps({
+                "phase": "investigating",
+                "deep": deep,
+                "total": len(to_investigate),
+                "completed": 0,
+            }),
+            ex=3600,
+        )
+
         investigations: dict[str, Investigation] = {}
+        completed = 0
         for finding in to_investigate:
             await refresh_lock()
             cancelled = await _is_cancelled()
@@ -152,6 +177,17 @@ async def _run_scheduled_scan(deep: bool = False) -> bool:
                     investigations[finding.fingerprint] = result
             except Exception as e:
                 logger.warning("[scheduler] Investigation failed for %s: %s", finding.resource, e)
+            completed += 1
+            await client.set(
+                "watchdog:scan:progress",
+                json.dumps({
+                    "phase": "investigating",
+                    "deep": deep,
+                    "total": len(to_investigate),
+                    "completed": completed,
+                }),
+                ex=3600,
+            )
 
         duration_s = (datetime.now(timezone.utc) - started_at).total_seconds()
         total_cost = sum(inv.estimated_cost_usd for inv in investigations.values())
@@ -180,6 +216,10 @@ async def _run_scheduled_scan(deep: bool = False) -> bool:
     finally:
         try:
             reset_scan_options(token)
+        except Exception:
+            pass
+        try:
+            await client.delete("watchdog:scan:progress")
         except Exception:
             pass
         await release_lock()

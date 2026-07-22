@@ -9,6 +9,7 @@ import {
   CircularProgress,
   Grid,
   IconButton,
+  LinearProgress,
   Paper,
   Stack,
   Tooltip,
@@ -19,7 +20,13 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import RadarIcon from "@mui/icons-material/Radar";
-import { deleteFinding, fetchFindings, type FindingsResponse } from "../services/api";
+import {
+  deleteFinding,
+  fetchFindings,
+  fetchScanStatus,
+  type FindingsResponse,
+  type ScanStatusResponse,
+} from "../services/api";
 import { useScan } from "../context/ScanContext";
 
 function StatCard({ value, label, color }: { value: number | string; label: string; color?: string }) {
@@ -41,14 +48,42 @@ export default function Dashboard() {
   const [data, setData] = useState<FindingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [scanStatus, setScanStatus] = useState<ScanStatusResponse | null>(null);
+  const [showCompletedNotice, setShowCompletedNotice] = useState(false);
   const { scan, startScan, startDeepScan, stopScan } = useScan();
   const logRef = useRef<HTMLDivElement>(null);
+  const lastNotifiedRunRef = useRef<string | null>(null);
 
   useEffect(() => {
     fetchFindings()
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const pollStatus = () => {
+      fetchScanStatus()
+        .then((status) => {
+          setScanStatus(status);
+
+          const lastRunTs = status.last_run?.last_run;
+          if (typeof lastRunTs === "string" && !status.scanning) {
+            const ageMs = Date.now() - new Date(lastRunTs).getTime();
+            if (ageMs < 60000 && lastNotifiedRunRef.current !== lastRunTs) {
+              lastNotifiedRunRef.current = lastRunTs;
+              setShowCompletedNotice(true);
+              fetchFindings().then(setData).catch(() => {});
+              setTimeout(() => setShowCompletedNotice(false), 8000);
+            }
+          }
+        })
+        .catch(() => {});
+    };
+
+    pollStatus();
+    const interval = setInterval(pollStatus, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -87,8 +122,59 @@ export default function Dashboard() {
     } catch {}
   };
 
+  const backgroundScanning = scanStatus?.scanning && !scan.scanning;
+  const progressLabel =
+    scanStatus?.progress?.phase === "investigating" &&
+    scanStatus.progress.total != null &&
+    scanStatus.progress.completed != null
+      ? ` (${scanStatus.progress.completed}/${scanStatus.progress.total})`
+      : scanStatus?.progress?.phase === "checks"
+        ? " (running checks)"
+        : "";
+
   return (
     <Stack spacing={3}>
+      {backgroundScanning && (
+        <Box
+          sx={{
+            borderRadius: 1,
+            overflow: "hidden",
+            border: 1,
+            borderColor: "primary.dark",
+            bgcolor: "background.paper",
+          }}
+        >
+          <LinearProgress
+            sx={{
+              height: 3,
+              "& .MuiLinearProgress-bar": {
+                animationDuration: "2s",
+              },
+            }}
+          />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 2, py: 1 }}>
+            <Chip
+              label={scanStatus?.source === "scheduler" ? "Scheduled" : "Background"}
+              size="small"
+              color="primary"
+              variant="outlined"
+              sx={{ height: 22, fontSize: "0.7rem" }}
+            />
+            <Typography variant="body2" color="text.secondary">
+              {scanStatus?.source === "scheduler"
+                ? `Scheduled scan in progress...${progressLabel}`
+                : `Auto-scan in progress...${progressLabel}`}
+            </Typography>
+          </Box>
+        </Box>
+      )}
+
+      {showCompletedNotice && !backgroundScanning && !scan.scanning && (
+        <Alert severity="success" onClose={() => setShowCompletedNotice(false)}>
+          Scan completed — findings refreshed
+        </Alert>
+      )}
+
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <Box>
           <Typography variant="h4">Jenkins Agent Dashboard</Typography>

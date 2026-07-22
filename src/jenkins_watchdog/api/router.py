@@ -28,12 +28,14 @@ from jenkins_watchdog.reasoning.triage import triage_findings
 from jenkins_watchdog.scan_options import ScanOptions, activate_scan_options, reset_scan_options
 from jenkins_watchdog.state import (
     INVESTIGATIONS_KEY,
+    LOCK_KEY,
     acquire_lock,
     clear_scan_cancel,
     compute_diff,
     dismiss_fingerprint_with_details,
     get_dismissed_details,
     get_dismissed_fingerprints,
+    get_last_run,
     get_last_run_info,
     get_previous_findings,
     get_scan_history,
@@ -46,6 +48,8 @@ from jenkins_watchdog.state import (
     store_run_result,
     undismiss_fingerprint,
 )
+
+SCAN_PROGRESS_KEY = "watchdog:scan:progress"
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +264,32 @@ async def stop_scan():
 
     _active_scan.cancel()
     return {"status": "stopping"}
+
+
+@router.get("/scan/status")
+async def scan_status():
+    """Return current scan status — used by UI to show background scan progress."""
+    lock_held = False
+    progress = None
+    try:
+        client = await get_valkey_client()
+        lock_held = bool(await client.get(LOCK_KEY))
+        raw_progress = await client.get(SCAN_PROGRESS_KEY)
+        if raw_progress:
+            progress = json.loads(raw_progress)
+    except Exception:
+        pass
+
+    is_ui_scan = _active_scan is not None and not _active_scan.done()
+
+    last_run = await get_last_run()
+
+    return {
+        "scanning": lock_held or is_ui_scan,
+        "source": "ui" if is_ui_scan else ("scheduler" if lock_held else None),
+        "last_run": last_run,
+        "progress": progress,
+    }
 
 
 async def _follow_active_scan():

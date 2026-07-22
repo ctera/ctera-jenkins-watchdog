@@ -121,6 +121,27 @@ export async function stopScan(): Promise<{ status: string }> {
   return res.json();
 }
 
+export interface ScanProgress {
+  phase: string;
+  deep?: boolean;
+  started_at?: string;
+  total?: number;
+  completed?: number;
+}
+
+export interface ScanStatusResponse {
+  scanning: boolean;
+  source: string | null;
+  last_run: Record<string, unknown> | null;
+  progress: ScanProgress | null;
+}
+
+export async function fetchScanStatus(): Promise<ScanStatusResponse> {
+  const res = await fetch(`${BASE}/scan/status`);
+  if (!res.ok) throw new Error(`Failed to fetch scan status: ${res.status}`);
+  return res.json();
+}
+
 export interface ChatEvent {
   type: "token" | "tool_start" | "tool_result" | "done" | "error";
   content?: string;
