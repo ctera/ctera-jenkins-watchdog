@@ -151,6 +151,47 @@ export interface ChatEvent {
   session_id?: string;
 }
 
+export async function* streamFindingChat(
+  fingerprint: string,
+  message: string,
+  signal?: AbortSignal
+): AsyncGenerator<ChatEvent> {
+  const res = await fetch(`${BASE}/findings/${fingerprint}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Chat failed: ${res.status}`);
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try { yield JSON.parse(line.slice(6)) as ChatEvent; } catch {}
+      }
+    }
+  }
+}
+
+export async function fetchFindingChatHistory(fingerprint: string): Promise<{ messages: Array<{ role: string; content: string }> }> {
+  const res = await fetch(`${BASE}/findings/${fingerprint}/chat`);
+  if (!res.ok) throw new Error(`Failed to fetch chat: ${res.status}`);
+  return res.json();
+}
+
+export async function reinvestigateFinding(fingerprint: string): Promise<{ status: string; investigation?: Investigation }> {
+  const res = await fetch(`${BASE}/findings/${fingerprint}/reinvestigate`, { method: "POST" });
+  if (!res.ok) throw new Error(`Reinvestigation failed: ${res.status}`);
+  return res.json();
+}
+
 export async function* streamChat(
   message: string,
   sessionId: string | null,

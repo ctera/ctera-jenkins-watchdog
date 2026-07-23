@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Accordion,
   AccordionDetails,
@@ -24,10 +24,218 @@ import {
   Typography,
 } from "@mui/material";
 import BugReportIcon from "@mui/icons-material/BugReport";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
-import { deleteFinding, fetchFindings, type Finding, type FindingsResponse } from "../services/api";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import SendIcon from "@mui/icons-material/Send";
+import {
+  deleteFinding,
+  fetchFindingChatHistory,
+  fetchFindings,
+  reinvestigateFinding,
+  streamFindingChat,
+  type Finding,
+  type FindingsResponse,
+  type Investigation,
+} from "../services/api";
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  toolCalls?: { name: string; success?: boolean }[];
+}
+
+function FindingChatPanel({ fingerprint }: { fingerprint: string }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [currentTools, setCurrentTools] = useState<{ name: string; success?: boolean }[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    setLoadingHistory(true);
+    fetchFindingChatHistory(fingerprint)
+      .then((data) => {
+        setMessages(
+          data.messages.map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          }))
+        );
+      })
+      .catch(() => {})
+      .finally(() => {
+        setLoadingHistory(false);
+        scrollToBottom();
+      });
+  }, [fingerprint]);
+
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text || streaming) return;
+
+    setInput("");
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setStreaming(true);
+    setCurrentTools([]);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    let assistantContent = "";
+    const tools: { name: string; success?: boolean }[] = [];
+
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+    try {
+      for await (const event of streamFindingChat(fingerprint, text, controller.signal)) {
+        switch (event.type) {
+          case "token":
+            assistantContent += event.content || "";
+            setMessages((prev) => {
+              const updated = [...prev];
+              updated[updated.length - 1] = { role: "assistant", content: assistantContent, toolCalls: [...tools] };
+              return updated;
+            });
+            scrollToBottom();
+            break;
+          case "tool_start":
+            tools.push({ name: event.tool_name || "unknown" });
+            setCurrentTools([...tools]);
+            break;
+          case "tool_result":
+            if (tools.length > 0) {
+              tools[tools.length - 1].success = event.success;
+            }
+            setCurrentTools([...tools]);
+            break;
+          case "error":
+            assistantContent += `\n\nError: ${event.content}`;
+            setMessages((prev) => {
+              const updated = [...prev];
+              updated[updated.length - 1] = { role: "assistant", content: assistantContent, toolCalls: [...tools] };
+              return updated;
+            });
+            break;
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        assistantContent += `\n\nConnection error: ${(e as Error).message}`;
+      }
+    } finally {
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { role: "assistant", content: assistantContent, toolCalls: [...tools] };
+        return updated;
+      });
+      setStreaming(false);
+      setCurrentTools([]);
+      abortRef.current = null;
+      scrollToBottom();
+    }
+  };
+
+  return (
+    <Box
+      sx={{
+        mt: 2,
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 1,
+        bgcolor: "grey.900",
+        overflow: "hidden",
+      }}
+    >
+      <Box sx={{ maxHeight: 400, overflow: "auto", p: 1.5 }}>
+        {loadingHistory ? (
+          <Box sx={{ display: "flex", justifyContent: "center", py: 2 }}>
+            <CircularProgress size={20} />
+          </Box>
+        ) : messages.length === 0 ? (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", textAlign: "center", py: 2 }}>
+            Ask questions about this finding
+          </Typography>
+        ) : (
+          <Stack spacing={1}>
+            {messages.map((msg, i) => (
+              <Box key={i} sx={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
+                <Box
+                  sx={{
+                    maxWidth: "85%",
+                    px: 1.5,
+                    py: 1,
+                    borderRadius: 1.5,
+                    bgcolor: msg.role === "user" ? "rgba(33, 150, 243, 0.25)" : "grey.800",
+                  }}
+                >
+                  {msg.toolCalls && msg.toolCalls.length > 0 && (
+                    <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", mb: 0.5 }}>
+                      {msg.toolCalls.map((tc, j) => (
+                        <Chip
+                          key={j}
+                          label={tc.name}
+                          size="small"
+                          color={tc.success === false ? "error" : tc.success ? "success" : "default"}
+                          variant="outlined"
+                          sx={{ fontSize: "0.65rem", height: 18 }}
+                        />
+                      ))}
+                    </Box>
+                  )}
+                  <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+                    {msg.content || (streaming && i === messages.length - 1 ? "Investigating..." : "")}
+                  </Typography>
+                </Box>
+              </Box>
+            ))}
+            {streaming && currentTools.length > 0 && (
+              <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", alignItems: "center" }}>
+                <CircularProgress size={12} />
+                {currentTools.map((tc, i) => (
+                  <Chip
+                    key={i}
+                    label={tc.name}
+                    size="small"
+                    color={tc.success === false ? "error" : tc.success ? "success" : "info"}
+                    variant="outlined"
+                    sx={{ fontSize: "0.65rem", height: 18 }}
+                  />
+                ))}
+              </Box>
+            )}
+            <div ref={messagesEndRef} />
+          </Stack>
+        )}
+      </Box>
+      <Box sx={{ display: "flex", gap: 1, p: 1, borderTop: 1, borderColor: "divider" }}>
+        <TextField
+          fullWidth
+          placeholder="Ask about this finding..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+          size="small"
+          disabled={streaming}
+          multiline
+          maxRows={3}
+          sx={{ "& .MuiInputBase-root": { bgcolor: "grey.800" } }}
+        />
+        <IconButton onClick={handleSend} color="primary" disabled={!input.trim() || streaming}>
+          <SendIcon />
+        </IconButton>
+      </Box>
+    </Box>
+  );
+}
 
 function CreateBugDialog({ open, onClose, finding, onCreated }: { open: boolean; onClose: () => void; finding: Finding; onCreated: (info: { key: string; url: string; assignee: string }) => void }) {
   const inv = finding.investigation;
@@ -153,17 +361,96 @@ function CreateBugDialog({ open, onClose, finding, onCreated }: { open: boolean;
   );
 }
 
-function InvestigationDetails({ finding }: { finding: Finding }) {
+function InvestigationDetails({
+  finding,
+  onInvestigationUpdate,
+}: {
+  finding: Finding;
+  onInvestigationUpdate: (investigation: Investigation) => void;
+}) {
   const inv = finding.investigation;
   const [showRaw, setShowRaw] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [reinvestigating, setReinvestigating] = useState(false);
+  const [reinvestigateError, setReinvestigateError] = useState<string | null>(null);
   const [bugDialogOpen, setBugDialogOpen] = useState(false);
   const [jiraInfo, setJiraInfo] = useState<{ key: string; url: string; assignee: string } | null>(null);
+
+  const handleReinvestigate = async () => {
+    setReinvestigating(true);
+    setReinvestigateError(null);
+    try {
+      const result = await reinvestigateFinding(finding.fingerprint);
+      if (result.investigation) {
+        onInvestigationUpdate(result.investigation);
+      }
+    } catch (e) {
+      setReinvestigateError(e instanceof Error ? e.message : "Reinvestigation failed");
+    } finally {
+      setReinvestigating(false);
+    }
+  };
+
+  const actionButtons = (
+    <Box sx={{ pt: 1, display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+      <Button
+        size="small"
+        variant={showChat ? "contained" : "outlined"}
+        startIcon={<ChatBubbleOutlineIcon />}
+        onClick={() => setShowChat(!showChat)}
+        sx={{ textTransform: "none" }}
+      >
+        Chat
+      </Button>
+      {inv && (
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={reinvestigating ? <CircularProgress size={14} color="inherit" /> : <RefreshIcon />}
+          onClick={handleReinvestigate}
+          disabled={reinvestigating}
+          sx={{ textTransform: "none" }}
+        >
+          Reinvestigate
+        </Button>
+      )}
+      {inv && (
+        <Button
+          size="small"
+          variant="outlined"
+          color="warning"
+          startIcon={<BugReportIcon />}
+          onClick={() => setBugDialogOpen(true)}
+          sx={{ textTransform: "none" }}
+        >
+          Create Issue
+        </Button>
+      )}
+      {jiraInfo && (
+        <Chip
+          label={`${jiraInfo.key}${jiraInfo.assignee ? ` > ${jiraInfo.assignee}` : ""}`}
+          size="small"
+          color="info"
+          component="a"
+          href={jiraInfo.url}
+          target="_blank"
+          clickable
+        />
+      )}
+      <CreateBugDialog open={bugDialogOpen} onClose={() => setBugDialogOpen(false)} finding={finding} onCreated={setJiraInfo} />
+    </Box>
+  );
+
   if (!inv) {
     return (
-      <Alert severity="info" sx={{ mt: 1 }}>
-        Not investigated yet. Run a <strong>Deep Scan</strong> from the Dashboard to get root cause analysis,
-        evidence, and fix recommendations for this finding.
-      </Alert>
+      <Stack spacing={1} sx={{ mt: 1 }}>
+        <Alert severity="info">
+          Not investigated yet. Chat to ask questions or run a Deep Scan.
+        </Alert>
+        {reinvestigateError && <Alert severity="error">{reinvestigateError}</Alert>}
+        {actionButtons}
+        {showChat && <FindingChatPanel fingerprint={finding.fingerprint} />}
+      </Stack>
     );
   }
 
@@ -218,30 +505,9 @@ function InvestigationDetails({ finding }: { finding: Finding }) {
           </Collapse>
         </Box>
       )}
-      <Box sx={{ pt: 1, display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-        <Button
-          size="small"
-          variant="outlined"
-          color="warning"
-          startIcon={<BugReportIcon />}
-          onClick={() => setBugDialogOpen(true)}
-          sx={{ textTransform: "none" }}
-        >
-          Create Issue
-        </Button>
-        {jiraInfo && (
-          <Chip
-            label={`${jiraInfo.key}${jiraInfo.assignee ? ` > ${jiraInfo.assignee}` : ""}`}
-            size="small"
-            color="info"
-            component="a"
-            href={jiraInfo.url}
-            target="_blank"
-            clickable
-          />
-        )}
-        <CreateBugDialog open={bugDialogOpen} onClose={() => setBugDialogOpen(false)} finding={finding} onCreated={setJiraInfo} />
-      </Box>
+      {reinvestigateError && <Alert severity="error">{reinvestigateError}</Alert>}
+      {actionButtons}
+      {showChat && <FindingChatPanel fingerprint={finding.fingerprint} />}
     </Stack>
   );
 }
@@ -270,6 +536,19 @@ export default function Findings() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
+
+  const handleInvestigationUpdate = (fingerprint: string, investigation: Investigation) => {
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            findings: prev.findings.map((f) =>
+              f.fingerprint === fingerprint ? { ...f, investigation } : f
+            ),
+          }
+        : prev
+    );
+  };
 
   const handleDismiss = async (fingerprint: string) => {
     try {
@@ -383,7 +662,10 @@ export default function Findings() {
             </Box>
           </AccordionSummary>
           <AccordionDetails>
-            <InvestigationDetails finding={f} />
+            <InvestigationDetails
+              finding={f}
+              onInvestigationUpdate={(investigation) => handleInvestigationUpdate(f.fingerprint, investigation)}
+            />
           </AccordionDetails>
         </Accordion>
       ))}

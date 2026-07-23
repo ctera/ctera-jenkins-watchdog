@@ -46,7 +46,7 @@ config:
   schedulerEnabled: "true"
   schedulerScanIntervalMinutes: "60"
   schedulerDeepScanIntervalMinutes: "1440"
-  autoJiraEnabled: "true"
+  autoJiraEnabled: "false"
   autoJiraProject: "CI"
   autoJiraAssigneeEmail: "keynan.levi@ctera.com"
   autoJiraSeverityThreshold: "critical"

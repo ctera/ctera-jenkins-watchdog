@@ -909,7 +909,9 @@ async def finding_chat(fingerprint: str, request: FindingChatRequest):
 async def reinvestigate_finding(fingerprint: str):
     messages = await _load_finding_chat_messages(fingerprint)
     if not messages:
-        return {"status": "error", "message": "No chat session found for this finding"}
+        messages = await _init_finding_chat_messages(fingerprint)
+        if not messages:
+            return {"status": "error", "message": f"Finding not found: {fingerprint}"}
 
     finding = await _get_finding_dict(fingerprint)
     if not finding:

@@ -241,6 +241,10 @@ async def _auto_create_jira_bugs(findings, investigations, diff):
         if finding_severity > threshold:
             continue
 
+        if finding.category == "jenkins_agent" and "offline" in finding.symptom.lower():
+            if "k3s" not in finding.resource.lower():
+                continue
+
         if finding.context.get("jira_issue"):
             continue
 
