@@ -30,6 +30,9 @@ async def _scheduler_loop():
     except Exception:
         pass
 
+    _last_regular_scan = 0
+    _last_deep_scan = time.monotonic()
+
     await asyncio.sleep(50)
 
     while True:
