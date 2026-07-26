@@ -27,6 +27,10 @@ class AgentOfflineCheck:
             name = node.get("displayName", "unknown")
             reason = node.get("offlineCauseReason") or "no reason given"
             temporarily_offline = node.get("temporarilyOffline", False)
+
+            if "unreachable" in reason.lower():
+                continue
+
             severity = "warning" if temporarily_offline else "critical"
 
             findings.append(
