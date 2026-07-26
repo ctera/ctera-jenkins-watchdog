@@ -25,11 +25,12 @@ class AgentOfflineCheck:
                 continue
 
             name = node.get("displayName", "unknown")
+
+            if "k3s" not in name.lower():
+                continue
+
             reason = node.get("offlineCauseReason") or "no reason given"
             temporarily_offline = node.get("temporarilyOffline", False)
-
-            if "unreachable" in reason.lower():
-                continue
 
             severity = "warning" if temporarily_offline else "critical"
 
