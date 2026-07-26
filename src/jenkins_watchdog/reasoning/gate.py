@@ -21,6 +21,10 @@ def should_investigate(
     """Decide whether to investigate. Skips already-investigated high-confidence ongoing findings."""
     existing_investigations = existing_investigations or {}
 
+    if finding.category == "jenkins_agent" and "offline" in finding.symptom.lower():
+        if "k3s" not in finding.resource.lower():
+            return False
+
     existing = existing_investigations.get(finding.fingerprint)
     if existing and isinstance(existing, dict):
         # Deep scan re-investigates ongoing findings for fresh root-cause analysis.
