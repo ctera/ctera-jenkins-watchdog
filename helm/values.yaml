@@ -1,6 +1,6 @@
 image:
   repository: cteraacrdevops.azurecr.io/jenkins-watchdog
-  tag: 0.2.0-fcd1abf
+  tag: 0.2.0-e91a1f8
   pullPolicy: Always
 
 imagePullSecrets:
