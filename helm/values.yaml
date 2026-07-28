@@ -58,12 +58,12 @@ service:
 
 ingress:
   enabled: true
-  host: jenkins-watchdog.platform.ctera.com
+  host: pipelines-guardian.platform.ctera.com
   path: /
   pathType: Prefix
   tls:
     enabled: true
-    secretName: jenkins-watchdog-tls
+    secretName: pipelines-guardian-tls
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
