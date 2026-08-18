@@ -71,20 +71,26 @@ async def _is_cancelled() -> bool:
 
 async def _run_scheduled_scan(deep: bool = False) -> bool:
     """Run a scan programmatically. Returns True if the scan actually ran."""
+    import uuid
+
+    from jenkins_watchdog.api.models import Investigation
+    from jenkins_watchdog.api.router import correlate_findings, deduplicate_findings, priority_score
     from jenkins_watchdog.checks.registry import run_all_checks
-    from jenkins_watchdog.api.router import deduplicate_findings, correlate_findings, priority_score
     from jenkins_watchdog.reasoning.context import gather_cluster_context
     from jenkins_watchdog.reasoning.engine import investigate_finding
     from jenkins_watchdog.reasoning.gate import should_investigate
     from jenkins_watchdog.reasoning.triage import triage_findings
     from jenkins_watchdog.scan_options import ScanOptions, activate_scan_options, reset_scan_options
     from jenkins_watchdog.state import (
-        acquire_lock, release_lock, refresh_lock,
-        compute_diff, get_previous_findings, get_stored_investigations,
-        store_investigations, store_run_result,
+        acquire_lock,
+        compute_diff,
+        get_previous_findings,
+        get_stored_investigations,
+        refresh_lock,
+        release_lock,
+        store_investigations,
+        store_run_result,
     )
-    from jenkins_watchdog.api.models import Investigation
-    import uuid
 
     if not await acquire_lock():
         logger.info("[scheduler] Scan lock busy — skipping scheduled scan")
@@ -230,7 +236,7 @@ async def _run_scheduled_scan(deep: bool = False) -> bool:
 
 async def _auto_create_jira_bugs(findings, investigations, diff):
     """Auto-create Jira bugs for new findings that meet the severity threshold."""
-    from jenkins_watchdog.api.jira import create_bug, CreateBugRequest, _jira_configured
+    from jenkins_watchdog.api.jira import CreateBugRequest, _jira_configured, create_bug
 
     if not _jira_configured():
         logger.debug("[scheduler] Jira not configured — skipping auto-bug creation")

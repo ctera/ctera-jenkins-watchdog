@@ -122,6 +122,9 @@ class ToolCallRecorder:
     deep: bool = False
     tools_used: list[str] = field(default_factory=list)
     returned_chars: int = 0
+    # Called with (bare tool name, succeeded) once execution finishes. The SSE chat paths
+    # need the outcome, and this is the only place that actually knows it.
+    on_result: Callable[[str, bool], Awaitable[None]] | None = None
     _secrets: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
@@ -189,7 +192,13 @@ def build_tool_server(
         # execute_tool never raises; it returns its failures as text. Flagging them with
         # is_error lets the model try a different tool instead of reasoning over an error
         # blob as though it were evidence.
+        #
+        # Both prefixes are checked here because execute_tool emits both. The old chat
+        # paths tested `startswith("Error")`, which never matched either of them, so every
+        # failed tool call was reported to the UI as a success.
         failed = output.startswith(("Unknown tool:", f"Tool execution error ({name})"))
+        if recorder.on_result is not None:
+            await recorder.on_result(name, not failed)
         return {
             "content": [{"type": "text", "text": recorder.bound(output)}],
             "is_error": failed,
@@ -409,6 +418,7 @@ class ClaudeCodeRuntime:
         summary_prompt: str = "",
         on_text: Callable[[str], Awaitable[None]] | None = None,
         on_tool_call: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+        on_tool_result: Callable[[str, bool], Awaitable[None]] | None = None,
     ) -> AgentTurn:
         """Run the tool loop. The SDK owns the turns; we own the tools.
 
@@ -416,7 +426,7 @@ class ClaudeCodeRuntime:
         longer have: a TextBlock is reasoning, a ToolUseBlock is a tool call. That keeps
         the events in the order they happened for free.
         """
-        recorder = ToolCallRecorder(deep=scan_options.deep)
+        recorder = ToolCallRecorder(deep=scan_options.deep, on_result=on_tool_result)
         server, _ = build_tool_server(recorder, scan_options)
         options = self.options(
             system_prompt=system_prompt,

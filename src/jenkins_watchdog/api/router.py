@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from jenkins_watchdog.api.models import (
@@ -21,8 +22,10 @@ from jenkins_watchdog.checks.agent_utils import group_agent_findings
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.checks.registry import run_all_checks
 from jenkins_watchdog.clients.valkey import get_valkey_client
+from jenkins_watchdog.config import settings
+from jenkins_watchdog.reasoning.chat_stream import render_transcript, stream_chat
 from jenkins_watchdog.reasoning.context import gather_cluster_context
-from jenkins_watchdog.reasoning.engine import investigate_finding
+from jenkins_watchdog.reasoning.engine import _parse_investigation, get_runtime, investigate_finding
 from jenkins_watchdog.reasoning.gate import should_investigate
 from jenkins_watchdog.reasoning.triage import triage_findings
 from jenkins_watchdog.scan_options import ScanOptions, activate_scan_options, reset_scan_options
@@ -650,15 +653,11 @@ async def reset_state():
     return {"status": "reset", "message": "All state cleared. Next scan will treat all findings as new."}
 
 
-import litellm
-from pydantic import BaseModel
-
-from jenkins_watchdog.config import settings
-from jenkins_watchdog.reasoning.engine import _parse_investigation
-from jenkins_watchdog.tools import ALL_TOOL_DEFINITIONS, execute_tool
-
 _FINDING_CHAT_TTL = 604800
-_FINDING_CHAT_KEY_PREFIX = "watchdog:chat:finding:"
+# Prefix bumped with the transport swap: sessions stored by the LiteLLM path hold
+# OpenAI-shaped messages with tool_calls/tool_call_id, which this path cannot replay.
+# Ignoring them is cheaper and safer than parsing them, and they expire on their own.
+_FINDING_CHAT_KEY_PREFIX = "watchdog:chat:finding:v2:"
 
 _FINDING_CHAT_SYSTEM = """You are an expert Jenkins CI/CD and Kubernetes platform engineer investigating a production issue.
 You have access to tools that query real-time state: Kubernetes API, Jenkins API, and Prometheus metrics.
@@ -704,13 +703,6 @@ class FindingChatRequest(BaseModel):
 
 def _finding_chat_key(fingerprint: str) -> str:
     return f"{_FINDING_CHAT_KEY_PREFIX}{fingerprint}"
-
-
-def _finding_chat_model_chain() -> list[str]:
-    models = [settings.llm_model]
-    if settings.llm_fallback_models:
-        models.extend(m.strip() for m in settings.llm_fallback_models.split(",") if m.strip())
-    return models
 
 
 async def _load_finding_chat_messages(fingerprint: str) -> list[dict] | None:
@@ -785,38 +777,18 @@ def _visible_chat_messages(messages: list[dict]) -> list[dict]:
     return visible
 
 
-async def _init_finding_chat_messages(fingerprint: str) -> list[dict] | None:
+async def _finding_chat_system_prompt(fingerprint: str) -> str | None:
+    """Rebuilt per turn rather than frozen into the stored transcript.
+
+    A reinvestigate can rewrite the stored investigation mid-conversation; recomputing
+    means the next turn sees the corrected root cause instead of the one that was current
+    when the chat opened.
+    """
     finding = await _get_finding_dict(fingerprint)
     if not finding:
         return None
     investigation = await _get_investigation_dict(fingerprint)
-    return [{"role": "system", "content": _format_finding_chat_system_prompt(finding, investigation)}]
-
-
-async def _call_finding_chat_llm(
-    model_chain: list[str],
-    messages: list[dict],
-    *,
-    tools: list[dict] | None = ALL_TOOL_DEFINITIONS,
-):
-    last_error = None
-    for model in model_chain:
-        try:
-            kwargs = {
-                "model": model,
-                "messages": messages,
-                "temperature": settings.llm_temperature,
-                "max_tokens": settings.llm_max_tokens,
-                "api_key": settings.anthropic_api_key,
-            }
-            if tools is not None:
-                kwargs["tools"] = tools
-            return await litellm.acompletion(**kwargs)
-        except Exception as e:
-            last_error = e
-            logger.warning("Finding chat LLM call failed for model %s: %s", model, e)
-            await asyncio.sleep(1)
-    raise last_error or RuntimeError("All models failed")
+    return _format_finding_chat_system_prompt(finding, investigation)
 
 
 def _merge_investigation(existing: dict | None, corrected: Investigation, fingerprint: str) -> dict:
@@ -839,95 +811,74 @@ async def get_finding_chat(fingerprint: str):
 
 @router.post("/findings/{fingerprint}/chat")
 async def finding_chat(fingerprint: str, request: FindingChatRequest):
-    messages = await _load_finding_chat_messages(fingerprint)
-    if messages is None:
-        messages = await _init_finding_chat_messages(fingerprint)
-        if messages is None:
-            async def _not_found_stream():
-                yield {"data": json.dumps({"type": "error", "message": f"Finding not found: {fingerprint}"})}
-            return _scan_sse(_not_found_stream())
+    system_prompt = await _finding_chat_system_prompt(fingerprint)
+    if system_prompt is None:
+        async def _not_found_stream():
+            yield {"data": json.dumps({"type": "error", "message": f"Finding not found: {fingerprint}"})}
 
-    messages.append({"role": "user", "content": request.message})
+        return _scan_sse(_not_found_stream())
+
+    transcript = await _load_finding_chat_messages(fingerprint) or []
 
     async def event_stream():
-        model_chain = _finding_chat_model_chain()
-
-        for _ in range(settings.max_tool_rounds):
-            try:
-                response = await _call_finding_chat_llm(model_chain, messages)
-            except Exception as e:
-                yield {"data": json.dumps({"type": "error", "content": str(e)})}
-                return
-
-            choice = response.choices[0].message
-            content = choice.content or ""
-            tool_calls = choice.tool_calls or []
-
-            assistant_msg: dict = {"role": "assistant", "content": content or None}
-            if tool_calls:
-                assistant_msg["tool_calls"] = [
+        runtime = get_runtime()
+        if not runtime.configured:
+            yield {
+                "data": json.dumps(
                     {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        "type": "error",
+                        "content": (
+                            "Reasoning is disabled: WATCHDOG_CLAUDE_CODE_OAUTH_TOKEN is not set. "
+                            "Mint one with `claude setup-token`."
+                        ),
                     }
-                    for tc in tool_calls
-                ]
-            messages.append(assistant_msg)
+                )
+            }
+            return
 
-            if content:
-                yield {"data": json.dumps({"type": "token", "content": content})}
+        async for event in stream_chat(
+            runtime=runtime,
+            system_prompt=system_prompt,
+            transcript=transcript,
+            user_message=request.message,
+            max_turns=settings.max_tool_rounds,
+            done_payload={"fingerprint": fingerprint},
+        ):
+            yield event
 
-            if not tool_calls:
-                await _save_finding_chat_messages(fingerprint, messages)
-                yield {"data": json.dumps({"type": "done", "fingerprint": fingerprint})}
-                return
-
-            for tc in tool_calls:
-                tool_name = tc.function.name
-                try:
-                    tool_args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    tool_args = {}
-
-                yield {"data": json.dumps({"type": "tool_start", "tool_name": tool_name, "tool_args": tool_args})}
-
-                result = await execute_tool(tool_name, tool_args)
-                success = not result.startswith("Error") and not result.startswith("Unknown tool")
-
-                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-                yield {"data": json.dumps({"type": "tool_result", "tool_name": tool_name, "success": success})}
-
-        await _save_finding_chat_messages(fingerprint, messages)
-        yield {"data": json.dumps({"type": "token", "content": "\n\n(Reached tool call limit — showing partial results)"})}
-        yield {"data": json.dumps({"type": "done", "fingerprint": fingerprint})}
+        await _save_finding_chat_messages(fingerprint, transcript)
 
     return _scan_sse(event_stream())
 
 
 @router.post("/findings/{fingerprint}/reinvestigate")
 async def reinvestigate_finding(fingerprint: str):
-    messages = await _load_finding_chat_messages(fingerprint)
-    if not messages:
-        messages = await _init_finding_chat_messages(fingerprint)
-        if not messages:
-            return {"status": "error", "message": f"Finding not found: {fingerprint}"}
-
-    finding = await _get_finding_dict(fingerprint)
-    if not finding:
+    system_prompt = await _finding_chat_system_prompt(fingerprint)
+    if system_prompt is None:
         return {"status": "error", "message": f"Finding not found: {fingerprint}"}
 
+    runtime = get_runtime()
+    if not runtime.configured:
+        return {"status": "error", "message": "WATCHDOG_CLAUDE_CODE_OAUTH_TOKEN is not set"}
+
+    transcript = await _load_finding_chat_messages(fingerprint) or []
     existing = await _get_investigation_dict(fingerprint)
-    messages.append({"role": "user", "content": _CORRECTION_PROMPT})
 
     try:
-        response = await _call_finding_chat_llm(_finding_chat_model_chain(), messages, tools=None)
+        # Tool-free, as before: this pass only re-renders the conclusion the chat already
+        # reached into the structured shape, so it must not go gathering fresh evidence.
+        turn = await runtime.complete(
+            system_prompt=system_prompt,
+            prompt=render_transcript(transcript, _CORRECTION_PROMPT),
+        )
     except Exception as e:
+        logger.error("Reinvestigate failed for %s: %s", fingerprint, e)
         return {"status": "error", "message": str(e)}
 
-    content = response.choices[0].message.content or ""
-    messages.append({"role": "assistant", "content": content})
-    await _save_finding_chat_messages(fingerprint, messages)
+    content = turn.content
+    transcript.append({"role": "user", "content": _CORRECTION_PROMPT})
+    transcript.append({"role": "assistant", "content": content})
+    await _save_finding_chat_messages(fingerprint, transcript)
 
     tools_used = (existing or {}).get("tools_used", [])
     corrected = _parse_investigation(content, fingerprint, tools_used)
