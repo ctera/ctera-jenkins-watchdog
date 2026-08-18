@@ -3,16 +3,12 @@
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
-
-import litellm
 
 from jenkins_watchdog.checks.base import Finding
-from jenkins_watchdog.config import settings
+from jenkins_watchdog.reasoning.engine import get_runtime
+from jenkins_watchdog.reasoning.prompt_files import read_prompt
 
 logger = logging.getLogger(__name__)
-
-PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
 _TRIAGE_PROMPT = """You are triaging findings from a Jenkins CI/CD cluster scan. For each finding, classify it as one of:
 
@@ -70,11 +66,10 @@ class TriageResult:
 
 
 def _load_triage_context() -> str:
-    prompt_file = PROMPTS_DIR / "system.md"
-    if not prompt_file.exists():
+    content = read_prompt("system.md")
+    if not content:
         return ""
 
-    content = prompt_file.read_text()
     sections = []
     for header in (
         "## Known normal behaviors",
@@ -116,40 +111,31 @@ async def triage_findings(
     if not findings:
         return TriageResult()
 
-    if not settings.anthropic_api_key:
-        logger.warning("No API key — skipping triage, all findings proceed to investigation")
+    runtime = get_runtime()
+    if not runtime.configured:
+        logger.warning("No Claude Code OAuth token — skipping triage, all findings proceed to investigation")
         return TriageResult(to_investigate=list(findings))
 
     context = _load_triage_context()
     prompt = _TRIAGE_PROMPT + _format_findings_for_triage(findings)
 
-    messages = [
-        {"role": "system", "content": f"Platform context:\n{context}\n\n{cluster_context}"},
-        {"role": "user", "content": prompt},
-    ]
-
     try:
-        response = await litellm.acompletion(
-            model=settings.llm_model,
-            messages=messages,
-            tools=None,
-            temperature=0.0,
-            max_tokens=2048,
-            api_key=settings.anthropic_api_key,
+        # Tool-free: triage classifies from the finding summaries alone. Giving it tools
+        # would turn the cheap pre-filter into a second investigation pass.
+        turn = await runtime.complete(
+            system_prompt=f"Platform context:\n{context}\n\n{cluster_context}",
+            prompt=prompt,
         )
     except Exception as e:
-        logger.error("Triage LLM call failed, all findings proceed to investigation: %s", e)
+        # Fail open: triage only decides what is worth investigating, so a triage outage
+        # should cost tokens, not coverage.
+        logger.error("Triage call failed, all findings proceed to investigation: %s", e)
         return TriageResult(to_investigate=list(findings))
 
-    content = response.choices[0].message.content or ""
-
-    usage = getattr(response, "usage", None)
-    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-    try:
-        cost = litellm.completion_cost(completion_response=response)
-    except Exception:
-        cost = (prompt_tokens * 3.0 / 1_000_000) + (completion_tokens * 15.0 / 1_000_000)
+    content = turn.content
+    prompt_tokens = turn.prompt_tokens
+    completion_tokens = turn.completion_tokens
+    cost = turn.cost_usd
 
     classifications = _parse_triage_response(content, len(findings))
     logger.info(

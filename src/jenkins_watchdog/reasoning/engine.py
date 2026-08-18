@@ -1,43 +1,38 @@
-"""LiteLLM tool-use reasoning engine — investigates findings by calling cluster tools."""
+"""Claude Code reasoning engine — investigates findings by calling cluster tools."""
 
 import asyncio
 import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
-
-import litellm
 
 from jenkins_watchdog.api.models import Investigation
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.config import settings
-from jenkins_watchdog.scan_options import get_scan_options
-from jenkins_watchdog.tools import ALL_TOOL_DEFINITIONS, execute_tool
+from jenkins_watchdog.reasoning.claude_agent import ClaudeCodeRuntime
+from jenkins_watchdog.reasoning.prompt_files import read_prompt
+from jenkins_watchdog.scan_options import ScanOptions, get_scan_options
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
-
-_RETRYABLE_EXCEPTIONS = (
-    litellm.ServiceUnavailableError,
-    litellm.InternalServerError,
-    litellm.RateLimitError,
-    litellm.Timeout,
-)
+_runtime: ClaudeCodeRuntime | None = None
 
 
-def _get_model_chain() -> list[str]:
-    models = [settings.llm_model]
-    if settings.llm_fallback_models:
-        models.extend(m.strip() for m in settings.llm_fallback_models.split(",") if m.strip())
-    return models
+def get_runtime() -> ClaudeCodeRuntime:
+    """The shared Claude Code runtime.
+
+    Built lazily rather than at import: its semaphore binds to the event loop that creates
+    it, and importing this module does not mean an event loop exists yet.
+    """
+    global _runtime
+    if _runtime is None:
+        _runtime = ClaudeCodeRuntime()
+    return _runtime
 
 
 def _load_system_prompt(*, deep: bool = False) -> str:
-    prompt_file = PROMPTS_DIR / "system.md"
-    base = prompt_file.read_text() if prompt_file.exists() else (
+    base = read_prompt("system.md") or (
         "You are a Jenkins platform engineer investigating CI/CD issues on a k3s cluster using tools."
     )
     if not deep:
@@ -121,15 +116,20 @@ async def run_tool_loop(
     system_prompt: str,
     user_prompt: str,
     max_rounds: int | None = None,
-    max_tokens: int | None = None,
-    model_chain: list[str] | None = None,
+    scan_options: ScanOptions | None = None,
     on_progress: ProgressCallback | None = None,
     label: str = "tool_loop",
     summary_prompt: str = "Summarize your findings so far. What is the root cause, impact, and fix?",
 ) -> ToolLoopResult:
-    """Reusable LLM tool-use loop for investigations."""
-    if not settings.anthropic_api_key:
-        logger.warning("[%s] No Anthropic API key — skipping", label)
+    """Reusable agentic tool-use loop for investigations.
+
+    The SDK owns the turns now, but the contract is unchanged: on a missing credential this
+    logs and returns an empty result rather than raising, and investigate_finding turns
+    that into "no investigation" so a scan still reports its findings.
+    """
+    runtime = get_runtime()
+    if not runtime.configured:
+        logger.warning("[%s] No Claude Code OAuth token — skipping", label)
         return ToolLoopResult()
 
     async def _emit(event: dict) -> None:
@@ -138,79 +138,38 @@ async def run_tool_loop(
             if asyncio.iscoroutine(result):
                 await result
 
-    max_rounds = max_rounds or settings.max_tool_rounds
-    model_chain = model_chain or _get_model_chain()
+    scan_options = scan_options or get_scan_options()
+    # An SDK turn counts assistant messages, not tool rounds, so this is a looser bound
+    # than max_tool_rounds was — a turn may carry several parallel tool calls.
+    max_turns = max_rounds or settings.max_tool_rounds
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    tools_used: list[str] = []
-    total_prompt_tokens = 0
-    total_completion_tokens = 0
-    total_cost = 0.0
-    raw_reasoning_parts: list[str] = []
+    async def on_text(text: str) -> None:
+        await _emit({"type": "reasoning", "content": text[:500]})
 
-    for iteration in range(max_rounds):
-        logger.debug("[%s] Round %d", label, iteration + 1)
+    async def on_tool_call(name: str, args: dict[str, Any]) -> None:
+        logger.info("[%s] Calling tool: %s(%s)", label, name, list(args.keys()))
+        await _emit({"type": "tool_call", "tool": name, "args": args})
 
-        content, tool_calls, usage = await _call_with_fallback(
-            model_chain=model_chain,
-            messages=messages,
-            tools=ALL_TOOL_DEFINITIONS,
-            max_tokens=max_tokens,
+    try:
+        turn = await runtime.run_agent(
+            system_prompt=system_prompt,
+            prompt=user_prompt,
+            scan_options=scan_options,
+            max_turns=max_turns,
+            summary_prompt=summary_prompt,
+            on_text=on_text,
+            on_tool_call=on_tool_call,
         )
-        total_prompt_tokens += usage[0]
-        total_completion_tokens += usage[1]
-        total_cost += usage[2]
-
-        assistant_message: dict = {"role": "assistant", "content": content or None}
-        if tool_calls:
-            assistant_message["tool_calls"] = tool_calls
-        messages.append(assistant_message)
-
-        if content:
-            raw_reasoning_parts.append(content)
-            await _emit({"type": "reasoning", "content": content[:500]})
-
-        if not tool_calls:
-            break
-
-        for tc in tool_calls:
-            tool_name = tc["function"]["name"]
-            try:
-                tool_args = json.loads(tc["function"]["arguments"])
-            except json.JSONDecodeError:
-                tool_args = {}
-
-            await _emit({"type": "tool_call", "tool": tool_name, "args": tool_args})
-            logger.info("[%s] Calling tool: %s(%s)", label, tool_name, list(tool_args.keys()))
-            result = await execute_tool(tool_name, tool_args)
-            tools_used.append(tool_name)
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": result,
-            })
-    else:
-        logger.warning("[%s] Hit max tool rounds (%d)", label, max_rounds)
-        messages.append({"role": "user", "content": summary_prompt})
-        content, _, usage = await _call_with_fallback(
-            model_chain=model_chain, messages=messages, tools=None, max_tokens=max_tokens,
-        )
-        total_prompt_tokens += usage[0]
-        total_completion_tokens += usage[1]
-        total_cost += usage[2]
-        if content:
-            raw_reasoning_parts.append(content)
+    except Exception as e:
+        logger.error("[%s] Agent run failed: %s", label, e)
+        return ToolLoopResult()
 
     return ToolLoopResult(
-        raw_reasoning="\n\n".join(raw_reasoning_parts),
-        tools_used=tools_used,
-        prompt_tokens=total_prompt_tokens,
-        completion_tokens=total_completion_tokens,
-        cost_usd=total_cost,
+        raw_reasoning=turn.content,
+        tools_used=turn.tools_used,
+        prompt_tokens=turn.prompt_tokens,
+        completion_tokens=turn.completion_tokens,
+        cost_usd=turn.cost_usd,
     )
 
 
@@ -220,7 +179,7 @@ async def investigate_finding(
     cluster_context: str = "",
     all_findings: list[Finding] | None = None,
 ) -> Investigation | None:
-    """Run LiteLLM tool-use loop to investigate a single finding."""
+    """Run the Claude Code tool-use loop to investigate a single finding."""
     scan_opts = get_scan_options()
     system_prompt = _load_system_prompt(deep=scan_opts.deep)
     if cluster_context:
@@ -236,6 +195,7 @@ async def investigate_finding(
         system_prompt=system_prompt,
         user_prompt=_format_investigation_prompt(finding, all_findings, deep=scan_opts.deep),
         max_rounds=scan_opts.max_tool_rounds,
+        scan_options=scan_opts,
         on_progress=on_progress,
         label=f"investigate:{finding.resource}",
         summary_prompt=summary_prompt,
@@ -244,12 +204,10 @@ async def investigate_finding(
     if not loop_result.raw_reasoning and not loop_result.tools_used:
         return None
 
-    model_chain = _get_model_chain()
     inv = await _extract_structured_output(
         raw_reasoning=loop_result.raw_reasoning,
         finding=finding,
         tools_used=loop_result.tools_used,
-        model_chain=model_chain,
         deep=scan_opts.deep,
     )
 
@@ -305,26 +263,21 @@ async def _extract_structured_output(
     raw_reasoning: str,
     finding: Finding,
     tools_used: list[str],
-    model_chain: list[str],
     *,
     deep: bool = False,
 ) -> Investigation:
     extraction_prompt = _EXTRACTION_PROMPT_DEEP if deep else _EXTRACTION_PROMPT
-    messages = [
-        {"role": "user", "content": f"{extraction_prompt}\n{raw_reasoning[:12000 if deep else 8000]}"},
-    ]
+    prompt = f"{extraction_prompt}\n{raw_reasoning[:12000 if deep else 8000]}"
 
     try:
-        content, _, usage = await _call_with_fallback(
-            model_chain=model_chain,
-            messages=messages,
-            tools=None,
-            max_tokens=1024,
+        turn = await get_runtime().complete(
+            system_prompt="You extract structured JSON from an investigation write-up.",
+            prompt=prompt,
         )
-        inv = _parse_investigation(content or "", finding.fingerprint, tools_used)
-        inv.prompt_tokens = usage[0]
-        inv.completion_tokens = usage[1]
-        inv.estimated_cost_usd = usage[2]
+        inv = _parse_investigation(turn.content or "", finding.fingerprint, tools_used)
+        inv.prompt_tokens = turn.prompt_tokens
+        inv.completion_tokens = turn.completion_tokens
+        inv.estimated_cost_usd = turn.cost_usd
         return inv
     except Exception as e:
         logger.error("[extract:%s] Extraction pass failed: %s", finding.resource, e)
@@ -338,72 +291,6 @@ async def _extract_structured_output(
             tools_used=tools_used,
             raw_reasoning=raw_reasoning,
         )
-
-
-async def _call_with_fallback(
-    model_chain: list[str],
-    messages: list[dict],
-    tools: list[dict] | None,
-    max_tokens: int | None = None,
-) -> tuple[str, list[dict], tuple[int, int, float]]:
-    last_error: Exception | None = None
-    max_attempts = settings.llm_max_retries + 1
-
-    for model in model_chain:
-        for attempt in range(max_attempts):
-            try:
-                response = await litellm.acompletion(
-                    model=model,
-                    messages=messages,
-                    tools=tools if tools else None,
-                    temperature=settings.llm_temperature,
-                    max_tokens=max_tokens or settings.llm_max_tokens,
-                    api_key=settings.anthropic_api_key,
-                )
-
-                choice = response.choices[0].message
-                content = choice.content or ""
-                tool_calls = []
-
-                if choice.tool_calls:
-                    for tc in choice.tool_calls:
-                        tool_calls.append({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        })
-
-                usage = getattr(response, "usage", None)
-                prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-
-                try:
-                    cost = litellm.completion_cost(completion_response=response)
-                except Exception:
-                    cost = (prompt_tokens * 3.0 / 1_000_000) + (completion_tokens * 15.0 / 1_000_000)
-
-                return content, tool_calls, (prompt_tokens, completion_tokens, cost)
-
-            except _RETRYABLE_EXCEPTIONS as e:
-                last_error = e
-                is_last_attempt = attempt == max_attempts - 1
-                if not is_last_attempt:
-                    backoff = min(2 ** attempt, 8)
-                    logger.warning("Model %s attempt %d failed (retrying in %ds): %s", model, attempt + 1, backoff, e)
-                    await asyncio.sleep(backoff)
-                else:
-                    logger.warning("Model %s exhausted retries, trying fallback: %s", model, e)
-                    break
-
-            except Exception as e:
-                last_error = e
-                logger.error("Non-retryable error on model %s: %s", model, e)
-                break
-
-    raise last_error or RuntimeError("All models failed")
 
 
 def _extract_json_from_text(text: str) -> str | None:

@@ -14,7 +14,10 @@ resources:
     memory: 512Mi
     cpu: 100m
   limits:
-    memory: 1Gi
+    # Raised from 1Gi: this deployment had already been OOMKilled hundreds of times at
+    # that limit, and each investigation now also spawns a Claude Code subprocess.
+    # llmMaxConcurrentAgents bounds how many run at once.
+    memory: 3Gi
 
 config:
   port: "8000"
@@ -29,13 +32,17 @@ config:
   valkeyHost: "valkey-primary.valkey.svc.cluster.local"
   valkeyPort: "6379"
   valkeySsl: "false"
-  llmModel: "anthropic/claude-sonnet-4-6"
-  llmFallbackModels: "anthropic/claude-opus-4-6"
-  llmTemperature: "0.1"
-  llmMaxTokens: "4096"
-  llmMaxRetries: "2"
-  maxToolRounds: "10"
-  maxInvestigationsPerScan: "10"
+  # Bare model ids — the litellm "anthropic/" provider prefix is not a thing the
+  # Claude Code CLI accepts.
+  llmModel: "claude-sonnet-5"
+  llmFallbackModel: "claude-opus-5"
+  # Every agent call is a CLI subprocess of a few hundred MB, so this is the real memory
+  # bound on a scan, not a politeness knob. Raise it only alongside resources.limits.
+  llmMaxConcurrentAgents: "2"
+  llmAgentIdleTimeoutS: "180"
+  promptsDir: "/app/prompts"
+  maxToolRounds: "15"
+  maxInvestigationsPerScan: "12"
   oidcIssuer: ""
   oidcClientId: "jenkins-watchdog"
   oidcRedirectUri: ""
@@ -50,6 +57,10 @@ config:
   autoJiraProject: "CI"
   autoJiraAssigneeEmail: "keynan.levi@ctera.com"
   autoJiraSeverityThreshold: "critical"
+
+# Writable $HOME for the Claude Code CLI's session state. See deployment.yaml.
+agentHome:
+  sizeLimit: 512Mi
 
 service:
   type: ClusterIP
@@ -90,7 +101,7 @@ externalSecrets:
   enabled: false
   secretStoreName: ""
   secretStoreKind: ClusterSecretStore
-  anthropicApiKey: ""
+  claudeCodeOauthToken: ""
   jenkinsToken: ""
   oidcClientSecret: ""
   jiraApiToken: ""

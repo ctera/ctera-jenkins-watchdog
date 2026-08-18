@@ -83,7 +83,7 @@ async def gather_cluster_context() -> str:
                     ns = metric.get("namespace", "")
                     alert_lines.append(f"  - [{severity}] {name}" + (f" (ns={ns})" if ns else ""))
                 sections.append(
-                    f"## Firing Prometheus Alerts\n"
+                    "## Firing Prometheus Alerts\n"
                     + "\n".join(alert_lines) + "\n"
                 )
     except Exception as e:

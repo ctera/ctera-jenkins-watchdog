@@ -7,7 +7,9 @@ import uvicorn
 
 from jenkins_watchdog.config import settings
 
-_CLI_MODES = frozenset({"dry-run", "quick", "normal", "deep"})
+# Must stay in sync with cli.py's `mode` choices — the two lists are separate because
+# the CLI module is imported lazily, so server startup never pays for the agent stack.
+_CLI_MODES = frozenset({"dry-run", "quick", "normal", "deep", "llm-health"})
 
 
 def _run_server() -> None:

@@ -19,11 +19,27 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/uvicorn
 
+# The agent spawns the `claude` CLI per call. No node/npm is needed: the claude-agent-sdk
+# wheel bundles the binary and the SDK prefers it over $PATH. Fail the build if it is
+# missing or unrunnable — installing from an sdist (no wheel for the platform) silently
+# yields an SDK with no binary, and that would otherwise surface as every investigation
+# dying at runtime.
+RUN /usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude --version
+
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY frontend/dist ./frontend/dist
 
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    HOME=/home/watchdog \
+    WATCHDOG_CLAUDE_CONFIG_DIR=/home/watchdog/.claude-home \
+    WATCHDOG_PROMPTS_DIR=/app/prompts \
+    DISABLE_AUTOUPDATER=1
+# The CLI writes session state under its config dir, so it must be writable. It must also
+# stay EMPTY of credentials: that emptiness is what forces the OAuth token to be the only
+# way in, so a revoked token fails loud instead of resolving some other identity.
+# DISABLE_AUTOUPDATER keeps the pinned CLI pinned.
+RUN mkdir -p /home/watchdog/.claude-home && chmod 0700 /home/watchdog/.claude-home
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

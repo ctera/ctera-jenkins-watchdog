@@ -8,6 +8,19 @@ on:
       - 'docs/**'
 
 jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, not just the diff — a secret committed earlier in the
+          # branch and reverted later is still in the objects that get pushed.
+          fetch-depth: 0
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -21,3 +34,26 @@ jobs:
         run: ruff check src/ tests/
       - name: Test
         run: pytest tests/ -v --tb=short
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stub the frontend bundle
+        # frontend/dist is gitignored and built by release.yml, but the Dockerfile COPYs
+        # it. This job only exercises the Python layer and the bundled CLI, so a stub is
+        # enough — and avoids paying for an npm build on every PR.
+        run: mkdir -p frontend/dist && echo '<!doctype html>' > frontend/dist/index.html
+      - name: Build image
+        run: docker build -t jenkins-watchdog:pr .
+      - name: The bundled claude CLI must survive into the final stage
+        # Exit 2 is "unconfigured": CI legitimately has no token. What this proves is that
+        # the CLI resolved — the probe checks the binary BEFORE the token, so a build that
+        # shipped no usable CLI exits 1 here instead of hiding behind "unconfigured".
+        run: |
+          set +e
+          docker run --rm jenkins-watchdog:pr python -m jenkins_watchdog llm-health --shallow
+          status=$?
+          set -e
+          echo "llm-health --shallow exited ${status}"
+          test "${status}" -eq 2

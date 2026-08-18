@@ -13,7 +13,12 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "pydantic-settings>=2.6.0",
     "httpx>=0.27.0",
-    "litellm>=1.55.0",
+    # Ships the `claude` CLI binary inside the wheel (claude_agent_sdk/_bundled/claude),
+    # which the SDK prefers over $PATH. So this pin fixes BOTH the SDK and the CLI every
+    # investigation runs on — review it deliberately on each bump, because a CLI change is
+    # a behaviour change, not a dependency chore. An sdist carries no binary; the Dockerfile
+    # asserts `--version` at build time so that case fails the build, not production.
+    "claude-agent-sdk==0.2.139",
     "orjson>=3.10.0",
     "valkey[libvalkey]>=6.0.0",
     "kubernetes>=31.0.0",

@@ -45,9 +45,15 @@ _SEVERITY_ORDER = {"critical": 0, "warning": 1, "low": 2}
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Jenkins Watchdog CLI")
-    parser.add_argument("mode", choices=["dry-run", "quick", "normal", "deep"])
+    # Keep in sync with _CLI_MODES in __main__.py.
+    parser.add_argument("mode", choices=["dry-run", "quick", "normal", "deep", "llm-health"])
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument("--max-investigations", type=int, default=None)
+    parser.add_argument(
+        "--shallow",
+        action="store_true",
+        help="llm-health: check presence only, without spending a real call",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -60,11 +66,40 @@ def main() -> None:
 
 
 async def _run(args: argparse.Namespace) -> int:
+    if args.mode == "llm-health":
+        return await _llm_health(args)
     if args.mode == "dry-run":
         return await _dry_run(args)
     if args.mode == "quick":
         return await _quick_scan(args)
     return await _full_scan(args)
+
+
+async def _llm_health(args: argparse.Namespace) -> int:
+    """Can the agent actually authenticate?
+
+    Exit 0 healthy, 2 for auth-failed or unconfigured (a deployment problem an operator
+    fixes by setting or rotating the token), 1 for anything else — a broken image, an
+    unreachable network. CI runs this shallow and expects 2, which proves the bundled CLI
+    survived into the final image without needing a credential to do it.
+    """
+    from jenkins_watchdog.reasoning.claude_auth import (
+        STATUS_AUTH_FAILED,
+        STATUS_UNCONFIGURED,
+        ClaudeCredentials,
+    )
+    from jenkins_watchdog.reasoning.claude_health import deep_probe, shallow_probe
+
+    credentials = ClaudeCredentials.from_settings(settings)
+    result = shallow_probe(credentials) if args.shallow else await deep_probe(credentials)
+
+    print(json.dumps({"status": result.status, "mode": result.mode, "detail": result.detail}, indent=2))
+
+    if result.ok:
+        return 0
+    if result.status in (STATUS_AUTH_FAILED, STATUS_UNCONFIGURED):
+        return 2
+    return 1
 
 
 async def _dry_run(args: argparse.Namespace) -> int:
