@@ -1,0 +1,36 @@
+# Secret scanning for this repo.
+#
+# gitleaks' bundled Anthropic rules cover sk-ant-api03- (API keys) and sk-ant-admin01-,
+# but NOT sk-ant-oat01- — the Claude Code OAuth token this service now authenticates
+# with. That is the one credential most likely to be pasted into a file here, so the
+# default ruleset would have missed exactly the secret this repo cares about.
+
+title = "jenkins-watchdog"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-oauth-token"
+description = "Claude Code OAuth token (claude setup-token)"
+regex = '''sk-ant-oat01-[A-Za-z0-9_\-]{20,}'''
+keywords = ["sk-ant-oat01"]
+
+[[rules]]
+id = "anthropic-api-key-any"
+description = "Anthropic API key, any generation"
+regex = '''sk-ant-(api|admin)[0-9]{2}-[A-Za-z0-9_\-]{20,}'''
+keywords = ["sk-ant-api", "sk-ant-admin"]
+
+[allowlist]
+description = "Test fixtures and documentation placeholders"
+regexTarget = "match"
+regexes = [
+  # Deliberately invalid values used in tests and docs. Kept narrow: they must not look
+  # like a real token beyond the prefix.
+  '''sk-ant-oat01-(test|x|deliberatelyinvalid)[A-Za-z0-9_\-]*''',
+  '''sk-ant-api03-(xxx|test)[A-Za-z0-9_\-]*''',
+]
+paths = [
+  '''\.gitleaks\.toml$''',
+]

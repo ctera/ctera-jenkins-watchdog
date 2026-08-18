@@ -18,10 +18,10 @@ data:
   WATCHDOG_VALKEY_PORT: {{ .Values.config.valkeyPort | quote }}
   WATCHDOG_VALKEY_SSL: {{ .Values.config.valkeySsl | quote }}
   WATCHDOG_LLM_MODEL: {{ .Values.config.llmModel | quote }}
-  WATCHDOG_LLM_FALLBACK_MODELS: {{ .Values.config.llmFallbackModels | quote }}
-  WATCHDOG_LLM_TEMPERATURE: {{ .Values.config.llmTemperature | quote }}
-  WATCHDOG_LLM_MAX_TOKENS: {{ .Values.config.llmMaxTokens | quote }}
-  WATCHDOG_LLM_MAX_RETRIES: {{ .Values.config.llmMaxRetries | quote }}
+  WATCHDOG_LLM_FALLBACK_MODEL: {{ .Values.config.llmFallbackModel | quote }}
+  WATCHDOG_LLM_MAX_CONCURRENT_AGENTS: {{ .Values.config.llmMaxConcurrentAgents | quote }}
+  WATCHDOG_LLM_AGENT_IDLE_TIMEOUT_S: {{ .Values.config.llmAgentIdleTimeoutS | quote }}
+  WATCHDOG_PROMPTS_DIR: {{ .Values.config.promptsDir | quote }}
   WATCHDOG_MAX_TOOL_ROUNDS: {{ .Values.config.maxToolRounds | quote }}
   WATCHDOG_MAX_INVESTIGATIONS_PER_SCAN: {{ .Values.config.maxInvestigationsPerScan | quote }}
   WATCHDOG_OIDC_ISSUER: {{ .Values.config.oidcIssuer | quote }}

@@ -20,6 +20,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -e ".[dev]"
+      # PR builds lint but this job did not, so a lint regression could reach main via a
+      # direct push and only surface on the next PR.
+      - run: ruff check src/ tests/
       - run: pytest tests/ -v --tb=short
 
   build-and-push:

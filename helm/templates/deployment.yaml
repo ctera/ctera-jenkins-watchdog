@@ -25,6 +25,13 @@ spec:
       {{- end }}
       serviceAccountName: {{ include "jenkins-watchdog.fullname" . }}
       terminationGracePeriodSeconds: 30
+      volumes:
+        # The Claude Code CLI writes session state under $HOME/.claude-home. Disk-backed,
+        # not medium: Memory — a tmpfs would count against the container's memory limit,
+        # which is the one thing this deployment cannot spare.
+        - name: agent-home
+          emptyDir:
+            sizeLimit: {{ .Values.agentHome.sizeLimit }}
       containers:
         - name: watchdog
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -42,6 +49,9 @@ spec:
             - secretRef:
                 name: {{ include "jenkins-watchdog.fullname" . }}-secrets
             {{- end }}
+          volumeMounts:
+            - name: agent-home
+              mountPath: /home/watchdog
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           livenessProbe:

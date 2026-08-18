@@ -25,3 +25,8 @@ frontend/dist/
 # Helm pulls subchart archives here; Chart.yaml declares no dependencies, and a stray
 # archive would be rendered into the release by a working-tree `helm upgrade`.
 helm/charts/
+# Playwright artifacts and ad-hoc UI screenshots live in the working tree; they are not
+# part of the source and were one `git add -A` away from being committed.
+frontend/test-results/
+/ui-*.png
+/jenkins-watchdog-*.png
