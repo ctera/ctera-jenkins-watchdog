@@ -157,6 +157,24 @@ class ToolCallRecorder:
 ToolInvoker = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
+def _looks_like_tool_failure(output: str, name: str) -> bool:
+    """Did this tool call fail?
+
+    The tool layer signals failure by prefix, across two layers, and the previous chat
+    paths got this wrong in both directions: they tested ``startswith("Error")``, which
+    caught the handler errors but never matched either dispatcher string, so a crashed
+    tool rendered in the UI as a success.
+    """
+    return output.startswith(
+        (
+            "Unknown tool:",
+            f"Tool execution error ({name})",
+            "Error ",  # handler-level: "Error getting ...", "Error listing ...", etc.
+            "Failed to ",
+        )
+    )
+
+
 def build_tool_server(
     recorder: ToolCallRecorder,
     scan_options: ScanOptions,
@@ -189,14 +207,16 @@ def build_tool_server(
         finally:
             reset_scan_options(token)
         recorder.record(name)
-        # execute_tool never raises; it returns its failures as text. Flagging them with
-        # is_error lets the model try a different tool instead of reasoning over an error
-        # blob as though it were evidence.
+        # execute_tool never raises; every failure comes back as text, from two layers:
+        # the dispatcher ("Unknown tool: ...", "Tool execution error (...)") and the
+        # handlers themselves ("Error getting Jenkins job ...", "Failed to decode ...").
+        # Flagging them with is_error lets the model try a different tool instead of
+        # reasoning over an error blob as though it were evidence.
         #
-        # Both prefixes are checked here because execute_tool emits both. The old chat
-        # paths tested `startswith("Error")`, which never matched either of them, so every
-        # failed tool call was reported to the UI as a success.
-        failed = output.startswith(("Unknown tool:", f"Tool execution error ({name})"))
+        # "No builds found ..." and friends are deliberately NOT errors — an empty result
+        # is a real answer, and marking it failed would push the model to retry a query
+        # that correctly returned nothing.
+        failed = _looks_like_tool_failure(output, name)
         if recorder.on_result is not None:
             await recorder.on_result(name, not failed)
         return {

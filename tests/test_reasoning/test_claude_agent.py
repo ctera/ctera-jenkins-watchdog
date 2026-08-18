@@ -145,22 +145,42 @@ async def test_scan_options_reach_the_tool_handler(monkeypatch) -> None:
     assert get_scan_options().deep is False
 
 
-async def test_tool_failures_are_flagged_without_ending_the_turn(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("output", "is_error"),
+    [
+        # Dispatcher-level failures, from tools/__init__.py.
+        ("Tool execution error (jenkins_get_build_log): boom", True),
+        ("Unknown tool: nope. Available: [...]", True),
+        # Handler-level failures — the shape every tools/*.py module actually returns.
+        ("Error getting Jenkins job app: job[app] does not exist", True),
+        ("Error listing agents: connection refused", True),
+        ("Failed to decode file content: invalid utf-8", True),
+        # Empty results are real answers, not failures. Marking these failed would push
+        # the model to retry a query that correctly returned nothing.
+        ("No builds found for job app", False),
+        ("No builds currently running", False),
+        ("No events found for pod jenkins/agent-1", False),
+        # Ordinary evidence.
+        ("Build #42 SUCCESS in 3m12s", False),
+    ],
+)
+async def test_tool_failures_are_flagged_without_ending_the_turn(monkeypatch, output, is_error) -> None:
     """execute_tool returns its failures as text and never raises.
 
     Marking them is_error lets the model try a different tool instead of reasoning over an
-    error blob as though it were evidence.
+    error blob as though it were evidence — and the two layers that produce failures use
+    different prefixes, which is what the old chat paths' startswith("Error") test missed.
     """
 
-    async def failing(name, arguments):
-        return f"Tool execution error ({name}): boom"
+    async def returning(name, arguments):
+        return output
 
-    monkeypatch.setattr("jenkins_watchdog.reasoning.claude_agent.execute_tool", failing)
+    monkeypatch.setattr("jenkins_watchdog.reasoning.claude_agent.execute_tool", returning)
     _, invoke = build_tool_server(ToolCallRecorder(), ScanOptions(), definitions=DEFINITIONS)
 
     result = await invoke("jenkins_get_build_log", {"job_name": "job"})
 
-    assert result["is_error"] is True
+    assert result["is_error"] is is_error
 
 
 # --- bounding and redaction -------------------------------------------------
