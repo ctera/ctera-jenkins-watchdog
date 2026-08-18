@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     prometheus_endpoint: str = "http://prometheus.monitoring.svc.cluster.local:9090"
     prometheus_enabled: bool = True
 
+    # Prompts
+    # Where prompts/system.md lives. Empty means "walk up from this file", which is right
+    # for a source checkout but WRONG in the container: the package is installed into
+    # site-packages while prompts/ is copied to /app/prompts, so the walk-up landed on
+    # /usr/local/lib/python3.12/prompts and the loaders silently fell back to a one-line
+    # system prompt. The image sets WATCHDOG_PROMPTS_DIR=/app/prompts explicitly.
+    prompts_dir: str = ""
+
     # External call timeouts (seconds)
     request_timeout_s: float = 15.0
 

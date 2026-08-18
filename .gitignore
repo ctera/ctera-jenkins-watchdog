@@ -18,3 +18,10 @@ venv/
 .DS_Store
 node_modules/
 frontend/dist/
+
+# .env backups — these have held real credentials; only the literal `.env` was ignored before
+.env.*
+!.env.example
+# Helm pulls subchart archives here; Chart.yaml declares no dependencies, and a stray
+# archive would be rendered into the release by a working-tree `helm upgrade`.
+helm/charts/

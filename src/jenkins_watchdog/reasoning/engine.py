@@ -5,7 +5,6 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import litellm
@@ -13,12 +12,11 @@ import litellm
 from jenkins_watchdog.api.models import Investigation
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.config import settings
+from jenkins_watchdog.reasoning.prompt_files import read_prompt
 from jenkins_watchdog.scan_options import get_scan_options
 from jenkins_watchdog.tools import ALL_TOOL_DEFINITIONS, execute_tool
 
 logger = logging.getLogger(__name__)
-
-PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
 _RETRYABLE_EXCEPTIONS = (
     litellm.ServiceUnavailableError,
@@ -36,8 +34,7 @@ def _get_model_chain() -> list[str]:
 
 
 def _load_system_prompt(*, deep: bool = False) -> str:
-    prompt_file = PROMPTS_DIR / "system.md"
-    base = prompt_file.read_text() if prompt_file.exists() else (
+    base = read_prompt("system.md") or (
         "You are a Jenkins platform engineer investigating CI/CD issues on a k3s cluster using tools."
     )
     if not deep:

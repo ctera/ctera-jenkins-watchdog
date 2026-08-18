@@ -3,16 +3,14 @@
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import litellm
 
 from jenkins_watchdog.checks.base import Finding
 from jenkins_watchdog.config import settings
+from jenkins_watchdog.reasoning.prompt_files import read_prompt
 
 logger = logging.getLogger(__name__)
-
-PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
 _TRIAGE_PROMPT = """You are triaging findings from a Jenkins CI/CD cluster scan. For each finding, classify it as one of:
 
@@ -70,11 +68,10 @@ class TriageResult:
 
 
 def _load_triage_context() -> str:
-    prompt_file = PROMPTS_DIR / "system.md"
-    if not prompt_file.exists():
+    content = read_prompt("system.md")
+    if not content:
         return ""
 
-    content = prompt_file.read_text()
     sections = []
     for header in (
         "## Known normal behaviors",
