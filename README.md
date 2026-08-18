@@ -21,7 +21,8 @@ React SPA ──SSE──► FastAPI (uvicorn)
 - Python 3.12+
 - Node.js 20+ (frontend)
 - Docker (for a local Valkey — nothing else needs to be real; see below)
-- Optional for full functionality: access to a k3s cluster (kubeconfig), Jenkins API access, Anthropic API key
+- Optional for full functionality: access to a k3s cluster (kubeconfig), Jenkins API access,
+  and a Claude Code OAuth token (`claude setup-token`)
 
 ### Quick Start
 
@@ -34,8 +35,10 @@ This brings up the backend (`:8000`), frontend (`:3000`), and an isolated,
 ephemeral Valkey container together, bootstrapping `.venv`/`node_modules` on
 first run. Without real Jenkins/K8s/Prometheus access the app still boots and
 scans fine — those checks just fail gracefully and report zero findings.
-Without `WATCHDOG_ANTHROPIC_API_KEY`, findings are still detected but
-investigation is skipped.
+Without `WATCHDOG_CLAUDE_CODE_OAUTH_TOKEN`, findings are still detected but
+investigation is skipped. Check the credential end to end with
+`python -m jenkins_watchdog llm-health` — it makes one real call, which is the only
+way to tell a working token from a revoked one.
 
 ```bash
 ./scripts/dev.sh status          # is it up? which ports?
@@ -66,7 +69,8 @@ bookkeeping needed. See everything running machine-wide with:
 # Backend
 pip install -e ".[dev]"
 
-export WATCHDOG_ANTHROPIC_API_KEY="sk-ant-..."
+# Mint with `claude setup-token`. Prefer .env over export — see .env.example.
+export WATCHDOG_CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-..."
 export WATCHDOG_JENKINS_URL="https://jenkins.example.com"
 export WATCHDOG_JENKINS_USER="admin"
 export WATCHDOG_JENKINS_TOKEN="your-api-token"
@@ -130,11 +134,12 @@ Only investigates:
 
 | Control | Default | Configurable |
 |---------|---------|-------------|
-| Max investigations per scan | 10 | `WATCHDOG_MAX_INVESTIGATIONS_PER_SCAN` |
-| Max tool rounds per investigation | 10 | `WATCHDOG_MAX_TOOL_ROUNDS` |
+| Max investigations per scan | 12 | `WATCHDOG_MAX_INVESTIGATIONS_PER_SCAN` |
+| Max turns per investigation | 15 | `WATCHDOG_MAX_TOOL_ROUNDS` |
+| Concurrent agent subprocesses | 2 | `WATCHDOG_LLM_MAX_CONCURRENT_AGENTS` |
 | Default UI mode | Smart (gate-filtered) | `investigate_all: false` |
-| Model | Claude Sonnet 4 | `WATCHDOG_LLM_MODEL` |
-| Fallback | Claude Opus 4 | `WATCHDOG_LLM_FALLBACK_MODELS` |
+| Model | Claude Sonnet 5 | `WATCHDOG_LLM_MODEL` |
+| Fallback | Claude Opus 5 | `WATCHDOG_LLM_FALLBACK_MODEL` |
 
 ## Deployment
 

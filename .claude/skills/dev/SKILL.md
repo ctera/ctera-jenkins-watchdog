@@ -38,7 +38,7 @@ instances from each other.
 
 - Docker must be running — `start` fails fast with a clear message if it isn't.
 - `.env` is optional but recommended: `cp .env.example .env` and fill in
-  `WATCHDOG_ANTHROPIC_API_KEY` / Jenkins creds for LLM investigation and real
+  `WATCHDOG_CLAUDE_CODE_OAUTH_TOKEN` / Jenkins creds for LLM investigation and real
   Jenkins checks. Without it, the app still boots and scans fine — checks that
   need Jenkins/K8s/Prometheus just fail gracefully with zero findings.
 - `WATCHDOG_OIDC_ISSUER` should stay unset — that's what disables auth locally.
@@ -47,8 +47,7 @@ instances from each other.
 
 1. Run `start`.
 2. Confirm with `status` before declaring success — `start` already polls
-   `/health` briefly, but a slow first boot (litellm's import is slow, ~8-10s)
-   can outrun that poll.
+   `/health` briefly, but a slow first boot can outrun that poll.
 3. On any failure, check `logs backend`, `logs frontend`, or `logs valkey`
    before retrying — don't guess.
 4. Multiple worktrees (e.g. one per parallel agent/branch) are safe to `start`
