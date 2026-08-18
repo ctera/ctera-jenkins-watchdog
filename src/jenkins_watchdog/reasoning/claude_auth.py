@@ -43,6 +43,18 @@ _PATH_SETTINGS = frozenset({"valkey_client_key", "valkey_client_cert", "valkey_c
 # The identifier half of a basic-auth pair. Useless to an attacker alone, but it halves
 # the work, and the subprocess has no reason to see it.
 _EXTRA_SECRET_SETTINGS = frozenset({"jenkins_user", "jira_user_email"})
+# Credentials this app no longer *declares* but which may still be present in a
+# deployment's environment.
+#
+# Deriving the scrub set from Settings.model_fields means removing a field silently
+# removes its scrubbing — and a removed credential is exactly the one still sitting in the
+# Secret, kept as the rollback for the release that removed it. Observed in production:
+# after the LiteLLM removal, WATCHDOG_ANTHROPIC_API_KEY was still in the Secret, no longer
+# a declared field, and therefore no longer blanked in the subprocess.
+#
+# Entries stay here until the variable is gone from every environment, not until the code
+# stops reading it.
+_LEGACY_SECRET_ENV_VARS = frozenset({"WATCHDOG_ANTHROPIC_API_KEY"})
 
 
 def bundled_cli_path() -> Path | None:
@@ -91,7 +103,9 @@ def credential_env_vars() -> frozenset[str]:
     ``CLAUDE_CODE_OAUTH_TOKEN`` is deliberately absent: the subprocess needs it.
     """
     return frozenset(
-        {ANTHROPIC_API_KEY_ENV} | {f"{_ENV_PREFIX}{name.upper()}" for name in secret_setting_names()}
+        {ANTHROPIC_API_KEY_ENV}
+        | _LEGACY_SECRET_ENV_VARS
+        | {f"{_ENV_PREFIX}{name.upper()}" for name in secret_setting_names()}
     )
 
 

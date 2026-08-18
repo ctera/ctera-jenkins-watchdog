@@ -11,6 +11,7 @@ import pytest
 
 from jenkins_watchdog.config import Settings
 from jenkins_watchdog.reasoning.claude_auth import (
+    _LEGACY_SECRET_ENV_VARS,
     ANTHROPIC_API_KEY_ENV,
     CLAUDE_CODE_OAUTH_TOKEN_ENV,
     CLAUDE_CONFIG_DIR_ENV,
@@ -147,3 +148,34 @@ def test_from_settings_strips_whitespace() -> None:
     settings = Settings(_env_file=None, claude_code_oauth_token=f"  {TOKEN}\n")
 
     assert ClaudeCredentials.from_settings(settings).token == TOKEN
+
+
+def test_a_credential_the_app_stopped_declaring_is_still_scrubbed(tmp_path: Path) -> None:
+    """Regression, found in production.
+
+    The scrub set is derived from Settings.model_fields, so *removing* a field silently
+    removed its scrubbing — while the value stayed in the deployment's Secret as the
+    rollback for the very release that removed it. After the LiteLLM removal,
+    WATCHDOG_ANTHROPIC_API_KEY was present in the pod and inherited by the agent
+    subprocess.
+    """
+    legacy = "WATCHDOG_ANTHROPIC_API_KEY"
+    assert legacy not in {f"WATCHDOG_{n.upper()}" for n in secret_setting_names()}, (
+        "precondition: the app no longer declares this field"
+    )
+
+    assert legacy in credential_env_vars()
+
+    env = _credentials(tmp_path).subprocess_env_overrides({legacy: "sk-ant-api03-leftover"})
+    assert env[legacy] == ""
+
+
+def test_legacy_entries_are_only_for_undeclared_vars() -> None:
+    """A legacy entry that is also a declared field is dead weight hiding a live secret.
+
+    If a name reappears as a real setting, it should be scrubbed by derivation — leaving it
+    on the legacy list too would mask the fact that the derivation stopped working.
+    """
+    derived = {f"WATCHDOG_{n.upper()}" for n in secret_setting_names()}
+
+    assert _LEGACY_SECRET_ENV_VARS & derived == set()
